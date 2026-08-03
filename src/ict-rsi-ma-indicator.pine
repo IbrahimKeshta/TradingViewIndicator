@@ -193,3 +193,13 @@ if showOB and (bosBearish or chochBearish)
 
 mitigateBoxes(bullishObBoxes, true)
 mitigateBoxes(bearishObBoxes, false)
+
+// ============================================================
+// KILLZONE SESSIONS
+// ============================================================
+londonActive  = showLondonKZ and not na(time(timeframe.period, londonSession, sessionTimezone))
+newYorkActive = showNewYorkKZ and not na(time(timeframe.period, newYorkSession, sessionTimezone))
+killzoneActive = londonActive or newYorkActive
+
+bgcolor(londonActive ? color.new(color.blue, 90) : na, title = "London Killzone")
+bgcolor(newYorkActive ? color.new(color.orange, 90) : na, title = "New York Killzone")
