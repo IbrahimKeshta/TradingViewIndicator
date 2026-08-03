@@ -33,7 +33,7 @@ Single self-contained Pine Script v6 `indicator()`, overlay on the price chart. 
 - Alerts/Display toggles (signal markers on/off)
 
 ### Modules
-1. **RSI + MA** — standard calculation; RSI in a sub-pane, MA plotted on-chart.
+1. **RSI + MA** — standard calculation. MA plotted on-chart. RSI cannot share a pane with the price-chart elements (Pine Script indicators render to one pane only), so RSI is used fully for confluence logic/alerts but displayed on-chart as a small readout label (current value + OB/OS state) rather than a classic oscillator sub-pane. Users who want the oscillator view can add TradingView's built-in RSI separately.
 2. **Market structure engine** — pivot-based swing detection (`ta.pivothigh`/`ta.pivotlow`, default lookback 5) tracks trend bias and labels BOS/CHoCH.
 3. **FVG detector** — finds 3-candle imbalances, draws boxes, auto-removes on mitigation.
 4. **Order block detector** — finds the last opposing-color candle before a structure-breaking move, draws boxes, auto-removes on mitigation.
