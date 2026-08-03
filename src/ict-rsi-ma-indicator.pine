@@ -38,3 +38,22 @@ showSignalMarkers  = input.bool(true, "Show Signal Markers", group = "Alerts / D
 showRsiReadout     = input.bool(true, "Show RSI Readout Label", group = "Alerts / Display")
 watchZoneAtrLength = input.int(14, "Watch-Zone ATR Length", minval = 1, group = "Alerts / Display")
 watchZoneAtrMult   = input.float(1.0, "Watch-Zone Proximity (x ATR)", minval = 0.1, step = 0.1, group = "Alerts / Display")
+
+// ============================================================
+// RSI + MA
+// ============================================================
+rsiValue = ta.rsi(close, rsiLength)
+maValue  = maTypeInput == "EMA" ? ta.ema(close, maLength) : ta.sma(close, maLength)
+
+plot(maValue, "MA", color = color.new(color.orange, 0), linewidth = 2)
+
+rsiBullishConfirm = rsiValue <= rsiOversold
+rsiBearishConfirm = rsiValue >= rsiOverbought
+maBullishConfirm  = close > maValue
+maBearishConfirm  = close < maValue
+
+var label rsiReadoutLabel = na
+
+if showRsiReadout and barstate.islast
+    label.delete(rsiReadoutLabel)
+    rsiReadoutLabel := label.new(x = bar_index, y = high, text = "RSI " + str.tostring(rsiValue, "#.##"), color = color.new(color.blue, 80), style = label.style_label_down, textcolor = color.white, size = size.small)
