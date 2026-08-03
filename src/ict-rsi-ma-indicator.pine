@@ -57,3 +57,51 @@ var label rsiReadoutLabel = na
 if showRsiReadout and barstate.islast
     label.delete(rsiReadoutLabel)
     rsiReadoutLabel := label.new(x = bar_index, y = high, text = "RSI " + str.tostring(rsiValue, "#.##"), color = color.new(color.blue, 80), style = label.style_label_down, textcolor = color.white, size = size.small)
+
+// ============================================================
+// MARKET STRUCTURE (swings, BOS, CHoCH)
+// ============================================================
+// Simplification for v1: tracks a single active swing high and a single
+// active swing low (the most recent confirmed pivot on each side), not a
+// full multi-level swing history.
+swingHigh = ta.pivothigh(high, pivotLookback, pivotLookback)
+swingLow  = ta.pivotlow(low, pivotLookback, pivotLookback)
+
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+var string structureBias = na
+
+if not na(swingHigh)
+    lastSwingHigh := swingHigh
+if not na(swingLow)
+    lastSwingLow := swingLow
+
+bosBullish   = false
+bosBearish   = false
+chochBullish = false
+chochBearish = false
+
+if not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
+    if structureBias == "bearish"
+        chochBullish := true
+    else
+        bosBullish := true
+    structureBias := "bullish"
+    lastSwingHigh := na
+
+if not na(lastSwingLow) and close < lastSwingLow and close[1] >= lastSwingLow
+    if structureBias == "bullish"
+        chochBearish := true
+    else
+        bosBearish := true
+    structureBias := "bearish"
+    lastSwingLow := na
+
+if bosBullish
+    label.new(bar_index, low, "BOS", color = color.new(color.lime, 0), style = label.style_label_up, textcolor = color.black, size = size.tiny)
+if chochBullish
+    label.new(bar_index, low, "CHoCH", color = color.new(color.green, 0), style = label.style_label_up, textcolor = color.white, size = size.tiny)
+if bosBearish
+    label.new(bar_index, high, "BOS", color = color.new(color.red, 0), style = label.style_label_down, textcolor = color.white, size = size.tiny)
+if chochBearish
+    label.new(bar_index, high, "CHoCH", color = color.new(color.maroon, 0), style = label.style_label_down, textcolor = color.white, size = size.tiny)
