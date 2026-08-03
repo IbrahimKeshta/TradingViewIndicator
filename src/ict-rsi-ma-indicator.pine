@@ -116,16 +116,17 @@ var box[] bullishFvgBoxes = array.new<box>()
 var box[] bearishFvgBoxes = array.new<box>()
 
 mitigateBoxes(boxArray, isBullish) =>
-    for i = array.size(boxArray) - 1 to 0
-        b = array.get(boxArray, i)
-        top = box.get_top(b)
-        bottom = box.get_bottom(b)
-        touched = isBullish ? low <= top : high >= bottom
-        if touched
-            box.delete(b)
-            array.remove(boxArray, i)
-        else
-            box.set_right(b, bar_index)
+    if array.size(boxArray) > 0
+        for i = array.size(boxArray) - 1 to 0
+            b = array.get(boxArray, i)
+            top = box.get_top(b)
+            bottom = box.get_bottom(b)
+            touched = isBullish ? low <= top : high >= bottom
+            if touched
+                box.delete(b)
+                array.remove(boxArray, i)
+            else
+                box.set_right(b, bar_index)
     array.size(boxArray)
 
 priceInsideAnyBox(boxArray) =>
