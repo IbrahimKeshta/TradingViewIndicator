@@ -155,3 +155,41 @@ if bearishFvgDetected
 
 mitigateBoxes(bullishFvgBoxes, true)
 mitigateBoxes(bearishFvgBoxes, false)
+
+// ============================================================
+// ORDER BLOCKS
+// ============================================================
+var box[] bullishObBoxes = array.new<box>()
+var box[] bearishObBoxes = array.new<box>()
+
+findOppositeCandle(isBullishBreak) =>
+    idx = -1
+    for i = 1 to obSearchBars
+        isDownCandle = close[i] < open[i]
+        isUpCandle   = close[i] > open[i]
+        if isBullishBreak and isDownCandle
+            idx := i
+            break
+        if not isBullishBreak and isUpCandle
+            idx := i
+            break
+    idx
+
+if showOB and (bosBullish or chochBullish)
+    obOffset = findOppositeCandle(true)
+    if obOffset >= 0
+        newBullishOb = box.new(bar_index[obOffset], high[obOffset], bar_index, low[obOffset], border_color = color.new(color.blue, 40), bgcolor = color.new(color.blue, 85))
+        array.push(bullishObBoxes, newBullishOb)
+        if array.size(bullishObBoxes) > obMaxCount
+            box.delete(array.shift(bullishObBoxes))
+
+if showOB and (bosBearish or chochBearish)
+    obOffset = findOppositeCandle(false)
+    if obOffset >= 0
+        newBearishOb = box.new(bar_index[obOffset], high[obOffset], bar_index, low[obOffset], border_color = color.new(color.purple, 40), bgcolor = color.new(color.purple, 85))
+        array.push(bearishObBoxes, newBearishOb)
+        if array.size(bearishObBoxes) > obMaxCount
+            box.delete(array.shift(bearishObBoxes))
+
+mitigateBoxes(bullishObBoxes, true)
+mitigateBoxes(bearishObBoxes, false)
