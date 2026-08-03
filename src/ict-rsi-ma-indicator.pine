@@ -105,3 +105,52 @@ if bosBearish
     label.new(bar_index, high, "BOS", color = color.new(color.red, 0), style = label.style_label_down, textcolor = color.white, size = size.tiny)
 if chochBearish
     label.new(bar_index, high, "CHoCH", color = color.new(color.maroon, 0), style = label.style_label_down, textcolor = color.white, size = size.tiny)
+
+// ============================================================
+// FAIR VALUE GAPS
+// ============================================================
+// Mitigation rule for v1: a box is removed the first time price touches
+// any part of its range (not full fill) — simplest, most testable
+// interpretation of "auto-remove when mitigated."
+var box[] bullishFvgBoxes = array.new<box>()
+var box[] bearishFvgBoxes = array.new<box>()
+
+mitigateBoxes(boxArray, isBullish) =>
+    for i = array.size(boxArray) - 1 to 0
+        b = array.get(boxArray, i)
+        top = box.get_top(b)
+        bottom = box.get_bottom(b)
+        touched = isBullish ? low <= top : high >= bottom
+        if touched
+            box.delete(b)
+            array.remove(boxArray, i)
+        else
+            box.set_right(b, bar_index)
+    array.size(boxArray)
+
+priceInsideAnyBox(boxArray) =>
+    result = false
+    if array.size(boxArray) > 0
+        for i = 0 to array.size(boxArray) - 1
+            b = array.get(boxArray, i)
+            if close <= box.get_top(b) and close >= box.get_bottom(b)
+                result := true
+    result
+
+bullishFvgDetected = showFVG and low > high[2]
+bearishFvgDetected = showFVG and high < low[2]
+
+if bullishFvgDetected
+    newBullishFvg = box.new(bar_index[2], low, bar_index, high[2], border_color = color.new(color.teal, 40), bgcolor = color.new(color.teal, 85))
+    array.push(bullishFvgBoxes, newBullishFvg)
+    if array.size(bullishFvgBoxes) > fvgMaxCount
+        box.delete(array.shift(bullishFvgBoxes))
+
+if bearishFvgDetected
+    newBearishFvg = box.new(bar_index[2], low[2], bar_index, high, border_color = color.new(color.red, 40), bgcolor = color.new(color.red, 85))
+    array.push(bearishFvgBoxes, newBearishFvg)
+    if array.size(bearishFvgBoxes) > fvgMaxCount
+        box.delete(array.shift(bearishFvgBoxes))
+
+mitigateBoxes(bullishFvgBoxes, true)
+mitigateBoxes(bearishFvgBoxes, false)
