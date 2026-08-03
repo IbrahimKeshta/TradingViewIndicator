@@ -1,0 +1,40 @@
+//@version=6
+indicator("ICT + RSI/MA Confluence", shorttitle = "ICT-RSI-MA", overlay = true, max_boxes_count = 200, max_labels_count = 200, max_lines_count = 200)
+
+// ============================================================
+// INPUTS
+// ============================================================
+
+// ---------------- RSI ----------------
+rsiLength     = input.int(14, "RSI Length", minval = 1, group = "RSI")
+rsiOverbought = input.int(70, "RSI Overbought Level", minval = 1, maxval = 100, group = "RSI")
+rsiOversold   = input.int(30, "RSI Oversold Level", minval = 0, maxval = 99, group = "RSI")
+
+// ---------------- Moving Average ----------------
+maTypeInput = input.string("EMA", "MA Type", options = ["EMA", "SMA"], group = "Moving Average")
+maLength    = input.int(50, "MA Length", minval = 1, group = "Moving Average")
+
+// ---------------- Market Structure ----------------
+pivotLookback = input.int(5, "Swing Pivot Lookback", minval = 2, group = "Market Structure")
+
+// ---------------- Fair Value Gaps ----------------
+showFVG     = input.bool(true, "Show Fair Value Gaps", group = "Fair Value Gaps")
+fvgMaxCount = input.int(20, "Max Tracked FVGs (per side)", minval = 1, maxval = 50, group = "Fair Value Gaps")
+
+// ---------------- Order Blocks ----------------
+showOB       = input.bool(true, "Show Order Blocks", group = "Order Blocks")
+obMaxCount   = input.int(20, "Max Tracked Order Blocks (per side)", minval = 1, maxval = 50, group = "Order Blocks")
+obSearchBars = input.int(50, "Order Block Backward Search (bars)", minval = 5, maxval = 200, group = "Order Blocks")
+
+// ---------------- Killzones ----------------
+sessionTimezone = input.string("Africa/Cairo", "Session Timezone", group = "Killzones")
+showLondonKZ    = input.bool(true, "Show London Killzone", group = "Killzones")
+londonSession   = input.session("0200-0500", "London Killzone Time", group = "Killzones")
+showNewYorkKZ   = input.bool(true, "Show New York Killzone", group = "Killzones")
+newYorkSession  = input.session("0700-1000", "New York Killzone Time", group = "Killzones")
+
+// ---------------- Alerts / Display ----------------
+showSignalMarkers  = input.bool(true, "Show Signal Markers", group = "Alerts / Display")
+showRsiReadout     = input.bool(true, "Show RSI Readout Label", group = "Alerts / Display")
+watchZoneAtrLength = input.int(14, "Watch-Zone ATR Length", minval = 1, group = "Alerts / Display")
+watchZoneAtrMult   = input.float(1.0, "Watch-Zone Proximity (x ATR)", minval = 0.1, step = 0.1, group = "Alerts / Display")
