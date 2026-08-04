@@ -187,3 +187,28 @@ if squareRedraw
         endPrice   = anchorPrice + slope * boxSpanBars
         newLine    = line.new(anchorBarIndex, anchorPrice, endBar, endPrice, color = lineColor, width = lineWidth)
         array.push(activeLevels, GannLevel.new(newLine, ratioLabel, slope, false, lineColor))
+
+// ============================================================
+// SQUARE OF 9
+// ============================================================
+square9Redraw = (modeInput == "Square of 9") and (anchorChanged or modeChanged) and not na(anchorPrice)
+
+if square9Redraw
+    for lvl in activeLevels
+        line.delete(lvl.lineRef)
+    array.clear(activeLevels)
+    square9Direction = anchorType == "low" ? 1.0 : -1.0
+    sqrtAnchor        = math.sqrt(anchorPrice)
+    for r = 1 to square9Rings
+        for step = 1 to 4
+            k          = (r - 1) * 4 + step
+            levelPrice = math.pow(sqrtAnchor + square9Direction * k * 0.5, 2)
+            levelLabel = "R" + str.tostring(r) + "-" + str.tostring(step * 90) + "deg"
+            lineColor  = r == 1 ? color.new(color.blue, 0) : color.new(color.orange, 0)
+            lineWidth  = r == 1 ? 2 : 1
+            newLine    = line.new(anchorBarIndex, levelPrice, bar_index + forwardProjection, levelPrice, color = lineColor, style = line.style_dashed, width = lineWidth)
+            array.push(activeLevels, GannLevel.new(newLine, levelLabel, 0.0, false, lineColor))
+
+if modeInput == "Square of 9" and not na(anchorPrice) and array.size(activeLevels) > 0
+    for lvl in activeLevels
+        line.set_x2(lvl.lineRef, bar_index + forwardProjection)
