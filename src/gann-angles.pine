@@ -274,11 +274,11 @@ if showTable and barstate.islast
     if array.size(activeLevels) > 0
         for i = 0 to array.size(activeLevels) - 1
             lvl      = array.get(activeLevels, i)
-            rowPrice = line.get_price(lvl.lineRef, bar_index)
+            priceText   = modeInput == "Gann Square" ? "n/a" : str.tostring(line.get_price(lvl.lineRef, bar_index), format.mintick)
             statusText  = modeInput == "Gann Square" ? "n/a" : (lvl.touched ? "Touched" : "Pending")
             statusColor = modeInput == "Gann Square" ? color.gray : (lvl.touched ? color.lime : color.gray)
             table.cell(gannTable, 0, i + 1, lvl.label, text_color = lvl.col)
-            table.cell(gannTable, 1, i + 1, str.tostring(rowPrice, format.mintick), text_color = color.white)
+            table.cell(gannTable, 1, i + 1, priceText, text_color = color.white)
             table.cell(gannTable, 2, i + 1, statusText, text_color = statusColor)
 
     if showTimeLevels and array.size(activeTimeLevels) > 0
