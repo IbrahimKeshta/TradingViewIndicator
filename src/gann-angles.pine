@@ -141,12 +141,8 @@ if fanRedraw
         lineColor   = ratioLabel == "1x1" ? color.new(color.blue, 0) : color.new(color.orange, 0)
         lineWidth   = ratioLabel == "1x1" ? 2 : 1
         targetPrice = anchorPrice + slope * forwardProjection
-        newLine     = line.new(anchorBarIndex, targetPrice, bar_index + forwardProjection, targetPrice, color = lineColor, style = line.style_dashed, width = lineWidth)
+        newLine     = line.new(anchorBarIndex, targetPrice, bar_index + forwardProjection, targetPrice, color = lineColor, style = line.style_solid, width = lineWidth, extend = extend.right)
         array.push(activeLevels, GannLevel.new(newLine, ratioLabel, false, lineColor))
-
-if modeInput == "Gann Fan" and not na(anchorPrice) and array.size(activeLevels) > 0
-    for lvl in activeLevels
-        line.set_x2(lvl.lineRef, bar_index + forwardProjection)
 
 // ============================================================
 // GANN SQUARE (BOX)
@@ -187,12 +183,8 @@ if squareRedraw
         levelPrice = boxBottom + boxHeight * fraction
         lineColor  = ratioLabel == "1x1" ? color.new(color.blue, 0) : color.new(color.orange, 0)
         lineWidth  = ratioLabel == "1x1" ? 2 : 1
-        newLine    = line.new(boxLeft, levelPrice, bar_index + forwardProjection, levelPrice, color = lineColor, style = line.style_dashed, width = lineWidth)
+        newLine    = line.new(boxLeft, levelPrice, bar_index + forwardProjection, levelPrice, color = lineColor, style = line.style_solid, width = lineWidth, extend = extend.right)
         array.push(activeLevels, GannLevel.new(newLine, ratioLabel, false, lineColor))
-
-if modeInput == "Gann Square" and not na(anchorPrice) and array.size(activeLevels) > 0
-    for lvl in activeLevels
-        line.set_x2(lvl.lineRef, bar_index + forwardProjection)
 
 // ============================================================
 // SQUARE OF 9
@@ -215,12 +207,8 @@ if square9Redraw
                 levelLabel = "R" + str.tostring(r) + "-" + str.tostring(angle, "#.#") + "°"
                 lineColor  = r == 1 ? color.new(color.blue, 0) : color.new(color.orange, 0)
                 lineWidth  = r == 1 ? 2 : 1
-                newLine    = line.new(anchorBarIndex, levelPrice, bar_index + forwardProjection, levelPrice, color = lineColor, style = line.style_dashed, width = lineWidth)
+                newLine    = line.new(anchorBarIndex, levelPrice, bar_index + forwardProjection, levelPrice, color = lineColor, style = line.style_solid, width = lineWidth, extend = extend.right)
                 array.push(activeLevels, GannLevel.new(newLine, levelLabel, false, lineColor))
-
-if modeInput == "Square of 9" and not na(anchorPrice) and array.size(activeLevels) > 0
-    for lvl in activeLevels
-        line.set_x2(lvl.lineRef, bar_index + forwardProjection)
 
 // ============================================================
 // GANN TIME LEVELS
