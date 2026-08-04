@@ -212,3 +212,26 @@ if square9Redraw
 if modeInput == "Square of 9" and not na(anchorPrice) and array.size(activeLevels) > 0
     for lvl in activeLevels
         line.set_x2(lvl.lineRef, bar_index + forwardProjection)
+
+// ============================================================
+// GANN TIME LEVELS
+// ============================================================
+timeLevelsRedraw = showTimeLevels and (anchorChanged or timeLevelsToggleChanged) and not na(anchorBarIndex)
+
+if timeLevelsRedraw
+    for tl in activeTimeLevels
+        line.delete(tl.lineRef)
+    array.clear(activeTimeLevels)
+    for i = 0 to array.size(gannTimeCycles) - 1
+        cycle     = array.get(gannTimeCycles, i)
+        targetBar = anchorBarIndex + cycle
+        isMajor   = cycle == 90 or cycle == 180 or cycle == 270 or cycle == 360
+        lineColor = isMajor ? color.new(color.blue, 0) : color.new(color.orange, 0)
+        lineWidth = isMajor ? 2 : 1
+        newLine   = line.new(targetBar, high, targetBar, low, color = lineColor, style = line.style_dotted, width = lineWidth, extend = extend.both)
+        array.push(activeTimeLevels, GannTimeLevel.new(newLine, "T+" + str.tostring(cycle), targetBar, false))
+
+if not showTimeLevels and array.size(activeTimeLevels) > 0
+    for tl in activeTimeLevels
+        line.delete(tl.lineRef)
+    array.clear(activeTimeLevels)
