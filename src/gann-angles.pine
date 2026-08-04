@@ -174,7 +174,7 @@ if squareRedraw
     if boxGridDivisions > 1
         for i = 1 to boxGridDivisions - 1
             array.push(boxGridLines, line.new(boxLeft, boxBottom + priceStep * i, boxRight, boxBottom + priceStep * i, color = color.new(color.gray, 70), style = line.style_dotted))
-            array.push(boxGridLines, line.new(boxLeft + math.round(barStep * i), boxBottom, boxLeft + math.round(barStep * i), boxTop, color = color.new(color.gray, 70), style = line.style_dotted))
+            array.push(boxGridLines, line.new(boxLeft + int(math.round(barStep * i)), boxBottom, boxLeft + int(math.round(barStep * i)), boxTop, color = color.new(color.gray, 70), style = line.style_dotted))
 
     squareDirection = anchorType == "low" ? 1.0 : -1.0
     boxSpanBars     = math.abs(opposingBarIndex - anchorBarIndex)
