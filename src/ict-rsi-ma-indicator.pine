@@ -74,12 +74,16 @@ swingLow  = ta.pivotlow(low, pivotLookback, pivotLookback)
 
 var float lastSwingHigh = na
 var float lastSwingLow  = na
+var int lastSwingHighBarIndex = na
+var int lastSwingLowBarIndex  = na
 var string structureBias = na
 
 if not na(swingHigh)
     lastSwingHigh := swingHigh
+    lastSwingHighBarIndex := bar_index - pivotLookback
 if not na(swingLow)
     lastSwingLow := swingLow
+    lastSwingLowBarIndex := bar_index - pivotLookback
 
 bosBullish   = false
 bosBearish   = false
@@ -89,16 +93,20 @@ chochBearish = false
 if barstate.isconfirmed and not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
     if structureBias == "bearish"
         chochBullish := true
+        line.new(lastSwingHighBarIndex, lastSwingHigh, bar_index, lastSwingHigh, color = color.new(color.green, 0), style = line.style_dotted)
     else
         bosBullish := true
+        line.new(lastSwingHighBarIndex, lastSwingHigh, bar_index, lastSwingHigh, color = color.new(color.lime, 0), style = line.style_dotted)
     structureBias := "bullish"
     lastSwingHigh := na
 
 if barstate.isconfirmed and not na(lastSwingLow) and close < lastSwingLow and close[1] >= lastSwingLow
     if structureBias == "bullish"
         chochBearish := true
+        line.new(lastSwingLowBarIndex, lastSwingLow, bar_index, lastSwingLow, color = color.new(color.maroon, 0), style = line.style_dotted)
     else
         bosBearish := true
+        line.new(lastSwingLowBarIndex, lastSwingLow, bar_index, lastSwingLow, color = color.new(color.red, 0), style = line.style_dotted)
     structureBias := "bearish"
     lastSwingLow := na
 
