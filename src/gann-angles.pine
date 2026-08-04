@@ -100,3 +100,41 @@ for lvl in bullLevels
 for lvl in bearLevels
     if not lvl.touched and low <= lvl.price and high >= lvl.price
         lvl.touched := true
+
+// ============================================================
+// RENDERER
+// ============================================================
+var line[]  drawnLines  = array.new<line>()
+var label[] drawnLabels = array.new<label>()
+
+drawStartLine(float startPrice, bool visible, color lineColor, string lineStyle, int lineWidth, string lineLabel) =>
+    if visible and startPrice > 0
+        array.push(drawnLines, line.new(bar_index, startPrice, bar_index + 1, startPrice, extend = extend.both, color = lineColor, style = styleFromString(lineStyle), width = lineWidth))
+        if showLabels
+            array.push(drawnLabels, label.new(bar_index + labelOffset, startPrice, lineLabel + ": " + str.tostring(startPrice, format.mintick), style = label.style_label_left, color = lineColor, textcolor = color.white, size = size.small))
+    array.size(drawnLines)
+
+drawSet(Sq9Level[] levels, bool visible, string filterMode, color priColor, string priStyle, int priWidth, color secColor, string secStyle, int secWidth) =>
+    if visible
+        for lvl in levels
+            if passesFilter(lvl.isPrimary, filterMode)
+                lvlColor = lvl.isPrimary ? priColor : secColor
+                lvlStyle = styleFromString(lvl.isPrimary ? priStyle : secStyle)
+                lvlWidth = lvl.isPrimary ? priWidth : secWidth
+                array.push(drawnLines, line.new(bar_index, lvl.price, bar_index + 1, lvl.price, extend = extend.both, color = lvlColor, style = lvlStyle, width = lvlWidth))
+                if showLabels
+                    array.push(drawnLabels, label.new(bar_index + labelOffset, lvl.price, lvl.label + ": " + str.tostring(lvl.price, format.mintick), style = label.style_label_left, color = lvlColor, textcolor = color.white, size = size.small))
+    array.size(drawnLines)
+
+if barstate.islast
+    for ln in drawnLines
+        line.delete(ln)
+    array.clear(drawnLines)
+    for lb in drawnLabels
+        label.delete(lb)
+    array.clear(drawnLabels)
+
+    drawStartLine(bullishPrice, showBullish, bullStartColor, bullStartStyle, bullStartWidth, "Bull Start")
+    drawSet(bullLevels, showBullish, bullishAngles, bullPrimaryColor, bullPrimaryStyle, bullPrimaryWidth, bullSecondaryColor, bullSecondaryStyle, bullSecondaryWidth)
+    drawStartLine(bearishPrice, showBearish, bearStartColor, bearStartStyle, bearStartWidth, "Bear Start")
+    drawSet(bearLevels, showBearish, bearishAngles, bearPrimaryColor, bearPrimaryStyle, bearPrimaryWidth, bearSecondaryColor, bearSecondaryStyle, bearSecondaryWidth)
