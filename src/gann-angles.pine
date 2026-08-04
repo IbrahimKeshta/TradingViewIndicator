@@ -1,5 +1,5 @@
 //@version=6
-indicator("Gann Angles", shorttitle = "Gann-Angles", overlay = true, max_lines_count = 200)
+indicator("Gann Angles", shorttitle = "Gann-Angles", overlay = true, max_lines_count = 250)
 
 // ============================================================
 // INPUTS
@@ -205,12 +205,13 @@ if square9Redraw
     square9Direction = anchorType == "low" ? 1.0 : -1.0
     sqrtAnchor        = math.sqrt(anchorPrice)
     for r = 1 to square9Rings
-        for step = 1 to 4
-            k      = (r - 1) * 4 + step
-            offset = sqrtAnchor + square9Direction * k * 0.5
+        for step = 1 to 16
+            n      = (r - 1) * 16 + step
+            offset = sqrtAnchor + square9Direction * n * 0.125
             if offset > 0
                 levelPrice = math.pow(offset, 2)
-                levelLabel = "R" + str.tostring(r) + "-" + str.tostring(step * 90) + "deg"
+                angle      = step * 22.5
+                levelLabel = "R" + str.tostring(r) + "-" + str.tostring(angle, "#.#") + "°"
                 lineColor  = r == 1 ? color.new(color.blue, 0) : color.new(color.orange, 0)
                 lineWidth  = r == 1 ? 2 : 1
                 newLine    = line.new(anchorBarIndex, levelPrice, bar_index + forwardProjection, levelPrice, color = lineColor, style = line.style_dashed, width = lineWidth)
