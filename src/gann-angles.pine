@@ -111,7 +111,7 @@ if anchorModeInput == "Auto (Swing)"
             anchorChanged    := true
 else
     candidateType = manualAnchorTypeInput == "Low (up-angles)" ? "low" : "high"
-    if not na(manualAnchorBarIndex) and (manualAnchorBarIndex != anchorBarIndex or candidateType != anchorType or manualAnchorPrice != anchorPrice)
+    if not na(manualAnchorBarIndex) and time > manualAnchorTime and (manualAnchorBarIndex != anchorBarIndex or candidateType != anchorType or manualAnchorPrice != anchorPrice)
         anchorPrice      := manualAnchorPrice
         anchorBarIndex   := manualAnchorBarIndex
         anchorType       := candidateType
