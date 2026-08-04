@@ -17,7 +17,7 @@ bearishAngles = input.string("All", "Bearish Angles", options = ["All", "Primary
 
 // ---------------- Calculation ----------------
 ringCount   = input.int(2, "Rings", minval = 1, maxval = 3, group = "Calculation", tooltip = "Each ring is 16 levels at 22.5-degree increments. Capped at 3 so the table stays within Pine's 100-row limit.")
-scaleFactor = input.float(1.0, "Scale Factor", minval = 0.001, group = "Calculation")
+scaleFactor = input.float(1.0, "Scale Factor", minval = 0.001, group = "Calculation", tooltip = "Controls level spacing. Higher values tighten the levels together, lower values spread them apart. Raise this on high-priced instruments where the default packs all levels into a narrow band.")
 
 // ---------------- Bullish Style ----------------
 bullPrimaryColor   = input.color(color.red, "Primary", group = "Bullish Style", inline = "bullPri")
@@ -161,7 +161,10 @@ if barstate.islast
             "Top Left"     => position.top_left
             "Bottom Right" => position.bottom_right
             => position.bottom_left
-        neededRows = 1 + countRows(bullLevels, showBullish, bullishAngles, bullishPrice) + countRows(bearLevels, showBearish, bearishAngles, bearishPrice)
+        bullRowCount = countRows(bullLevels, showBullish, bullishAngles, bullishPrice)
+        bearRowCount = countRows(bearLevels, showBearish, bearishAngles, bearishPrice)
+        noUsablePrice = bullRowCount == 0 and bearRowCount == 0
+        neededRows = noUsablePrice ? 2 : 1 + bullRowCount + bearRowCount
         rowCount   = math.min(neededRows, 100)
         sq9Table := table.new(tablePos, 3, rowCount, bgcolor = color.new(color.black, 80), border_width = 1)
         table.cell(sq9Table, 0, 0, "Label", text_color = color.white, bgcolor = color.new(color.gray, 50))
@@ -169,6 +172,9 @@ if barstate.islast
         table.cell(sq9Table, 2, 0, "Status", text_color = color.white, bgcolor = color.new(color.gray, 50))
 
         nextRow = 1
+        if noUsablePrice and nextRow < rowCount
+            table.cell(sq9Table, 0, nextRow, "Set Bullish Price in settings", text_color = color.silver)
+            nextRow += 1
         if showBullish and bullishPrice > 0 and nextRow < rowCount
             table.cell(sq9Table, 0, nextRow, "Bull Start", text_color = bullStartColor)
             table.cell(sq9Table, 1, nextRow, str.tostring(bullishPrice, format.mintick), text_color = color.white)

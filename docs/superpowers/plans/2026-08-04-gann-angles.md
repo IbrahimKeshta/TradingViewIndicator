@@ -4,6 +4,8 @@
 
 **Goal:** Build a new standalone Pine Script v6 indicator (`src/gann-angles.pine`) that auto-calculates Gann Fan, Gann Square (Box), Square of 9, and Gann Time Levels from an auto-detected (or manual) swing anchor, with a price/time-target table tracking touched/reached status.
 
+> **Superseded on 2026-08-05** by `2026-08-05-square-of-9-levels.md`. The Gann Fan, Gann Square (Box), Gann Time Levels and the whole anchor engine described below were removed; `src/gann-angles.pine` is now a pure Square of 9 level indicator. This document is kept for history only.
+
 **Architecture:** One shared anchor engine (swing-pivot detection, auto or manual) feeds three mutually-exclusive price-mode renderers (Fan / Square / Square of 9) selected by a mode switch, plus an independent Time Levels toggle. All price-mode renderers populate a common `GannLevel` array so a single generic table task can render touched-status for whichever mode is active without mode-specific logic.
 
 **Tech Stack:** Pine Script v6 (TradingView). No package manager, no automated test framework — verification is manual via TradingView's Pine Editor (compile check) and chart inspection, same convention as the existing ICT script.
