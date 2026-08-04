@@ -203,3 +203,28 @@ killzoneActive = londonActive or newYorkActive
 
 bgcolor(londonActive ? color.new(color.blue, 90) : na, title = "London Killzone")
 bgcolor(newYorkActive ? color.new(color.orange, 90) : na, title = "New York Killzone")
+
+// ============================================================
+// CONFLUENCE SIGNALS
+// ============================================================
+var bool bullishSignalFired = false
+var bool bearishSignalFired = false
+
+if chochBullish or bosBullish
+    bullishSignalFired := false
+if chochBearish or bosBearish
+    bearishSignalFired := false
+
+inBullishZone = priceInsideAnyBox(bullishFvgBoxes) or priceInsideAnyBox(bullishObBoxes)
+inBearishZone = priceInsideAnyBox(bearishFvgBoxes) or priceInsideAnyBox(bearishObBoxes)
+
+bullishSignal = structureBias == "bullish" and inBullishZone and killzoneActive and rsiBullishConfirm and maBullishConfirm and not bullishSignalFired
+bearishSignal = structureBias == "bearish" and inBearishZone and killzoneActive and rsiBearishConfirm and maBearishConfirm and not bearishSignalFired
+
+if bullishSignal
+    bullishSignalFired := true
+if bearishSignal
+    bearishSignalFired := true
+
+plotshape(showSignalMarkers and bullishSignal, title = "Bullish Signal", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.small)
+plotshape(showSignalMarkers and bearishSignal, title = "Bearish Signal", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.small)
