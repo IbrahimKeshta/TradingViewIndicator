@@ -1,0 +1,67 @@
+//@version=6
+indicator("Gann Angles", shorttitle = "Gann-Angles", overlay = true, max_lines_count = 200)
+
+// ============================================================
+// INPUTS
+// ============================================================
+
+// ---------------- Mode ----------------
+modeInput = input.string("Gann Fan", "Mode", options = ["Gann Fan", "Gann Square", "Square of 9"], group = "Mode")
+
+// ---------------- Anchor ----------------
+anchorModeInput       = input.string("Auto (Swing)", "Anchor Mode", options = ["Auto (Swing)", "Manual"], group = "Anchor")
+pivotLookback         = input.int(5, "Swing Pivot Lookback", minval = 2, group = "Anchor")
+manualAnchorTime      = input.time(timestamp(2026, 1, 1, 0, 0), "Manual Anchor Time", group = "Anchor")
+manualAnchorPrice     = input.float(0.0, "Manual Anchor Price", minval = 0.0, group = "Anchor")
+manualAnchorTypeInput = input.string("Low (up-angles)", "Manual Anchor Type", options = ["Low (up-angles)", "High (down-angles)"], group = "Anchor")
+
+// ---------------- Scaling ----------------
+atrLength = input.int(14, "ATR Length", minval = 1, group = "Scaling")
+
+// ---------------- Gann Square ----------------
+boxGridDivisions = input.int(8, "Box Grid Divisions", minval = 1, maxval = 20, group = "Gann Square")
+
+// ---------------- Square of 9 ----------------
+square9Rings = input.int(2, "Number of Rings", minval = 1, maxval = 10, group = "Square of 9")
+
+// ---------------- Time Levels ----------------
+showTimeLevels = input.bool(false, "Show Gann Time Levels", group = "Time Levels")
+
+// ---------------- Display ----------------
+showTable          = input.bool(true, "Show Price/Time Target Table", group = "Display")
+tablePositionInput = input.string("Top Right", "Table Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Display")
+forwardProjection  = input.int(100, "Forward Projection (bars)", minval = 1, maxval = 500, group = "Display")
+
+// ============================================================
+// SHARED STATE
+// ============================================================
+var string[] gannRatioLabels      = array.from("1x8", "1x4", "1x3", "1x2", "1x1", "2x1", "3x1", "4x1", "8x1")
+var float[]  gannRatioMultipliers = array.from(1.0/8, 1.0/4, 1.0/3, 1.0/2, 1.0, 2.0, 3.0, 4.0, 8.0)
+var int[]    gannTimeCycles       = array.from(30, 45, 60, 90, 120, 144, 180, 270, 360)
+
+type GannLevel
+    line   lineRef
+    string label
+    float  slope
+    bool   touched
+    color  col
+
+type GannTimeLevel
+    line   lineRef
+    string label
+    int    targetBar
+    bool   reached
+
+var GannLevel[]     activeLevels     = array.new<GannLevel>()
+var GannTimeLevel[] activeTimeLevels = array.new<GannTimeLevel>()
+
+var string previousMode           = na
+var bool   previousShowTimeLevels = false
+
+modeChanged             = modeInput != previousMode
+timeLevelsToggleChanged = showTimeLevels != previousShowTimeLevels
+
+// ============================================================
+// SCALING
+// ============================================================
+priceUnit = ta.atr(atrLength)
