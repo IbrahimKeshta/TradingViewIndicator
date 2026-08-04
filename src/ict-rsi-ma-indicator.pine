@@ -127,8 +127,10 @@ if chochBearish
 // interpretation of "auto-remove when mitigated."
 var box[] bullishFvgBoxes = array.new<box>()
 var box[] bearishFvgBoxes = array.new<box>()
+var label[] bullishFvgLabels = array.new<label>()
+var label[] bearishFvgLabels = array.new<label>()
 
-mitigateBoxes(boxArray, isBullish) =>
+mitigateBoxes(boxArray, labelArray, isBullish) =>
     if array.size(boxArray) > 0
         for i = array.size(boxArray) - 1 to 0
             b = array.get(boxArray, i)
@@ -138,6 +140,8 @@ mitigateBoxes(boxArray, isBullish) =>
             if touched
                 box.delete(b)
                 array.remove(boxArray, i)
+                label.delete(array.get(labelArray, i))
+                array.remove(labelArray, i)
             else
                 box.set_right(b, bar_index)
     array.size(boxArray)
@@ -152,29 +156,37 @@ priceInsideAnyBox(boxArray) =>
     result
 
 // must run before creation — a box must not be tested against its own creation bar
-mitigateBoxes(bullishFvgBoxes, true)
-mitigateBoxes(bearishFvgBoxes, false)
+mitigateBoxes(bullishFvgBoxes, bullishFvgLabels, true)
+mitigateBoxes(bearishFvgBoxes, bearishFvgLabels, false)
 
 bullishFvgDetected = barstate.isconfirmed and showFVG and low > high[2]
 bearishFvgDetected = barstate.isconfirmed and showFVG and high < low[2]
 
 if bullishFvgDetected
     newBullishFvg = box.new(bar_index[2], low, bar_index, high[2], border_color = color.new(color.teal, 40), bgcolor = color.new(color.teal, 85))
+    newBullishFvgLabel = label.new(x = bar_index[2], y = low, text = "FVG", color = color.new(color.teal, 40), style = label.style_label_down, textcolor = color.white, size = size.tiny)
     array.push(bullishFvgBoxes, newBullishFvg)
+    array.push(bullishFvgLabels, newBullishFvgLabel)
     if array.size(bullishFvgBoxes) > fvgMaxCount
         box.delete(array.shift(bullishFvgBoxes))
+        label.delete(array.shift(bullishFvgLabels))
 
 if bearishFvgDetected
     newBearishFvg = box.new(bar_index[2], low[2], bar_index, high, border_color = color.new(color.red, 40), bgcolor = color.new(color.red, 85))
+    newBearishFvgLabel = label.new(x = bar_index[2], y = low[2], text = "FVG", color = color.new(color.red, 40), style = label.style_label_down, textcolor = color.white, size = size.tiny)
     array.push(bearishFvgBoxes, newBearishFvg)
+    array.push(bearishFvgLabels, newBearishFvgLabel)
     if array.size(bearishFvgBoxes) > fvgMaxCount
         box.delete(array.shift(bearishFvgBoxes))
+        label.delete(array.shift(bearishFvgLabels))
 
 // ============================================================
 // ORDER BLOCKS
 // ============================================================
 var box[] bullishObBoxes = array.new<box>()
 var box[] bearishObBoxes = array.new<box>()
+var label[] bullishObLabels = array.new<label>()
+var label[] bearishObLabels = array.new<label>()
 
 findOppositeCandle(isBullishBreak) =>
     idx = -1
@@ -190,24 +202,30 @@ findOppositeCandle(isBullishBreak) =>
     idx
 
 // must run before creation — a box must not be tested against its own creation bar
-mitigateBoxes(bullishObBoxes, true)
-mitigateBoxes(bearishObBoxes, false)
+mitigateBoxes(bullishObBoxes, bullishObLabels, true)
+mitigateBoxes(bearishObBoxes, bearishObLabels, false)
 
 if barstate.isconfirmed and showOB and (bosBullish or chochBullish)
     obOffset = findOppositeCandle(true)
     if obOffset >= 0
         newBullishOb = box.new(bar_index[obOffset], high[obOffset], bar_index, low[obOffset], border_color = color.new(color.blue, 40), bgcolor = color.new(color.blue, 85))
+        newBullishObLabel = label.new(x = bar_index[obOffset], y = high[obOffset], text = "OB", color = color.new(color.blue, 40), style = label.style_label_down, textcolor = color.white, size = size.tiny)
         array.push(bullishObBoxes, newBullishOb)
+        array.push(bullishObLabels, newBullishObLabel)
         if array.size(bullishObBoxes) > obMaxCount
             box.delete(array.shift(bullishObBoxes))
+            label.delete(array.shift(bullishObLabels))
 
 if barstate.isconfirmed and showOB and (bosBearish or chochBearish)
     obOffset = findOppositeCandle(false)
     if obOffset >= 0
         newBearishOb = box.new(bar_index[obOffset], high[obOffset], bar_index, low[obOffset], border_color = color.new(color.purple, 40), bgcolor = color.new(color.purple, 85))
+        newBearishObLabel = label.new(x = bar_index[obOffset], y = high[obOffset], text = "OB", color = color.new(color.purple, 40), style = label.style_label_down, textcolor = color.white, size = size.tiny)
         array.push(bearishObBoxes, newBearishOb)
+        array.push(bearishObLabels, newBearishObLabel)
         if array.size(bearishObBoxes) > obMaxCount
             box.delete(array.shift(bearishObBoxes))
+            label.delete(array.shift(bearishObLabels))
 
 // ============================================================
 // KILLZONE SESSIONS
