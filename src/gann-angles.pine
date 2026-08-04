@@ -11,7 +11,7 @@ modeInput = input.string("Gann Fan", "Mode", options = ["Gann Fan", "Gann Square
 // ---------------- Anchor ----------------
 anchorModeInput       = input.string("Auto (Swing)", "Anchor Mode", options = ["Auto (Swing)", "Manual"], group = "Anchor")
 pivotLookback         = input.int(5, "Swing Pivot Lookback", minval = 2, group = "Anchor")
-manualAnchorTime      = input.time(timestamp(2026, 1, 1, 0, 0), "Manual Anchor Time", group = "Anchor")
+manualAnchorTime      = input.time(1767225600000, "Manual Anchor Time", group = "Anchor")  // 2026-01-01 00:00 UTC
 manualAnchorPrice     = input.float(0.0, "Manual Anchor Price", minval = 0.0, group = "Anchor")
 manualAnchorTypeInput = input.string("Low (up-angles)", "Manual Anchor Type", options = ["Low (up-angles)", "High (down-angles)"], group = "Anchor")
 
