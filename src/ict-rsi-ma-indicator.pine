@@ -228,3 +228,39 @@ if bearishSignal
 
 plotshape(showSignalMarkers and bullishSignal, title = "Bullish Signal", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.small)
 plotshape(showSignalMarkers and bearishSignal, title = "Bearish Signal", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.small)
+
+// ============================================================
+// WATCH-ZONE HEADS-UP
+// ============================================================
+atrValue = ta.atr(watchZoneAtrLength)
+
+nearestBoxDistance(boxArray) =>
+    minDist = float(na)
+    if array.size(boxArray) > 0
+        for i = 0 to array.size(boxArray) - 1
+            b = array.get(boxArray, i)
+            top = box.get_top(b)
+            bottom = box.get_bottom(b)
+            dist = close > top ? close - top : (close < bottom ? bottom - close : 0.0)
+            if na(minDist) or dist < minDist
+                minDist := dist
+    minDist
+
+bullishFvgDist = nearestBoxDistance(bullishFvgBoxes)
+bullishObDist  = nearestBoxDistance(bullishObBoxes)
+bearishFvgDist = nearestBoxDistance(bearishFvgBoxes)
+bearishObDist  = nearestBoxDistance(bearishObBoxes)
+
+closestBullishDist = na(bullishFvgDist) ? bullishObDist : (na(bullishObDist) ? bullishFvgDist : math.min(bullishFvgDist, bullishObDist))
+closestBearishDist = na(bearishFvgDist) ? bearishObDist : (na(bearishObDist) ? bearishFvgDist : math.min(bearishFvgDist, bearishObDist))
+
+bullishWatchZone = structureBias == "bullish" and killzoneActive and not inBullishZone and not na(closestBullishDist) and closestBullishDist <= atrValue * watchZoneAtrMult
+bearishWatchZone = structureBias == "bearish" and killzoneActive and not inBearishZone and not na(closestBearishDist) and closestBearishDist <= atrValue * watchZoneAtrMult
+
+// ============================================================
+// ALERTS
+// ============================================================
+alertcondition(bullishSignal, title = "Bullish Confluence Signal", message = "Bullish confluence signal on {{ticker}} {{interval}}: structure + FVG/OB + killzone + RSI/MA aligned bullish.")
+alertcondition(bearishSignal, title = "Bearish Confluence Signal", message = "Bearish confluence signal on {{ticker}} {{interval}}: structure + FVG/OB + killzone + RSI/MA aligned bearish.")
+alertcondition(bullishWatchZone, title = "Bullish Watch-Zone", message = "Watch: price approaching an unmitigated bullish FVG/OB during a killzone on {{ticker}} {{interval}}.")
+alertcondition(bearishWatchZone, title = "Bearish Watch-Zone", message = "Watch: price approaching an unmitigated bearish FVG/OB during a killzone on {{ticker}} {{interval}}.")
