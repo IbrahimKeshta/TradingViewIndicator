@@ -176,15 +176,20 @@ if squareRedraw
             array.push(boxGridLines, line.new(boxLeft, boxBottom + priceStep * i, boxRight, boxBottom + priceStep * i, color = color.new(color.gray, 70), style = line.style_dotted))
             array.push(boxGridLines, line.new(boxLeft + int(math.round(barStep * i)), boxBottom, boxLeft + int(math.round(barStep * i)), boxTop, color = color.new(color.gray, 70), style = line.style_dotted))
 
-    squareDirection = anchorType == "low" ? 1.0 : -1.0
-    boxSpanBars     = math.abs(opposingBarIndex - anchorBarIndex)
+    barDirection   = opposingBarIndex >= anchorBarIndex ? 1 : -1
+    priceDirection = opposingPrice >= anchorPrice ? 1.0 : -1.0
+    boxSpanBars    = math.abs(opposingBarIndex - anchorBarIndex)
+    boxHeight      = boxTop - boxBottom
     for i = 0 to array.size(gannRatioLabels) - 1
         ratioLabel = array.get(gannRatioLabels, i)
-        slope      = squareDirection * array.get(gannRatioMultipliers, i) * priceUnit
+        slopeMag   = array.get(gannRatioMultipliers, i) * priceUnit
         lineColor  = ratioLabel == "1x1" ? color.new(color.blue, 0) : color.new(color.orange, 0)
         lineWidth  = ratioLabel == "1x1" ? 2 : 1
-        endBar     = anchorBarIndex + boxSpanBars
-        endPrice   = anchorPrice + slope * boxSpanBars
+        barsToPriceEdge = slopeMag > 0 ? boxHeight / slopeMag : boxSpanBars
+        barsToDraw      = math.min(boxSpanBars, barsToPriceEdge)
+        slope           = priceDirection * slopeMag
+        endBar          = anchorBarIndex + barDirection * int(math.round(barsToDraw))
+        endPrice        = anchorPrice + slope * barsToDraw
         newLine    = line.new(anchorBarIndex, anchorPrice, endBar, endPrice, color = lineColor, width = lineWidth)
         array.push(activeLevels, GannLevel.new(newLine, ratioLabel, slope, false, lineColor))
 
@@ -201,13 +206,15 @@ if square9Redraw
     sqrtAnchor        = math.sqrt(anchorPrice)
     for r = 1 to square9Rings
         for step = 1 to 4
-            k          = (r - 1) * 4 + step
-            levelPrice = math.pow(sqrtAnchor + square9Direction * k * 0.5, 2)
-            levelLabel = "R" + str.tostring(r) + "-" + str.tostring(step * 90) + "deg"
-            lineColor  = r == 1 ? color.new(color.blue, 0) : color.new(color.orange, 0)
-            lineWidth  = r == 1 ? 2 : 1
-            newLine    = line.new(anchorBarIndex, levelPrice, bar_index + forwardProjection, levelPrice, color = lineColor, style = line.style_dashed, width = lineWidth)
-            array.push(activeLevels, GannLevel.new(newLine, levelLabel, 0.0, false, lineColor))
+            k      = (r - 1) * 4 + step
+            offset = sqrtAnchor + square9Direction * k * 0.5
+            if offset > 0
+                levelPrice = math.pow(offset, 2)
+                levelLabel = "R" + str.tostring(r) + "-" + str.tostring(step * 90) + "deg"
+                lineColor  = r == 1 ? color.new(color.blue, 0) : color.new(color.orange, 0)
+                lineWidth  = r == 1 ? 2 : 1
+                newLine    = line.new(anchorBarIndex, levelPrice, bar_index + forwardProjection, levelPrice, color = lineColor, style = line.style_dashed, width = lineWidth)
+                array.push(activeLevels, GannLevel.new(newLine, levelLabel, 0.0, false, lineColor))
 
 if modeInput == "Square of 9" and not na(anchorPrice) and array.size(activeLevels) > 0
     for lvl in activeLevels
@@ -240,10 +247,11 @@ if not showTimeLevels and array.size(activeTimeLevels) > 0
 // PRICE / TIME TARGET TABLE
 // ============================================================
 if not na(anchorBarIndex)
-    for lvl in activeLevels
-        currentPrice = line.get_price(lvl.lineRef, bar_index)
-        if not lvl.touched and low <= currentPrice and high >= currentPrice
-            lvl.touched := true
+    if modeInput != "Gann Square"
+        for lvl in activeLevels
+            currentPrice = line.get_price(lvl.lineRef, bar_index)
+            if not lvl.touched and low <= currentPrice and high >= currentPrice
+                lvl.touched := true
 
     for tl in activeTimeLevels
         tl.reached := bar_index >= tl.targetBar
@@ -267,9 +275,11 @@ if showTable and barstate.islast
         for i = 0 to array.size(activeLevels) - 1
             lvl      = array.get(activeLevels, i)
             rowPrice = line.get_price(lvl.lineRef, bar_index)
+            statusText  = modeInput == "Gann Square" ? "n/a" : (lvl.touched ? "Touched" : "Pending")
+            statusColor = modeInput == "Gann Square" ? color.gray : (lvl.touched ? color.lime : color.gray)
             table.cell(gannTable, 0, i + 1, lvl.label, text_color = lvl.col)
             table.cell(gannTable, 1, i + 1, str.tostring(rowPrice, format.mintick), text_color = color.white)
-            table.cell(gannTable, 2, i + 1, lvl.touched ? "Touched" : "Pending", text_color = lvl.touched ? color.lime : color.gray)
+            table.cell(gannTable, 2, i + 1, statusText, text_color = statusColor)
 
     if showTimeLevels and array.size(activeTimeLevels) > 0
         timeHeaderRow = 1 + array.size(activeLevels)
