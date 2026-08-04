@@ -54,9 +54,11 @@ maBearishConfirm  = close < maValue
 
 var label rsiReadoutLabel = na
 
+rsiStateSuffix = rsiBearishConfirm ? " OB" : rsiBullishConfirm ? " OS" : ""
+
 if showRsiReadout and barstate.islast
     label.delete(rsiReadoutLabel)
-    rsiReadoutLabel := label.new(x = bar_index, y = high, text = "RSI " + str.tostring(rsiValue, "#.##"), color = color.new(color.blue, 80), style = label.style_label_down, textcolor = color.white, size = size.small)
+    rsiReadoutLabel := label.new(x = bar_index, y = high, text = "RSI " + str.tostring(rsiValue, "#.##") + rsiStateSuffix, color = color.new(color.blue, 80), style = label.style_label_down, textcolor = color.white, size = size.small)
 
 // ============================================================
 // MARKET STRUCTURE (swings, BOS, CHoCH)
@@ -81,7 +83,7 @@ bosBearish   = false
 chochBullish = false
 chochBearish = false
 
-if not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
+if barstate.isconfirmed and not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
     if structureBias == "bearish"
         chochBullish := true
     else
@@ -89,7 +91,7 @@ if not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
     structureBias := "bullish"
     lastSwingHigh := na
 
-if not na(lastSwingLow) and close < lastSwingLow and close[1] >= lastSwingLow
+if barstate.isconfirmed and not na(lastSwingLow) and close < lastSwingLow and close[1] >= lastSwingLow
     if structureBias == "bullish"
         chochBearish := true
     else
@@ -138,8 +140,12 @@ priceInsideAnyBox(boxArray) =>
                 result := true
     result
 
-bullishFvgDetected = showFVG and low > high[2]
-bearishFvgDetected = showFVG and high < low[2]
+// must run before creation — a box must not be tested against its own creation bar
+mitigateBoxes(bullishFvgBoxes, true)
+mitigateBoxes(bearishFvgBoxes, false)
+
+bullishFvgDetected = barstate.isconfirmed and showFVG and low > high[2]
+bearishFvgDetected = barstate.isconfirmed and showFVG and high < low[2]
 
 if bullishFvgDetected
     newBullishFvg = box.new(bar_index[2], low, bar_index, high[2], border_color = color.new(color.teal, 40), bgcolor = color.new(color.teal, 85))
@@ -152,9 +158,6 @@ if bearishFvgDetected
     array.push(bearishFvgBoxes, newBearishFvg)
     if array.size(bearishFvgBoxes) > fvgMaxCount
         box.delete(array.shift(bearishFvgBoxes))
-
-mitigateBoxes(bullishFvgBoxes, true)
-mitigateBoxes(bearishFvgBoxes, false)
 
 // ============================================================
 // ORDER BLOCKS
@@ -175,7 +178,11 @@ findOppositeCandle(isBullishBreak) =>
             break
     idx
 
-if showOB and (bosBullish or chochBullish)
+// must run before creation — a box must not be tested against its own creation bar
+mitigateBoxes(bullishObBoxes, true)
+mitigateBoxes(bearishObBoxes, false)
+
+if barstate.isconfirmed and showOB and (bosBullish or chochBullish)
     obOffset = findOppositeCandle(true)
     if obOffset >= 0
         newBullishOb = box.new(bar_index[obOffset], high[obOffset], bar_index, low[obOffset], border_color = color.new(color.blue, 40), bgcolor = color.new(color.blue, 85))
@@ -183,16 +190,13 @@ if showOB and (bosBullish or chochBullish)
         if array.size(bullishObBoxes) > obMaxCount
             box.delete(array.shift(bullishObBoxes))
 
-if showOB and (bosBearish or chochBearish)
+if barstate.isconfirmed and showOB and (bosBearish or chochBearish)
     obOffset = findOppositeCandle(false)
     if obOffset >= 0
         newBearishOb = box.new(bar_index[obOffset], high[obOffset], bar_index, low[obOffset], border_color = color.new(color.purple, 40), bgcolor = color.new(color.purple, 85))
         array.push(bearishObBoxes, newBearishOb)
         if array.size(bearishObBoxes) > obMaxCount
             box.delete(array.shift(bearishObBoxes))
-
-mitigateBoxes(bullishObBoxes, true)
-mitigateBoxes(bearishObBoxes, false)
 
 // ============================================================
 // KILLZONE SESSIONS
@@ -218,8 +222,8 @@ if chochBearish or bosBearish
 inBullishZone = priceInsideAnyBox(bullishFvgBoxes) or priceInsideAnyBox(bullishObBoxes)
 inBearishZone = priceInsideAnyBox(bearishFvgBoxes) or priceInsideAnyBox(bearishObBoxes)
 
-bullishSignal = structureBias == "bullish" and inBullishZone and killzoneActive and rsiBullishConfirm and maBullishConfirm and not bullishSignalFired
-bearishSignal = structureBias == "bearish" and inBearishZone and killzoneActive and rsiBearishConfirm and maBearishConfirm and not bearishSignalFired
+bullishSignal = structureBias == "bullish" and inBullishZone and killzoneActive and rsiBullishConfirm and maBullishConfirm and not bullishSignalFired and barstate.isconfirmed
+bearishSignal = structureBias == "bearish" and inBearishZone and killzoneActive and rsiBearishConfirm and maBearishConfirm and not bearishSignalFired and barstate.isconfirmed
 
 if bullishSignal
     bullishSignalFired := true
