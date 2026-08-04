@@ -144,3 +144,46 @@ if modeInput == "Gann Fan" and not na(anchorPrice) and array.size(activeLevels) 
         endBar   = bar_index + forwardProjection
         endPrice = anchorPrice + lvl.slope * (endBar - anchorBarIndex)
         line.set_xy2(lvl.lineRef, endBar, endPrice)
+
+// ============================================================
+// GANN SQUARE (BOX)
+// ============================================================
+var box       gannBox      = na
+var line[]    boxGridLines = array.new<line>()
+
+squareRedraw = (modeInput == "Gann Square") and (anchorChanged or modeChanged) and not na(anchorPrice) and not na(opposingPrice)
+
+if squareRedraw
+    for lvl in activeLevels
+        line.delete(lvl.lineRef)
+    array.clear(activeLevels)
+    box.delete(gannBox)
+    for gridLine in boxGridLines
+        line.delete(gridLine)
+    array.clear(boxGridLines)
+
+    boxLeft   = math.min(anchorBarIndex, opposingBarIndex)
+    boxRight  = math.max(anchorBarIndex, opposingBarIndex)
+    boxTop    = math.max(anchorPrice, opposingPrice)
+    boxBottom = math.min(anchorPrice, opposingPrice)
+
+    gannBox := box.new(boxLeft, boxTop, boxRight, boxBottom, border_color = color.new(color.gray, 50), bgcolor = color.new(color.gray, 95))
+
+    priceStep = (boxTop - boxBottom) / boxGridDivisions
+    barStep   = (boxRight - boxLeft) / boxGridDivisions
+    if boxGridDivisions > 1
+        for i = 1 to boxGridDivisions - 1
+            array.push(boxGridLines, line.new(boxLeft, boxBottom + priceStep * i, boxRight, boxBottom + priceStep * i, color = color.new(color.gray, 70), style = line.style_dotted))
+            array.push(boxGridLines, line.new(boxLeft + math.round(barStep * i), boxBottom, boxLeft + math.round(barStep * i), boxTop, color = color.new(color.gray, 70), style = line.style_dotted))
+
+    squareDirection = anchorType == "low" ? 1.0 : -1.0
+    boxSpanBars     = math.abs(opposingBarIndex - anchorBarIndex)
+    for i = 0 to array.size(gannRatioLabels) - 1
+        ratioLabel = array.get(gannRatioLabels, i)
+        slope      = squareDirection * array.get(gannRatioMultipliers, i) * priceUnit
+        lineColor  = ratioLabel == "1x1" ? color.new(color.blue, 0) : color.new(color.orange, 0)
+        lineWidth  = ratioLabel == "1x1" ? 2 : 1
+        endBar     = anchorBarIndex + boxSpanBars
+        endPrice   = anchorPrice + slope * boxSpanBars
+        newLine    = line.new(anchorBarIndex, anchorPrice, endBar, endPrice, color = lineColor, width = lineWidth)
+        array.push(activeLevels, GannLevel.new(newLine, ratioLabel, slope, false, lineColor))
