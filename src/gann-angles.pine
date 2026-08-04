@@ -65,3 +65,56 @@ timeLevelsToggleChanged = showTimeLevels != previousShowTimeLevels
 // SCALING
 // ============================================================
 priceUnit = ta.atr(atrLength)
+
+// ============================================================
+// ANCHOR ENGINE
+// ============================================================
+swingHigh = ta.pivothigh(high, pivotLookback, pivotLookback)
+swingLow  = ta.pivotlow(low, pivotLookback, pivotLookback)
+
+var float lastSwingHighPrice    = na
+var int   lastSwingHighBarIndex = na
+var float lastSwingLowPrice     = na
+var int   lastSwingLowBarIndex  = na
+
+if not na(swingHigh)
+    lastSwingHighPrice := swingHigh
+    lastSwingHighBarIndex := bar_index - pivotLookback
+if not na(swingLow)
+    lastSwingLowPrice := swingLow
+    lastSwingLowBarIndex := bar_index - pivotLookback
+
+var int manualAnchorBarIndex = na
+if time <= manualAnchorTime
+    manualAnchorBarIndex := bar_index
+
+var float  anchorPrice      = na
+var int    anchorBarIndex   = na
+var string anchorType       = na
+var float  opposingPrice    = na
+var int    opposingBarIndex = na
+
+anchorChanged = false
+
+if anchorModeInput == "Auto (Swing)"
+    if not na(lastSwingHighBarIndex) or not na(lastSwingLowBarIndex)
+        newAnchorIsHigh   = na(lastSwingLowBarIndex) or (not na(lastSwingHighBarIndex) and lastSwingHighBarIndex >= lastSwingLowBarIndex)
+        candidatePrice    = newAnchorIsHigh ? lastSwingHighPrice    : lastSwingLowPrice
+        candidateBarIndex = newAnchorIsHigh ? lastSwingHighBarIndex : lastSwingLowBarIndex
+        candidateType     = newAnchorIsHigh ? "high" : "low"
+        if candidateBarIndex != anchorBarIndex or candidateType != anchorType
+            anchorPrice      := candidatePrice
+            anchorBarIndex   := candidateBarIndex
+            anchorType       := candidateType
+            opposingPrice    := newAnchorIsHigh ? lastSwingLowPrice    : lastSwingHighPrice
+            opposingBarIndex := newAnchorIsHigh ? lastSwingLowBarIndex : lastSwingHighBarIndex
+            anchorChanged    := true
+else
+    candidateType = manualAnchorTypeInput == "Low (up-angles)" ? "low" : "high"
+    if not na(manualAnchorBarIndex) and (manualAnchorBarIndex != anchorBarIndex or candidateType != anchorType or manualAnchorPrice != anchorPrice)
+        anchorPrice      := manualAnchorPrice
+        anchorBarIndex   := manualAnchorBarIndex
+        anchorType       := candidateType
+        opposingPrice    := candidateType == "high" ? lastSwingLowPrice    : lastSwingHighPrice
+        opposingBarIndex := candidateType == "high" ? lastSwingLowBarIndex : lastSwingHighBarIndex
+        anchorChanged    := true
