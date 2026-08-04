@@ -47,14 +47,17 @@ maValue  = maTypeInput == "EMA" ? ta.ema(close, maLength) : ta.sma(close, maLeng
 
 plot(maValue, "MA", color = color.new(color.orange, 0), linewidth = 2)
 
-rsiBullishConfirm = rsiValue <= rsiOversold
-rsiBearishConfirm = rsiValue >= rsiOverbought
+rsiBullishConfirm = rsiValue > 50
+rsiBearishConfirm = rsiValue < 50
 maBullishConfirm  = close > maValue
 maBearishConfirm  = close < maValue
 
+rsiOverboughtState = rsiValue >= rsiOverbought
+rsiOversoldState   = rsiValue <= rsiOversold
+
 var label rsiReadoutLabel = na
 
-rsiStateSuffix = rsiBearishConfirm ? " OB" : rsiBullishConfirm ? " OS" : ""
+rsiStateSuffix = rsiOverboughtState ? " OB" : rsiOversoldState ? " OS" : ""
 
 if showRsiReadout and barstate.islast
     label.delete(rsiReadoutLabel)
