@@ -2,6 +2,7 @@
 
 **Date:** 2026-08-04
 **Status:** Approved for planning
+> **Superseded on 2026-08-05** by `2026-08-05-square-of-9-levels-design.md`. The Gann Fan, Gann Square (Box), Gann Time Levels and the whole anchor engine described below were removed; `src/gann-angles.pine` is now a pure Square of 9 level indicator. This document is kept for history only.
 
 ## Purpose
 
