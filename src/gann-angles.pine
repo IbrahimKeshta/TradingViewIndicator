@@ -1,284 +1,102 @@
 //@version=6
-indicator("Gann Angles", shorttitle = "Gann-Angles", overlay = true, max_lines_count = 250)
+indicator("Gann Square of 9 Levels", shorttitle = "GannSq9", overlay = true, max_lines_count = 200, max_labels_count = 200)
 
 // ============================================================
 // INPUTS
 // ============================================================
 
-// ---------------- Mode ----------------
-modeInput = input.string("Gann Fan", "Mode", options = ["Gann Fan", "Gann Square", "Square of 9"], group = "Mode")
+// ---------------- Bullish ----------------
+showBullish   = input.bool(true, "Show Bullish Levels", group = "Bullish")
+bullishPrice  = input.float(0.0, "Bullish Price", minval = 0.0, group = "Bullish", tooltip = "Starting price for the upward level set. Levels project above this price.")
+bullishAngles = input.string("All", "Bullish Angles", options = ["All", "Primary only", "Secondary only"], group = "Bullish")
 
-// ---------------- Anchor ----------------
-anchorModeInput       = input.string("Auto (Swing)", "Anchor Mode", options = ["Auto (Swing)", "Manual"], group = "Anchor")
-pivotLookback         = input.int(5, "Swing Pivot Lookback", minval = 2, group = "Anchor")
-manualAnchorTime      = input.time(1767225600000, "Manual Anchor Time", group = "Anchor")  // 2026-01-01 00:00 UTC
-manualAnchorPrice     = input.float(0.0, "Manual Anchor Price", minval = 0.0, group = "Anchor")
-manualAnchorTypeInput = input.string("Low (up-angles)", "Manual Anchor Type", options = ["Low (up-angles)", "High (down-angles)"], group = "Anchor")
+// ---------------- Bearish ----------------
+showBearish   = input.bool(false, "Show Bearish Levels", group = "Bearish")
+bearishPrice  = input.float(0.0, "Bearish Price", minval = 0.0, group = "Bearish", tooltip = "Starting price for the downward level set. Levels project below this price.")
+bearishAngles = input.string("All", "Bearish Angles", options = ["All", "Primary only", "Secondary only"], group = "Bearish")
 
-// ---------------- Scaling ----------------
-atrLength = input.int(14, "ATR Length", minval = 1, group = "Scaling")
+// ---------------- Calculation ----------------
+ringCount   = input.int(2, "Rings", minval = 1, maxval = 3, group = "Calculation", tooltip = "Each ring is 16 levels at 22.5-degree increments. Capped at 3 so the table stays within Pine's 100-row limit.")
+scaleFactor = input.float(1.0, "Scale Factor", minval = 0.001, group = "Calculation")
 
-// ---------------- Gann Square ----------------
-boxGridDivisions = input.int(8, "Box Grid Divisions", minval = 1, maxval = 20, group = "Gann Square")
+// ---------------- Bullish Style ----------------
+bullPrimaryColor   = input.color(color.red, "Primary", group = "Bullish Style", inline = "bullPri")
+bullPrimaryStyle   = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = "Bullish Style", inline = "bullPri")
+bullPrimaryWidth   = input.int(2, "", minval = 1, maxval = 4, group = "Bullish Style", inline = "bullPri")
+bullSecondaryColor = input.color(color.orange, "Secondary", group = "Bullish Style", inline = "bullSec")
+bullSecondaryStyle = input.string("Dashed", "", options = ["Solid", "Dashed", "Dotted"], group = "Bullish Style", inline = "bullSec")
+bullSecondaryWidth = input.int(1, "", minval = 1, maxval = 4, group = "Bullish Style", inline = "bullSec")
+bullStartColor     = input.color(color.blue, "Start Line", group = "Bullish Style", inline = "bullStart")
+bullStartStyle     = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = "Bullish Style", inline = "bullStart")
+bullStartWidth     = input.int(2, "", minval = 1, maxval = 4, group = "Bullish Style", inline = "bullStart")
 
-// ---------------- Square of 9 ----------------
-square9Rings       = input.int(2, "Number of Rings", minval = 1, maxval = 10, group = "Square of 9")
-square9ScaleFactor = input.float(1.0, "Scale Factor", minval = 0.001, group = "Square of 9")
-
-// ---------------- Time Levels ----------------
-showTimeLevels = input.bool(false, "Show Gann Time Levels", group = "Time Levels")
+// ---------------- Bearish Style ----------------
+bearPrimaryColor   = input.color(color.teal, "Primary", group = "Bearish Style", inline = "bearPri")
+bearPrimaryStyle   = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = "Bearish Style", inline = "bearPri")
+bearPrimaryWidth   = input.int(2, "", minval = 1, maxval = 4, group = "Bearish Style", inline = "bearPri")
+bearSecondaryColor = input.color(color.aqua, "Secondary", group = "Bearish Style", inline = "bearSec")
+bearSecondaryStyle = input.string("Dotted", "", options = ["Solid", "Dashed", "Dotted"], group = "Bearish Style", inline = "bearSec")
+bearSecondaryWidth = input.int(1, "", minval = 1, maxval = 4, group = "Bearish Style", inline = "bearSec")
+bearStartColor     = input.color(color.purple, "Start Line", group = "Bearish Style", inline = "bearStart")
+bearStartStyle     = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = "Bearish Style", inline = "bearStart")
+bearStartWidth     = input.int(2, "", minval = 1, maxval = 4, group = "Bearish Style", inline = "bearStart")
 
 // ---------------- Display ----------------
-showTable          = input.bool(true, "Show Price/Time Target Table", group = "Display")
-tablePositionInput = input.string("Top Right", "Table Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Display")
-forwardProjection  = input.int(100, "Forward Projection (bars)", minval = 1, maxval = 500, group = "Display")
+showLabels    = input.bool(true, "Show Labels", group = "Display")
+labelOffset   = input.int(5, "Label Offset (bars)", minval = 0, maxval = 100, group = "Display")
+showTable     = input.bool(true, "Show Table", group = "Display")
+tablePosInput = input.string("Top Right", "Table Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Display")
 
 // ============================================================
-// SHARED STATE
+// HELPERS
 // ============================================================
-var string[] gannRatioLabels      = array.from("1x8", "1x4", "1x3", "1x2", "1x1", "2x1", "3x1", "4x1", "8x1")
-var float[]  gannRatioMultipliers = array.from(1.0/8, 1.0/4, 1.0/3, 1.0/2, 1.0, 2.0, 3.0, 4.0, 8.0)
-var int[]    gannTimeCycles       = array.from(30, 45, 60, 90, 120, 144, 180, 270, 360)
+styleFromString(string s) =>
+    switch s
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+        => line.style_solid
 
-type GannLevel
-    line   lineRef
+passesFilter(bool isPrimary, string filterMode) =>
+    filterMode == "All" or (filterMode == "Primary only" and isPrimary) or (filterMode == "Secondary only" and not isPrimary)
+
+// ============================================================
+// LEVEL ENGINE
+// ============================================================
+type Sq9Level
+    float  price
     string label
+    bool   isPrimary
     bool   touched
-    color  col
 
-type GannTimeLevel
-    line   lineRef
-    string label
-    int    targetBar
-    bool   reached
+var Sq9Level[] bullLevels = array.new<Sq9Level>()
+var Sq9Level[] bearLevels = array.new<Sq9Level>()
 
-var GannLevel[]     activeLevels     = array.new<GannLevel>()
-var GannTimeLevel[] activeTimeLevels = array.new<GannTimeLevel>()
+buildLevels(Sq9Level[] target, float startPrice, int rings, float scale, float direction) =>
+    if startPrice > 0
+        root = math.sqrt(startPrice * scale)
+        for r = 1 to rings
+            for s = 1 to 16
+                n      = (r - 1) * 16 + s
+                offset = root + direction * n * 0.125
+                if offset > 0
+                    lvlPrice  = math.pow(offset, 2) / scale
+                    angle     = s * 22.5
+                    lvlLabel  = "R" + str.tostring(r) + "-" + str.tostring(angle, "#.#") + "°"
+                    isPrimary = s % 2 == 0
+                    array.push(target, Sq9Level.new(lvlPrice, lvlLabel, isPrimary, false))
+    array.size(target)
 
-var string previousMode           = na
-var bool   previousShowTimeLevels = false
-
-modeChanged             = modeInput != previousMode
-timeLevelsToggleChanged = showTimeLevels != previousShowTimeLevels
-
-// ============================================================
-// SCALING
-// ============================================================
-priceUnit = ta.atr(atrLength)
-
-// ============================================================
-// ANCHOR ENGINE
-// ============================================================
-swingHigh = ta.pivothigh(high, pivotLookback, pivotLookback)
-swingLow  = ta.pivotlow(low, pivotLookback, pivotLookback)
-
-var float lastSwingHighPrice    = na
-var int   lastSwingHighBarIndex = na
-var float lastSwingLowPrice     = na
-var int   lastSwingLowBarIndex  = na
-
-if not na(swingHigh)
-    lastSwingHighPrice := swingHigh
-    lastSwingHighBarIndex := bar_index - pivotLookback
-if not na(swingLow)
-    lastSwingLowPrice := swingLow
-    lastSwingLowBarIndex := bar_index - pivotLookback
-
-var int manualAnchorBarIndex = na
-if time <= manualAnchorTime
-    manualAnchorBarIndex := bar_index
-
-var float  anchorPrice      = na
-var int    anchorBarIndex   = na
-var string anchorType       = na
-var float  opposingPrice    = na
-var int    opposingBarIndex = na
-
-anchorChanged = false
-
-if anchorModeInput == "Auto (Swing)"
-    if not na(lastSwingHighBarIndex) or not na(lastSwingLowBarIndex)
-        newAnchorIsHigh   = na(lastSwingLowBarIndex) or (not na(lastSwingHighBarIndex) and lastSwingHighBarIndex >= lastSwingLowBarIndex)
-        candidatePrice    = newAnchorIsHigh ? lastSwingHighPrice    : lastSwingLowPrice
-        candidateBarIndex = newAnchorIsHigh ? lastSwingHighBarIndex : lastSwingLowBarIndex
-        candidateType     = newAnchorIsHigh ? "high" : "low"
-        if candidateBarIndex != anchorBarIndex or candidateType != anchorType
-            anchorPrice      := candidatePrice
-            anchorBarIndex   := candidateBarIndex
-            anchorType       := candidateType
-            opposingPrice    := newAnchorIsHigh ? lastSwingLowPrice    : lastSwingHighPrice
-            opposingBarIndex := newAnchorIsHigh ? lastSwingLowBarIndex : lastSwingHighBarIndex
-            anchorChanged    := true
-else
-    candidateType = manualAnchorTypeInput == "Low (up-angles)" ? "low" : "high"
-    if not na(manualAnchorBarIndex) and time > manualAnchorTime and (manualAnchorBarIndex != anchorBarIndex or candidateType != anchorType or manualAnchorPrice != anchorPrice)
-        anchorPrice      := manualAnchorPrice
-        anchorBarIndex   := manualAnchorBarIndex
-        anchorType       := candidateType
-        opposingPrice    := candidateType == "high" ? lastSwingLowPrice    : lastSwingHighPrice
-        opposingBarIndex := candidateType == "high" ? lastSwingLowBarIndex : lastSwingHighBarIndex
-        anchorChanged    := true
-
-var label anchorMarker = na
-
-if anchorChanged
-    label.delete(anchorMarker)
-    anchorMarker := label.new(anchorBarIndex, anchorPrice, "Anchor", style = label.style_label_down, color = color.new(color.white, 0), textcolor = color.black, size = size.small)
+if barstate.isfirst
+    buildLevels(bullLevels, bullishPrice, ringCount, scaleFactor, 1.0)
+    buildLevels(bearLevels, bearishPrice, ringCount, scaleFactor, -1.0)
 
 // ============================================================
-// GANN FAN
+// TOUCH TRACKING
 // ============================================================
-fanRedraw = (modeInput == "Gann Fan") and (anchorChanged or modeChanged) and not na(anchorPrice)
+for lvl in bullLevels
+    if not lvl.touched and low <= lvl.price and high >= lvl.price
+        lvl.touched := true
 
-if fanRedraw
-    for lvl in activeLevels
-        line.delete(lvl.lineRef)
-    array.clear(activeLevels)
-    fanDirection = anchorType == "low" ? 1.0 : -1.0
-    for i = 0 to array.size(gannRatioLabels) - 1
-        ratioLabel  = array.get(gannRatioLabels, i)
-        slope       = fanDirection * array.get(gannRatioMultipliers, i) * priceUnit
-        lineColor   = ratioLabel == "1x1" ? color.new(color.blue, 0) : color.new(color.orange, 0)
-        lineWidth   = ratioLabel == "1x1" ? 2 : 1
-        targetPrice = anchorPrice + slope * forwardProjection
-        newLine     = line.new(anchorBarIndex, targetPrice, bar_index + forwardProjection, targetPrice, color = lineColor, style = line.style_solid, width = lineWidth, extend = extend.right)
-        array.push(activeLevels, GannLevel.new(newLine, ratioLabel, false, lineColor))
-
-// ============================================================
-// GANN SQUARE (BOX)
-// ============================================================
-var box       gannBox      = na
-var line[]    boxGridLines = array.new<line>()
-
-squareRedraw = (modeInput == "Gann Square") and (anchorChanged or modeChanged) and not na(anchorPrice) and not na(opposingPrice)
-
-if squareRedraw
-    for lvl in activeLevels
-        line.delete(lvl.lineRef)
-    array.clear(activeLevels)
-    box.delete(gannBox)
-    for gridLine in boxGridLines
-        line.delete(gridLine)
-    array.clear(boxGridLines)
-
-    boxLeft   = math.min(anchorBarIndex, opposingBarIndex)
-    boxRight  = math.max(anchorBarIndex, opposingBarIndex)
-    boxTop    = math.max(anchorPrice, opposingPrice)
-    boxBottom = math.min(anchorPrice, opposingPrice)
-
-    gannBox := box.new(boxLeft, boxTop, boxRight, boxBottom, border_color = color.new(color.gray, 50), bgcolor = color.new(color.gray, 95))
-
-    priceStep = (boxTop - boxBottom) / boxGridDivisions
-    barStep   = (boxRight - boxLeft) / boxGridDivisions
-    if boxGridDivisions > 1
-        for i = 1 to boxGridDivisions - 1
-            array.push(boxGridLines, line.new(boxLeft, boxBottom + priceStep * i, boxRight, boxBottom + priceStep * i, color = color.new(color.gray, 70), style = line.style_dotted))
-            array.push(boxGridLines, line.new(boxLeft + int(math.round(barStep * i)), boxBottom, boxLeft + int(math.round(barStep * i)), boxTop, color = color.new(color.gray, 70), style = line.style_dotted))
-
-    boxHeight = boxTop - boxBottom
-    for i = 0 to array.size(gannRatioLabels) - 1
-        ratioLabel = array.get(gannRatioLabels, i)
-        multiplier = array.get(gannRatioMultipliers, i)
-        fraction   = multiplier / (1.0 + multiplier)
-        levelPrice = boxBottom + boxHeight * fraction
-        lineColor  = ratioLabel == "1x1" ? color.new(color.blue, 0) : color.new(color.orange, 0)
-        lineWidth  = ratioLabel == "1x1" ? 2 : 1
-        newLine    = line.new(boxLeft, levelPrice, bar_index + forwardProjection, levelPrice, color = lineColor, style = line.style_solid, width = lineWidth, extend = extend.right)
-        array.push(activeLevels, GannLevel.new(newLine, ratioLabel, false, lineColor))
-
-// ============================================================
-// SQUARE OF 9
-// ============================================================
-square9Redraw = (modeInput == "Square of 9") and (anchorChanged or modeChanged) and not na(anchorPrice)
-
-if square9Redraw
-    for lvl in activeLevels
-        line.delete(lvl.lineRef)
-    array.clear(activeLevels)
-    square9Direction = anchorType == "low" ? 1.0 : -1.0
-    sqrtAnchor        = math.sqrt(anchorPrice * square9ScaleFactor)
-    for r = 1 to square9Rings
-        for step = 1 to 16
-            n      = (r - 1) * 16 + step
-            offset = sqrtAnchor + square9Direction * n * 0.125
-            if offset > 0
-                levelPrice = math.pow(offset, 2) / square9ScaleFactor
-                angle      = step * 22.5
-                levelLabel = "R" + str.tostring(r) + "-" + str.tostring(angle, "#.#") + "°"
-                lineColor  = r == 1 ? color.new(color.blue, 0) : color.new(color.orange, 0)
-                lineWidth  = r == 1 ? 2 : 1
-                newLine    = line.new(anchorBarIndex, levelPrice, bar_index + forwardProjection, levelPrice, color = lineColor, style = line.style_solid, width = lineWidth, extend = extend.right)
-                array.push(activeLevels, GannLevel.new(newLine, levelLabel, false, lineColor))
-
-// ============================================================
-// GANN TIME LEVELS
-// ============================================================
-timeLevelsRedraw = showTimeLevels and (anchorChanged or timeLevelsToggleChanged) and not na(anchorBarIndex)
-
-if timeLevelsRedraw
-    for tl in activeTimeLevels
-        line.delete(tl.lineRef)
-    array.clear(activeTimeLevels)
-    for i = 0 to array.size(gannTimeCycles) - 1
-        cycle     = array.get(gannTimeCycles, i)
-        targetBar = anchorBarIndex + cycle
-        isMajor   = cycle == 90 or cycle == 180 or cycle == 270 or cycle == 360
-        lineColor = isMajor ? color.new(color.blue, 0) : color.new(color.orange, 0)
-        lineWidth = isMajor ? 2 : 1
-        newLine   = line.new(targetBar, high, targetBar, low, color = lineColor, style = line.style_dotted, width = lineWidth, extend = extend.both)
-        array.push(activeTimeLevels, GannTimeLevel.new(newLine, "T+" + str.tostring(cycle), targetBar, false))
-
-if not showTimeLevels and array.size(activeTimeLevels) > 0
-    for tl in activeTimeLevels
-        line.delete(tl.lineRef)
-    array.clear(activeTimeLevels)
-
-// ============================================================
-// PRICE / TIME TARGET TABLE
-// ============================================================
-if not na(anchorBarIndex)
-    for lvl in activeLevels
-        currentPrice = line.get_price(lvl.lineRef, bar_index)
-        if not lvl.touched and low <= currentPrice and high >= currentPrice
-            lvl.touched := true
-
-    for tl in activeTimeLevels
-        tl.reached := bar_index >= tl.targetBar
-
-var table gannTable = na
-
-if showTable and barstate.islast
-    table.delete(gannTable)
-    tablePos = switch tablePositionInput
-        "Top Right"    => position.top_right
-        "Top Left"     => position.top_left
-        "Bottom Right" => position.bottom_right
-        => position.bottom_left
-    rowCount = 1 + array.size(activeLevels) + (showTimeLevels ? 1 + array.size(activeTimeLevels) : 0)
-    gannTable := table.new(tablePos, 3, rowCount, bgcolor = color.new(color.black, 80), border_width = 1)
-    table.cell(gannTable, 0, 0, "Label", text_color = color.white, bgcolor = color.new(color.gray, 50))
-    table.cell(gannTable, 1, 0, "Price", text_color = color.white, bgcolor = color.new(color.gray, 50))
-    table.cell(gannTable, 2, 0, "Status", text_color = color.white, bgcolor = color.new(color.gray, 50))
-
-    if array.size(activeLevels) > 0
-        for i = 0 to array.size(activeLevels) - 1
-            lvl        = array.get(activeLevels, i)
-            rowPrice   = line.get_price(lvl.lineRef, bar_index)
-            statusText = lvl.touched ? "Touched" : "Pending"
-            table.cell(gannTable, 0, i + 1, lvl.label, text_color = lvl.col)
-            table.cell(gannTable, 1, i + 1, str.tostring(rowPrice, format.mintick), text_color = color.white)
-            table.cell(gannTable, 2, i + 1, statusText, text_color = lvl.touched ? color.lime : color.gray)
-
-    if showTimeLevels and array.size(activeTimeLevels) > 0
-        timeHeaderRow = 1 + array.size(activeLevels)
-        table.cell(gannTable, 0, timeHeaderRow, "Time Level", text_color = color.white, bgcolor = color.new(color.gray, 50))
-        table.cell(gannTable, 1, timeHeaderRow, "Target Bar", text_color = color.white, bgcolor = color.new(color.gray, 50))
-        table.cell(gannTable, 2, timeHeaderRow, "Reached", text_color = color.white, bgcolor = color.new(color.gray, 50))
-        for i = 0 to array.size(activeTimeLevels) - 1
-            tl = array.get(activeTimeLevels, i)
-            table.cell(gannTable, 0, timeHeaderRow + i + 1, tl.label, text_color = color.white)
-            table.cell(gannTable, 1, timeHeaderRow + i + 1, str.tostring(tl.targetBar), text_color = color.white)
-            table.cell(gannTable, 2, timeHeaderRow + i + 1, tl.reached ? "Yes" : "No", text_color = tl.reached ? color.lime : color.gray)
-
-previousMode           := modeInput
-previousShowTimeLevels := showTimeLevels
+for lvl in bearLevels
+    if not lvl.touched and low <= lvl.price and high >= lvl.price
+        lvl.touched := true
