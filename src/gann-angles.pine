@@ -155,44 +155,75 @@ passesFilter(bool isPrimary, string filterMode) =>
 // ============================================================
 // LEVEL ENGINE
 // ============================================================
-type Sq9Level
+type GannLevel
     float  price
     string label
     bool   isPrimary
     bool   touched
 
-var Sq9Level[] bullLevels = array.new<Sq9Level>()
-var Sq9Level[] bearLevels = array.new<Sq9Level>()
+var GannLevel[] bullLevels = array.new<GannLevel>()
+var GannLevel[] bearLevels = array.new<GannLevel>()
 
-buildLevels(Sq9Level[] target, float startPrice, int rings, float scale, float direction) =>
-    if startPrice > 0
-        root = math.sqrt(startPrice * scale)
-        for r = 1 to rings
-            for s = 1 to 16
-                n      = (r - 1) * 16 + s
-                offset = root + direction * n * 0.125
-                if offset > 0
-                    lvlPrice  = math.pow(offset, 2) / scale
-                    angle     = s * 22.5
-                    lvlLabel  = "R" + str.tostring(r) + "-" + str.tostring(angle, "#.#") + "°"
-                    isPrimary = s % 2 == 0
-                    array.push(target, Sq9Level.new(lvlPrice, lvlLabel, isPrimary, false))
+buildSquare9(GannLevel[] target, float startPrice, int rings, float scale, float direction) =>
+    root = math.sqrt(startPrice * scale)
+    for r = 1 to rings
+        for s = 1 to 16
+            n      = (r - 1) * 16 + s
+            offset = root + direction * n * 0.125
+            if offset > 0
+                lvlPrice = math.pow(offset, 2) / scale
+                angle    = s * 22.5
+                lvlLabel = "R" + str.tostring(r) + "-" + str.tostring(angle, "#.#") + "°"
+                array.push(target, GannLevel.new(lvlPrice, lvlLabel, s % 2 == 0, false))
     array.size(target)
 
-if barstate.isfirst
-    buildLevels(bullLevels, bullishPrice, ringCount, scaleFactor, 1.0)
-    buildLevels(bearLevels, bearishPrice, ringCount, scaleFactor, -1.0)
+buildFan(GannLevel[] target, float startPrice, float unit, int projection, float direction) =>
+    for i = 0 to 8
+        lvlPrice = startPrice + direction * array.get(ratioMultipliers, i) * unit * projection
+        if lvlPrice > 0
+            array.push(target, GannLevel.new(lvlPrice, array.get(ratioLabels, i), array.get(ratioIsPrimary, i), false))
+    array.size(target)
+
+buildSquareLevels(GannLevel[] target, float boxBottom, float priceRange) =>
+    for i = 0 to 8
+        m        = array.get(ratioMultipliers, i)
+        lvlPrice = boxBottom + priceRange * m / (1.0 + m)
+        if lvlPrice > 0
+            array.push(target, GannLevel.new(lvlPrice, array.get(ratioLabels, i), array.get(ratioIsPrimary, i), false))
+    array.size(target)
+
+if modeInput == "Gann Square"
+    if bullAnchorChanged or bearAnchorChanged
+        array.clear(bullLevels)
+        array.clear(bearLevels)
+        if squareReady
+            buildSquareLevels(bullLevels, bullAnchorPrice, bearAnchorPrice - bullAnchorPrice)
+else
+    if bullAnchorChanged
+        array.clear(bullLevels)
+        if modeInput == "Square of 9"
+            buildSquare9(bullLevels, bullAnchorPrice, ringCount, scaleFactor, 1.0)
+        else
+            buildFan(bullLevels, bullAnchorPrice, bullAnchorUnit, fanProjection, 1.0)
+    if bearAnchorChanged
+        array.clear(bearLevels)
+        if modeInput == "Square of 9"
+            buildSquare9(bearLevels, bearAnchorPrice, ringCount, scaleFactor, -1.0)
+        else
+            buildFan(bearLevels, bearAnchorPrice, bearAnchorUnit, fanProjection, -1.0)
 
 // ============================================================
 // TOUCH TRACKING
 // ============================================================
-for lvl in bullLevels
-    if not lvl.touched and low <= lvl.price and high >= lvl.price
-        lvl.touched := true
+if bullAnchorReady and bar_index >= bullAnchorBar
+    for lvl in bullLevels
+        if not lvl.touched and low <= lvl.price and high >= lvl.price
+            lvl.touched := true
 
-for lvl in bearLevels
-    if not lvl.touched and low <= lvl.price and high >= lvl.price
-        lvl.touched := true
+if bearAnchorReady and bar_index >= bearAnchorBar
+    for lvl in bearLevels
+        if not lvl.touched and low <= lvl.price and high >= lvl.price
+            lvl.touched := true
 
 // ============================================================
 // RENDERER
