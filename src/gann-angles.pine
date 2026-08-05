@@ -291,11 +291,11 @@ if barstate.islast
 // ============================================================
 // TABLE
 // ============================================================
-var table sq9Table = na
+var table gannTable = na
 
-countRows(Sq9Level[] levels, bool visible, string filterMode, float startPrice) =>
+countRows(GannLevel[] levels, bool visible, string filterMode) =>
     total = 0
-    if visible and startPrice > 0
+    if visible
         total := 1
         for lvl in levels
             if passesFilter(lvl.isPrimary, filterMode)
@@ -303,47 +303,48 @@ countRows(Sq9Level[] levels, bool visible, string filterMode, float startPrice) 
     total
 
 if barstate.islast
-    table.delete(sq9Table)
+    table.delete(gannTable)
     if showTable
         tablePos = switch tablePosInput
             "Top Right"    => position.top_right
             "Top Left"     => position.top_left
             "Bottom Right" => position.bottom_right
             => position.bottom_left
-        bullRowCount = countRows(bullLevels, showBullish, bullishAngles, bullishPrice)
-        bearRowCount = countRows(bearLevels, showBearish, bearishAngles, bearishPrice)
-        noUsablePrice = bullRowCount == 0 and bearRowCount == 0
-        neededRows = noUsablePrice ? 2 : 1 + bullRowCount + bearRowCount
-        rowCount   = math.min(neededRows, 100)
-        sq9Table := table.new(tablePos, 3, rowCount, bgcolor = color.new(color.black, 80), border_width = 1)
-        table.cell(sq9Table, 0, 0, "Label", text_color = color.white, bgcolor = color.new(color.gray, 50))
-        table.cell(sq9Table, 1, 0, "Price", text_color = color.white, bgcolor = color.new(color.gray, 50))
-        table.cell(sq9Table, 2, 0, "Status", text_color = color.white, bgcolor = color.new(color.gray, 50))
+        bullRowCount = countRows(bullLevels, showBullish and bullAnchorReady, bullishAngles)
+        bearRowCount = countRows(bearLevels, showBearish and bearAnchorReady, bearishAngles)
+        noRows       = bullRowCount == 0 and bearRowCount == 0
+        neededRows   = noRows ? 2 : 1 + bullRowCount + bearRowCount
+        rowCount     = math.min(neededRows, 100)
+        gannTable := table.new(tablePos, 3, rowCount, bgcolor = color.new(color.black, 80), border_width = 1)
+        table.cell(gannTable, 0, 0, "Label", text_color = color.white, bgcolor = color.new(color.gray, 50))
+        table.cell(gannTable, 1, 0, "Price", text_color = color.white, bgcolor = color.new(color.gray, 50))
+        table.cell(gannTable, 2, 0, "Status", text_color = color.white, bgcolor = color.new(color.gray, 50))
 
         nextRow = 1
-        if noUsablePrice and nextRow < rowCount
-            table.cell(sq9Table, 0, nextRow, "Set Bullish Price in settings", text_color = color.silver)
+        if noRows and nextRow < rowCount
+            hintText = squareBlocked ? "Square needs bearish price above bullish" : "Set a price or wait for a swing pivot"
+            table.cell(gannTable, 0, nextRow, hintText, text_color = color.silver)
             nextRow += 1
-        if showBullish and bullishPrice > 0 and nextRow < rowCount
-            table.cell(sq9Table, 0, nextRow, "Bull Start", text_color = bullStartColor)
-            table.cell(sq9Table, 1, nextRow, str.tostring(bullishPrice, format.mintick), text_color = color.white)
-            table.cell(sq9Table, 2, nextRow, "—", text_color = color.gray)
+        if showBullish and bullAnchorReady and nextRow < rowCount
+            table.cell(gannTable, 0, nextRow, "Bull Start", text_color = bullStartColor)
+            table.cell(gannTable, 1, nextRow, str.tostring(bullAnchorPrice, format.mintick), text_color = color.white)
+            table.cell(gannTable, 2, nextRow, "—", text_color = color.gray)
             nextRow += 1
             for lvl in bullLevels
                 if nextRow < rowCount and passesFilter(lvl.isPrimary, bullishAngles)
-                    table.cell(sq9Table, 0, nextRow, lvl.label, text_color = lvl.isPrimary ? bullPrimaryColor : bullSecondaryColor)
-                    table.cell(sq9Table, 1, nextRow, str.tostring(lvl.price, format.mintick), text_color = color.white)
-                    table.cell(sq9Table, 2, nextRow, lvl.touched ? "Touched" : "Pending", text_color = lvl.touched ? color.lime : color.gray)
+                    table.cell(gannTable, 0, nextRow, lvl.label, text_color = lvl.isPrimary ? bullPrimaryColor : bullSecondaryColor)
+                    table.cell(gannTable, 1, nextRow, str.tostring(lvl.price, format.mintick), text_color = color.white)
+                    table.cell(gannTable, 2, nextRow, lvl.touched ? "Touched" : "Pending", text_color = lvl.touched ? color.lime : color.gray)
                     nextRow += 1
 
-        if showBearish and bearishPrice > 0 and nextRow < rowCount
-            table.cell(sq9Table, 0, nextRow, "Bear Start", text_color = bearStartColor)
-            table.cell(sq9Table, 1, nextRow, str.tostring(bearishPrice, format.mintick), text_color = color.white)
-            table.cell(sq9Table, 2, nextRow, "—", text_color = color.gray)
+        if showBearish and bearAnchorReady and nextRow < rowCount
+            table.cell(gannTable, 0, nextRow, "Bear Start", text_color = bearStartColor)
+            table.cell(gannTable, 1, nextRow, str.tostring(bearAnchorPrice, format.mintick), text_color = color.white)
+            table.cell(gannTable, 2, nextRow, "—", text_color = color.gray)
             nextRow += 1
             for lvl in bearLevels
                 if nextRow < rowCount and passesFilter(lvl.isPrimary, bearishAngles)
-                    table.cell(sq9Table, 0, nextRow, lvl.label, text_color = lvl.isPrimary ? bearPrimaryColor : bearSecondaryColor)
-                    table.cell(sq9Table, 1, nextRow, str.tostring(lvl.price, format.mintick), text_color = color.white)
-                    table.cell(sq9Table, 2, nextRow, lvl.touched ? "Touched" : "Pending", text_color = lvl.touched ? color.lime : color.gray)
+                    table.cell(gannTable, 0, nextRow, lvl.label, text_color = lvl.isPrimary ? bearPrimaryColor : bearSecondaryColor)
+                    table.cell(gannTable, 1, nextRow, str.tostring(lvl.price, format.mintick), text_color = color.white)
+                    table.cell(gannTable, 2, nextRow, lvl.touched ? "Touched" : "Pending", text_color = lvl.touched ? color.lime : color.gray)
                     nextRow += 1
