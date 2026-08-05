@@ -134,8 +134,14 @@ Deriving the width from the price range is what makes the box square in Gann ter
 diagonal carries meaning. `Box Grid Divisions` (group Gann Square, default `8`, `minval = 1`,
 `maxval = 20`) subdivides it with thin neutral grid lines in both directions.
 
-The nine ratio levels per direction are horizontal, at `boxBottom + priceRange * m / (1 + m)`,
-using the same primary/secondary split as the Fan.
+The nine ratio levels are horizontal, at `boxBottom + priceRange * m / (1 + m)`, using the same
+primary/secondary split as the Fan.
+
+Unlike Fan and Square of 9, these levels are **not per direction** — they are absolute prices
+derived from the box itself, so splitting them by direction would draw two identical sets at the
+same prices. Square mode therefore produces a single set of nine, held in the bullish array and
+styled with the bullish inputs; the bearish array stays empty. Both starting-point lines still
+draw, marking the box's floor and ceiling.
 
 ### Square of 9
 
@@ -177,7 +183,7 @@ arrays, and recreates them from current state — so any input change redraws cl
 | Mode | Lines | Labels | Boxes |
 |---|---|---|---|
 | Gann Fan | 18 + 2 start = 20 | 20 + 2 markers | 0 |
-| Gann Square | 18 + 2 start + 38 grid = 58 | 20 + 2 markers | 1 |
+| Gann Square | 9 + 2 start + 38 grid = 49 | 11 + 2 markers | 1 |
 | Square of 9 | 96 + 2 start = 98 | 98 + 2 markers | 0 |
 
 Declaration: `max_lines_count = 200`, `max_labels_count = 200`, `max_boxes_count = 10`.
@@ -185,8 +191,8 @@ Declaration: `max_lines_count = 200`, `max_labels_count = 200`, `max_boxes_count
 ## Table
 
 Unchanged in shape — Label / Price / Status, three columns, coloured per set, `—` status on
-starting-point rows. Row counts by mode: Fan and Square `1 + (1+9) + (1+9) = 21`; Square of 9
-worst case `99`. Both within Pine's 100-row cap, so `Rings` stays capped at 3.
+starting-point rows. Row counts by mode: Fan `1 + (1+9) + (1+9) = 21`; Square `1 + (1+9) = 11`;
+Square of 9 worst case `99`. All within Pine's 100-row cap, so `Rings` stays capped at 3.
 
 The existing empty-state hint row still fires when neither side resolves an anchor, with its text
 generalised to `Set a price or wait for a swing pivot`.
