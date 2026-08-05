@@ -2,6 +2,8 @@
 
 **Date:** 2026-08-05
 **Status:** Approved for planning
+> **Extended on 2026-08-05** by `2026-08-05-gann-modes-and-anchors-design.md`. The Square of 9 work below still stands, but Gann Fan and Gann Square modes were restored, per-direction swing anchors replaced the typed-only inputs, and level lines changed from `extend.both` to `extend.right` from their anchor bar. Read that document for current behaviour.
+
 **Supersedes:** `2026-08-04-gann-angles-design.md`
 **File:** `src/gann-angles.pine` (full rewrite, same path)
 

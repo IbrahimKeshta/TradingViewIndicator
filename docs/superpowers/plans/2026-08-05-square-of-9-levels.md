@@ -3,6 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rewrite `src/gann-angles.pine` as a pure Square of 9 level indicator: two independent price inputs (bullish/bearish) each producing full-chart-width horizontal levels, styled by angle (primary vs secondary) rather than by ring, with a starting-point line, on-chart labels and a status table — and no bar anchor of any kind.
+> **Extended on 2026-08-05** by `2026-08-05-gann-modes-and-anchors-design.md`. The Square of 9 work below still stands, but Gann Fan and Gann Square modes were restored, per-direction swing anchors replaced the typed-only inputs, and level lines changed from `extend.both` to `extend.right` from their anchor bar. Read that document for current behaviour.
 
 **Architecture:** Level prices depend only on inputs, so they are computed once into `var` arrays on the first bar. A per-bar loop maintains a sticky touched flag per level. All drawing happens in a single `barstate.islast` block that deletes every previous line/label and recreates them, so any input change redraws cleanly with no stale objects and no redraw-trigger bookkeeping.
 
