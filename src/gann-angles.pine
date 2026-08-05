@@ -263,7 +263,9 @@ if barstate.islast
     if squareReady
         boxLeft   = math.min(bullAnchorBar, bearAnchorBar)
         leftUnit  = bullAnchorBar <= bearAnchorBar ? bullAnchorUnit : bearAnchorUnit
-        widthBars = math.max(1, math.min(2000, int(math.round((bearAnchorPrice - bullAnchorPrice) / leftUnit))))
+        rawWidth  = math.max(1, math.min(2000, int(math.round((bearAnchorPrice - bullAnchorPrice) / leftUnit))))
+        maxWidth  = math.max(1, bar_index + 450 - boxLeft)
+        widthBars = math.min(rawWidth, maxWidth)
         boxRight  = boxLeft + widthBars
         gannBox := box.new(boxLeft, bearAnchorPrice, boxRight, bullAnchorPrice, border_color = color.new(color.gray, 50), bgcolor = color.new(color.gray, 95))
         priceStep = (bearAnchorPrice - bullAnchorPrice) / boxGridDivisions
