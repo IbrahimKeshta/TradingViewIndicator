@@ -1,23 +1,41 @@
 //@version=6
-indicator("Gann Square of 9 Levels", shorttitle = "GannSq9", overlay = true, max_lines_count = 200, max_labels_count = 200)
+indicator("Gann Angles", shorttitle = "GannAngles", overlay = true, max_lines_count = 200, max_labels_count = 200, max_boxes_count = 10)
 
 // ============================================================
 // INPUTS
 // ============================================================
 
+// ---------------- Mode ----------------
+modeInput = input.string("Square of 9", "Mode", options = ["Gann Fan", "Gann Square", "Square of 9"], group = "Mode")
+
+// ---------------- Anchor ----------------
+pivotLookback     = input.int(50, "Swing Pivot Lookback", minval = 2, group = "Anchor", tooltip = "How many bars either side a bar must dominate to count as a swing. Wider values find only major turning points and hold still for longer, but confirm this many bars late.")
+bullishPrice      = input.float(0.0, "Bullish Price", minval = 0.0, group = "Anchor", tooltip = "Leave at 0 to auto-anchor to the most recent confirmed swing low. Type a price to pin this side permanently.")
+bullishStartDate  = input.time(1704067200000, "Bullish Start Date", group = "Anchor", tooltip = "Used only when Bullish Price is set. In auto mode the pivot's own bar is the start.")
+bearishPrice      = input.float(0.0, "Bearish Price", minval = 0.0, group = "Anchor", tooltip = "Leave at 0 to auto-anchor to the most recent confirmed swing high. Type a price to pin this side permanently.")
+bearishStartDate  = input.time(1704067200000, "Bearish Start Date", group = "Anchor", tooltip = "Used only when Bearish Price is set.")
+showAnchorMarkers = input.bool(true, "Show Anchor Markers", group = "Anchor")
+
 // ---------------- Bullish ----------------
 showBullish   = input.bool(true, "Show Bullish Levels", group = "Bullish")
-bullishPrice  = input.float(0.0, "Bullish Price", minval = 0.0, group = "Bullish", tooltip = "Starting price for the upward level set. Levels project above this price.")
 bullishAngles = input.string("All", "Bullish Angles", options = ["All", "Primary only", "Secondary only"], group = "Bullish")
 
 // ---------------- Bearish ----------------
 showBearish   = input.bool(false, "Show Bearish Levels", group = "Bearish")
-bearishPrice  = input.float(0.0, "Bearish Price", minval = 0.0, group = "Bearish", tooltip = "Starting price for the downward level set. Levels project below this price.")
 bearishAngles = input.string("All", "Bearish Angles", options = ["All", "Primary only", "Secondary only"], group = "Bearish")
 
-// ---------------- Calculation ----------------
-ringCount   = input.int(2, "Rings", minval = 1, maxval = 3, group = "Calculation", tooltip = "Each ring is 16 levels at 22.5-degree increments. Capped at 3 so the table stays within Pine's 100-row limit.")
-scaleFactor = input.float(1.0, "Scale Factor", minval = 0.001, group = "Calculation", tooltip = "Controls level spacing. Higher values tighten the levels together, lower values spread them apart. Raise this on high-priced instruments where the default packs all levels into a narrow band.")
+// ---------------- Scaling ----------------
+atrLength = input.int(14, "ATR Length", minval = 1, group = "Scaling", tooltip = "Sets the price-per-bar unit for Fan slopes and the Square's width. Sampled once at each anchor bar and held, so geometry does not drift as volatility changes.")
+
+// ---------------- Gann Fan ----------------
+fanProjection = input.int(100, "Fan Projection (bars)", minval = 1, maxval = 500, group = "Gann Fan", tooltip = "How far along each angle the price is read to place its horizontal level.")
+
+// ---------------- Gann Square ----------------
+boxGridDivisions = input.int(8, "Box Grid Divisions", minval = 1, maxval = 20, group = "Gann Square")
+
+// ---------------- Square of 9 ----------------
+ringCount   = input.int(2, "Rings", minval = 1, maxval = 3, group = "Square of 9", tooltip = "Each ring is 16 levels at 22.5-degree increments. Capped at 3 so the table stays within Pine's 100-row limit.")
+scaleFactor = input.float(1.0, "Scale Factor", minval = 0.001, group = "Square of 9", tooltip = "Controls level spacing. Higher values tighten the levels together, lower values spread them apart. Raise this on high-priced instruments where the default packs all levels into a narrow band.")
 
 // ---------------- Bullish Style ----------------
 bullPrimaryColor   = input.color(color.red, "Primary", group = "Bullish Style", inline = "bullPri")
@@ -46,6 +64,81 @@ showLabels    = input.bool(true, "Show Labels", group = "Display")
 labelOffset   = input.int(5, "Label Offset (bars)", minval = 0, maxval = 100, group = "Display")
 showTable     = input.bool(true, "Show Table", group = "Display")
 tablePosInput = input.string("Top Right", "Table Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Display")
+
+// ============================================================
+// RATIO TABLE
+// ============================================================
+var string[] ratioLabels      = array.from("1x8", "1x4", "1x3", "1x2", "1x1", "2x1", "3x1", "4x1", "8x1")
+var float[]  ratioMultipliers = array.from(1.0/8, 1.0/4, 1.0/3, 1.0/2, 1.0, 2.0, 3.0, 4.0, 8.0)
+var bool[]   ratioIsPrimary   = array.from(false, true, false, true, true, true, false, true, false)
+
+// ============================================================
+// ANCHOR ENGINE
+// ============================================================
+atrValue = ta.atr(atrLength)
+
+swingLowRaw  = ta.pivotlow(low, pivotLookback, pivotLookback)
+swingHighRaw = ta.pivothigh(high, pivotLookback, pivotLookback)
+
+var float autoBullPrice = na
+var int   autoBullBar   = na
+var float autoBullUnit  = na
+if not na(swingLowRaw)
+    autoBullPrice := swingLowRaw
+    autoBullBar   := bar_index - pivotLookback
+    autoBullUnit  := atrValue[pivotLookback]
+
+var float autoBearPrice = na
+var int   autoBearBar   = na
+var float autoBearUnit  = na
+if not na(swingHighRaw)
+    autoBearPrice := swingHighRaw
+    autoBearBar   := bar_index - pivotLookback
+    autoBearUnit  := atrValue[pivotLookback]
+
+var int   manualBullBar  = na
+var float manualBullUnit = na
+if time <= bullishStartDate
+    manualBullBar  := bar_index
+    manualBullUnit := atrValue
+
+var int   manualBearBar  = na
+var float manualBearUnit = na
+if time <= bearishStartDate
+    manualBearBar  := bar_index
+    manualBearUnit := atrValue
+
+bullManual = bullishPrice > 0
+bearManual = bearishPrice > 0
+
+bullAnchorPrice = bullManual ? bullishPrice   : autoBullPrice
+bullAnchorBar   = bullManual ? manualBullBar  : autoBullBar
+bullAnchorUnit  = bullManual ? manualBullUnit : autoBullUnit
+
+bearAnchorPrice = bearManual ? bearishPrice   : autoBearPrice
+bearAnchorBar   = bearManual ? manualBearBar  : autoBearBar
+bearAnchorUnit  = bearManual ? manualBearUnit : autoBearUnit
+
+bullAnchorReady = not na(bullAnchorPrice) and not na(bullAnchorBar) and not na(bullAnchorUnit) and bullAnchorPrice > 0 and bullAnchorUnit > 0
+bearAnchorReady = not na(bearAnchorPrice) and not na(bearAnchorBar) and not na(bearAnchorUnit) and bearAnchorPrice > 0 and bearAnchorUnit > 0
+
+var float prevBullPrice = na
+var int   prevBullBar   = na
+var float prevBearPrice = na
+var int   prevBearBar   = na
+
+bullAnchorChanged = bullAnchorReady and (na(prevBullPrice) or bullAnchorPrice != prevBullPrice or bullAnchorBar != prevBullBar)
+bearAnchorChanged = bearAnchorReady and (na(prevBearPrice) or bearAnchorPrice != prevBearPrice or bearAnchorBar != prevBearBar)
+
+if bullAnchorChanged
+    prevBullPrice := bullAnchorPrice
+    prevBullBar   := bullAnchorBar
+if bearAnchorChanged
+    prevBearPrice := bearAnchorPrice
+    prevBearBar   := bearAnchorBar
+
+squareReady   = modeInput == "Gann Square" and bullAnchorReady and bearAnchorReady and bearAnchorPrice > bullAnchorPrice
+squareBlocked = modeInput == "Gann Square" and not squareReady
 
 // ============================================================
 // HELPERS
