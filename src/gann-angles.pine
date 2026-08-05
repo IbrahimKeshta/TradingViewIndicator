@@ -230,22 +230,23 @@ if bearAnchorReady and bar_index >= bearAnchorBar
 // ============================================================
 var line[]  drawnLines  = array.new<line>()
 var label[] drawnLabels = array.new<label>()
+var box     gannBox     = na
 
-drawStartLine(float startPrice, bool visible, color lineColor, string lineStyle, int lineWidth, string lineLabel) =>
-    if visible and startPrice > 0
-        array.push(drawnLines, line.new(bar_index, startPrice, bar_index + 1, startPrice, extend = extend.both, color = lineColor, style = styleFromString(lineStyle), width = lineWidth))
+drawStartLine(int anchorBar, float startPrice, bool visible, color lineColor, string lineStyle, int lineWidth, string lineLabel) =>
+    if visible and not na(anchorBar) and startPrice > 0
+        array.push(drawnLines, line.new(anchorBar, startPrice, anchorBar + 1, startPrice, extend = extend.right, color = lineColor, style = styleFromString(lineStyle), width = lineWidth))
         if showLabels
             array.push(drawnLabels, label.new(bar_index + labelOffset, startPrice, lineLabel + ": " + str.tostring(startPrice, format.mintick), style = label.style_label_left, color = lineColor, textcolor = color.white, size = size.small))
     array.size(drawnLines)
 
-drawSet(Sq9Level[] levels, bool visible, string filterMode, color priColor, string priStyle, int priWidth, color secColor, string secStyle, int secWidth) =>
-    if visible
+drawSet(GannLevel[] levels, int anchorBar, bool visible, string filterMode, color priColor, string priStyle, int priWidth, color secColor, string secStyle, int secWidth) =>
+    if visible and not na(anchorBar)
         for lvl in levels
             if passesFilter(lvl.isPrimary, filterMode)
                 lvlColor = lvl.isPrimary ? priColor : secColor
                 lvlStyle = styleFromString(lvl.isPrimary ? priStyle : secStyle)
                 lvlWidth = lvl.isPrimary ? priWidth : secWidth
-                array.push(drawnLines, line.new(bar_index, lvl.price, bar_index + 1, lvl.price, extend = extend.both, color = lvlColor, style = lvlStyle, width = lvlWidth))
+                array.push(drawnLines, line.new(anchorBar, lvl.price, anchorBar + 1, lvl.price, extend = extend.right, color = lvlColor, style = lvlStyle, width = lvlWidth))
                 if showLabels
                     array.push(drawnLabels, label.new(bar_index + labelOffset, lvl.price, lvl.label + ": " + str.tostring(lvl.price, format.mintick), style = label.style_label_left, color = lvlColor, textcolor = color.white, size = size.small))
     array.size(drawnLines)
@@ -257,11 +258,33 @@ if barstate.islast
     for lb in drawnLabels
         label.delete(lb)
     array.clear(drawnLabels)
+    box.delete(gannBox)
 
-    drawStartLine(bullishPrice, showBullish, bullStartColor, bullStartStyle, bullStartWidth, "Bull Start")
-    drawSet(bullLevels, showBullish, bullishAngles, bullPrimaryColor, bullPrimaryStyle, bullPrimaryWidth, bullSecondaryColor, bullSecondaryStyle, bullSecondaryWidth)
-    drawStartLine(bearishPrice, showBearish, bearStartColor, bearStartStyle, bearStartWidth, "Bear Start")
-    drawSet(bearLevels, showBearish, bearishAngles, bearPrimaryColor, bearPrimaryStyle, bearPrimaryWidth, bearSecondaryColor, bearSecondaryStyle, bearSecondaryWidth)
+    if squareReady
+        boxLeft   = math.min(bullAnchorBar, bearAnchorBar)
+        leftUnit  = bullAnchorBar <= bearAnchorBar ? bullAnchorUnit : bearAnchorUnit
+        widthBars = math.max(1, math.min(2000, int(math.round((bearAnchorPrice - bullAnchorPrice) / leftUnit))))
+        boxRight  = boxLeft + widthBars
+        gannBox := box.new(boxLeft, bearAnchorPrice, boxRight, bullAnchorPrice, border_color = color.new(color.gray, 50), bgcolor = color.new(color.gray, 95))
+        priceStep = (bearAnchorPrice - bullAnchorPrice) / boxGridDivisions
+        barStep   = widthBars / float(boxGridDivisions)
+        if boxGridDivisions > 1
+            for i = 1 to boxGridDivisions - 1
+                gridPrice = bullAnchorPrice + priceStep * i
+                array.push(drawnLines, line.new(boxLeft, gridPrice, boxRight, gridPrice, color = color.new(color.gray, 70), style = line.style_dotted))
+                gridBar = boxLeft + int(math.round(barStep * i))
+                array.push(drawnLines, line.new(gridBar, bullAnchorPrice, gridBar, bearAnchorPrice, color = color.new(color.gray, 70), style = line.style_dotted))
+
+    drawStartLine(bullAnchorBar, bullAnchorPrice, showBullish and bullAnchorReady, bullStartColor, bullStartStyle, bullStartWidth, "Bull Start")
+    drawSet(bullLevels, bullAnchorBar, showBullish and bullAnchorReady, bullishAngles, bullPrimaryColor, bullPrimaryStyle, bullPrimaryWidth, bullSecondaryColor, bullSecondaryStyle, bullSecondaryWidth)
+    drawStartLine(bearAnchorBar, bearAnchorPrice, showBearish and bearAnchorReady, bearStartColor, bearStartStyle, bearStartWidth, "Bear Start")
+    drawSet(bearLevels, bearAnchorBar, showBearish and bearAnchorReady, bearishAngles, bearPrimaryColor, bearPrimaryStyle, bearPrimaryWidth, bearSecondaryColor, bearSecondaryStyle, bearSecondaryWidth)
+
+    if showAnchorMarkers
+        if bullAnchorReady
+            array.push(drawnLabels, label.new(bullAnchorBar, bullAnchorPrice, "Bull Anchor", style = label.style_label_up, color = color.new(color.gray, 20), textcolor = color.white, size = size.tiny))
+        if bearAnchorReady
+            array.push(drawnLabels, label.new(bearAnchorBar, bearAnchorPrice, "Bear Anchor", style = label.style_label_down, color = color.new(color.gray, 20), textcolor = color.white, size = size.tiny))
 
 // ============================================================
 // TABLE
