@@ -310,8 +310,10 @@ if barstate.islast
             "Top Left"     => position.top_left
             "Bottom Right" => position.bottom_right
             => position.bottom_left
-        bullRowCount = countRows(bullLevels, showBullish and bullAnchorReady, bullishAngles)
-        bearRowCount = countRows(bearLevels, showBearish and bearAnchorReady, bearishAngles)
+        bullTableVisible = showBullish and bullAnchorReady and not squareBlocked
+        bearTableVisible = showBearish and bearAnchorReady and not squareBlocked
+        bullRowCount = countRows(bullLevels, bullTableVisible, bullishAngles)
+        bearRowCount = countRows(bearLevels, bearTableVisible, bearishAngles)
         noRows       = bullRowCount == 0 and bearRowCount == 0
         neededRows   = noRows ? 2 : 1 + bullRowCount + bearRowCount
         rowCount     = math.min(neededRows, 100)
@@ -325,7 +327,7 @@ if barstate.islast
             hintText = squareBlocked ? "Square needs bearish price above bullish" : "Set a price or wait for a swing pivot"
             table.cell(gannTable, 0, nextRow, hintText, text_color = color.silver)
             nextRow += 1
-        if showBullish and bullAnchorReady and nextRow < rowCount
+        if bullTableVisible and nextRow < rowCount
             table.cell(gannTable, 0, nextRow, "Bull Start", text_color = bullStartColor)
             table.cell(gannTable, 1, nextRow, str.tostring(bullAnchorPrice, format.mintick), text_color = color.white)
             table.cell(gannTable, 2, nextRow, "—", text_color = color.gray)
@@ -337,7 +339,7 @@ if barstate.islast
                     table.cell(gannTable, 2, nextRow, lvl.touched ? "Touched" : "Pending", text_color = lvl.touched ? color.lime : color.gray)
                     nextRow += 1
 
-        if showBearish and bearAnchorReady and nextRow < rowCount
+        if bearTableVisible and nextRow < rowCount
             table.cell(gannTable, 0, nextRow, "Bear Start", text_color = bearStartColor)
             table.cell(gannTable, 1, nextRow, str.tostring(bearAnchorPrice, format.mintick), text_color = color.white)
             table.cell(gannTable, 2, nextRow, "—", text_color = color.gray)
