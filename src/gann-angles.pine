@@ -1,5 +1,5 @@
 //@version=6
-indicator("Gann Angles", shorttitle = "GannAngles", overlay = true, max_lines_count = 200, max_labels_count = 200, max_boxes_count = 10)
+indicator("Gann Angles", shorttitle = "GannAngles", overlay = true, max_lines_count = 200, max_labels_count = 200, max_boxes_count = 10, max_bars_back = 500)
 
 // ============================================================
 // INPUTS
@@ -37,6 +37,13 @@ boxGridDivisions = input.int(8, "Box Grid Divisions", minval = 1, maxval = 20, g
 ringCount   = input.int(2, "Rings", minval = 1, maxval = 3, group = "Square of 9", tooltip = "Each ring is 16 levels at 22.5-degree increments. Capped at 3 so the table stays within Pine's 100-row limit.")
 scaleFactor = input.float(1.0, "Scale Factor", minval = 0.001, group = "Square of 9", tooltip = "Controls level spacing. Higher values tighten the levels together, lower values spread them apart. Raise this on high-priced instruments where the default packs all levels into a narrow band.")
 
+// ---------------- Gann Time ----------------
+showTimeLines     = input.bool(true, "Show Time Lines", group = "Gann Time", tooltip = "Master switch for the vertical cycle lines at 30/45/60/90/120/144/180/270/360 bars forward from each anchor bar. Independent of Mode — cycles draw in all three.")
+showBullTimeLines = input.bool(true, "Bullish Time Lines", group = "Gann Time", tooltip = "Independent of Show Bullish Levels.")
+showBearTimeLines = input.bool(true, "Bearish Time Lines", group = "Gann Time", tooltip = "Independent of Show Bearish Levels.")
+showTimeTable     = input.bool(true, "Show Time Table", group = "Gann Time")
+timeTablePosInput = input.string("Bottom Right", "Time Table Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Gann Time", tooltip = "Pine draws only one table per screen position. Keep this different from Table Position or one table will hide the other.")
+
 // ---------------- Bullish Style ----------------
 bullPrimaryColor   = input.color(color.red, "Primary", group = "Bullish Style", inline = "bullPri")
 bullPrimaryStyle   = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = "Bullish Style", inline = "bullPri")
@@ -59,6 +66,14 @@ bearStartColor     = input.color(color.purple, "Start Line", group = "Bearish St
 bearStartStyle     = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = "Bearish Style", inline = "bearStart")
 bearStartWidth     = input.int(2, "", minval = 1, maxval = 4, group = "Bearish Style", inline = "bearStart")
 
+// ---------------- Time Style ----------------
+bullTimeColor  = input.color(color.blue, "Bull Time Color", group = "Time Style")
+bearTimeColor  = input.color(color.purple, "Bear Time Color", group = "Time Style")
+timeMajorStyle = input.string("Solid", "Major Style", options = ["Solid", "Dashed", "Dotted"], group = "Time Style", inline = "timeMaj")
+timeMajorWidth = input.int(1, "", minval = 1, maxval = 4, group = "Time Style", inline = "timeMaj")
+timeMinorStyle = input.string("Dotted", "Minor Style", options = ["Solid", "Dashed", "Dotted"], group = "Time Style", inline = "timeMin")
+timeMinorWidth = input.int(1, "", minval = 1, maxval = 4, group = "Time Style", inline = "timeMin")
+
 // ---------------- Display ----------------
 showLabels    = input.bool(true, "Show Labels", group = "Display")
 labelOffset   = input.int(5, "Label Offset (bars)", minval = 0, maxval = 100, group = "Display")
@@ -71,6 +86,17 @@ tablePosInput = input.string("Top Right", "Table Position", options = ["Top Righ
 var string[] ratioLabels      = array.from("1x8", "1x4", "1x3", "1x2", "1x1", "2x1", "3x1", "4x1", "8x1")
 var float[]  ratioMultipliers = array.from(1.0/8, 1.0/4, 1.0/3, 1.0/2, 1.0, 2.0, 3.0, 4.0, 8.0)
 var bool[]   ratioIsPrimary   = array.from(false, true, false, true, true, true, false, true, false)
+
+// ============================================================
+// TIME CYCLES
+// ============================================================
+var int[]  timeCycles       = array.from(30, 45, 60, 90, 120, 144, 180, 270, 360)
+var bool[] timeCycleIsMajor = array.from(false, false, false, true, false, false, true, true, true)
+
+// Measured bar spacing, in ms. Computed globally on every bar so its history is
+// always consistent, then passed into the date helpers by value.
+barSpanN = math.min(bar_index, 200)
+avgBarMs = barSpanN >= 20 ? float(time - time[barSpanN]) / barSpanN : float(timeframe.in_seconds() * 1000)
 
 // ============================================================
 // ANCHOR ENGINE
@@ -155,6 +181,23 @@ styleFromString(string s) =>
 
 passesFilter(bool isPrimary, string filterMode) =>
     filterMode == "All" or (filterMode == "Primary only" and isPrimary) or (filterMode == "Secondary only" and not isPrimary)
+
+// Timestamp of a cycle's target bar. Exact when the bar exists and is inside the
+// declared 500-bar buffer; otherwise extrapolated from measured spacing. The offset
+// is clamped before it indexes history so it can never exceed the buffer, and can
+// never exceed bar_index because targetBar is never negative.
+cycleTimeMs(int targetBar, float spacingMs) =>
+    offset     = bar_index - targetBar
+    safeOffset = math.max(0, math.min(offset, 500))
+    exactTime  = time[safeOffset]
+    estTime    = time + int(math.round((targetBar - bar_index) * spacingMs))
+    offset >= 0 and offset <= 500 ? exactTime : estTime
+
+// Date cell text. A "~" prefix marks an extrapolated date, never an exact one.
+cycleDateText(int targetBar, float spacingMs) =>
+    offset  = bar_index - targetBar
+    isExact = offset >= 0 and offset <= 500
+    (isExact ? "" : "~") + str.format_time(cycleTimeMs(targetBar, spacingMs), "yyyy-MM-dd", syminfo.timezone)
 
 // ============================================================
 // LEVEL ENGINE
