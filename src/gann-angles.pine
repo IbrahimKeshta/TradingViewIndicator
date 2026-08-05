@@ -313,6 +313,18 @@ drawSet(array<GannLevel> levels, int anchorBar, bool visible, string filterMode,
                     array.push(drawnLabels, label.new(bar_index + labelOffset, lvl.price, lvl.label + ": " + str.tostring(lvl.price, format.mintick), style = label.style_label_left, color = lvlColor, textcolor = color.white, size = size.small))
     array.size(drawnLines)
 
+drawTimeCycles(int anchorBar, bool visible, color cycleColor, string sideLabel) =>
+    if visible and not na(anchorBar)
+        for i = 0 to 8
+            cycle     = array.get(timeCycles, i)
+            isMajor   = array.get(timeCycleIsMajor, i)
+            targetBar = anchorBar + cycle
+            lineColor = color.new(cycleColor, isMajor ? 0 : 50)
+            array.push(drawnLines, line.new(targetBar, high, targetBar, low, extend = extend.both, color = lineColor, style = styleFromString(isMajor ? timeMajorStyle : timeMinorStyle), width = isMajor ? timeMajorWidth : timeMinorWidth))
+            if showLabels
+                array.push(drawnLabels, label.new(targetBar, high, sideLabel + " T+" + str.tostring(cycle), style = label.style_label_down, color = lineColor, textcolor = color.white, size = size.tiny))
+    array.size(drawnLines)
+
 if barstate.islast
     for ln in drawnLines
         line.delete(ln)
@@ -351,6 +363,9 @@ if barstate.islast
             array.push(drawnLabels, label.new(bullAnchorBar, bullAnchorPrice, "Bull Anchor", style = label.style_label_up, color = color.new(color.gray, 20), textcolor = color.white, size = size.tiny))
         if showBearish and bearAnchorReady
             array.push(drawnLabels, label.new(bearAnchorBar, bearAnchorPrice, "Bear Anchor", style = label.style_label_down, color = color.new(color.gray, 20), textcolor = color.white, size = size.tiny))
+
+    drawTimeCycles(bullAnchorBar, showTimeLines and showBullTimeLines and bullAnchorReady, bullTimeColor, "Bull")
+    drawTimeCycles(bearAnchorBar, showTimeLines and showBearTimeLines and bearAnchorReady, bearTimeColor, "Bear")
 
 // ============================================================
 // TABLE
