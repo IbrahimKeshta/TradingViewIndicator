@@ -81,8 +81,8 @@ cleanup handles removal with no changes.
 | Input | Type | Default |
 |---|---|---|
 | `Show Time Lines` | bool (master) | `true` |
-| `Show Bullish Time Lines` | bool | `true` |
-| `Show Bearish Time Lines` | bool | `true` |
+| `Bullish Time Lines` | bool | `true` |
+| `Bearish Time Lines` | bool | `true` |
 | `Show Time Table` | bool | `true` |
 | `Time Table Position` | `Top Right` / `Top Left` / `Bottom Right` / `Bottom Left` | `Bottom Right` |
 
@@ -216,7 +216,10 @@ Worst case is Square of 9 mode, 3 rings, both sides visible, all time lines on:
 | Tables | 1 | 1 | 2 | n/a |
 
 The `indicator()` header's count declarations are unchanged. Its one required edit is adding
-`max_bars_back = 500`, for the reason given under *Date column*.
+`max_bars_back = 500`, for the reason given under *Date column*. This buffer is not exclusively for
+time lines: it also governs the pre-existing anchor engine's dynamic history offsets —
+`atrValue[pivotLookback]` and the `low[i]`/`high[i]` touch scans in `for i = pivotLookback to 0` —
+which is why `Swing Pivot Lookback` is now capped at `maxval = 500` to match.
 
 ## Defaults summary
 
@@ -248,3 +251,6 @@ plus a deferred human pass in TradingView covering:
 - Load the indicator on a chart with under 20 bars and confirm no divide-by-zero and no error.
 - Pin a manual `Bullish Price` with a start date thousands of bars back and confirm the far-past
   cycles show `~`-prefixed estimated dates rather than raising a history-buffer runtime error.
+- With that same far-back manual anchor, confirm the nine verticals themselves actually render at
+  the expected bars (not just that the table's date text degrades gracefully) — the lines draw off
+  `targetBar` directly and have no buffer guard of their own, unlike the date lookup.
