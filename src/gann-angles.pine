@@ -339,10 +339,10 @@ drawStartLine(int anchorBar, float startPrice, bool visible, color lineColor, st
             array.push(drawnLabels, label.new(bar_index + labelOffset, startPrice, lineLabel + ": " + str.tostring(startPrice, format.mintick), style = label.style_label_left, color = lineColor, textcolor = color.white, size = size.small))
     array.size(drawnLines)
 
-drawSet(array<GannLevel> levels, int anchorBar, bool visible, string filterMode, color priColor, string priStyle, int priWidth, color secColor, string secStyle, int secWidth) =>
+drawSet(array<GannLevel> levels, int anchorBar, bool visible, string filterMode, float touchCutoff, color priColor, string priStyle, int priWidth, color secColor, string secStyle, int secWidth) =>
     if visible and not na(anchorBar)
         for lvl in levels
-            if passesFilter(lvl.isPrimary, filterMode)
+            if passesFilter(lvl.isPrimary, filterMode) and passesTouchFilter(lvl, touchCutoff)
                 lvlColor = lvl.isPrimary ? priColor : secColor
                 lvlStyle = styleFromString(lvl.isPrimary ? priStyle : secStyle)
                 lvlWidth = lvl.isPrimary ? priWidth : secWidth
@@ -392,9 +392,9 @@ if barstate.islast
     bullLevelBar = modeInput == "Gann Square" and squareReady ? math.min(bullAnchorBar, bearAnchorBar) : bullAnchorBar
 
     drawStartLine(bullAnchorBar, bullAnchorPrice, showBullish and bullAnchorReady, bullStartColor, bullStartStyle, bullStartWidth, "Bull Start")
-    drawSet(bullLevels, bullLevelBar, showBullish and bullAnchorReady, bullishAngles, bullPrimaryColor, bullPrimaryStyle, bullPrimaryWidth, bullSecondaryColor, bullSecondaryStyle, bullSecondaryWidth)
+    drawSet(bullLevels, bullLevelBar, showBullish and bullAnchorReady, bullishAngles, bullTouchCutoff, bullPrimaryColor, bullPrimaryStyle, bullPrimaryWidth, bullSecondaryColor, bullSecondaryStyle, bullSecondaryWidth)
     drawStartLine(bearAnchorBar, bearAnchorPrice, showBearish and bearAnchorReady, bearStartColor, bearStartStyle, bearStartWidth, "Bear Start")
-    drawSet(bearLevels, bearAnchorBar, showBearish and bearAnchorReady, bearishAngles, bearPrimaryColor, bearPrimaryStyle, bearPrimaryWidth, bearSecondaryColor, bearSecondaryStyle, bearSecondaryWidth)
+    drawSet(bearLevels, bearAnchorBar, showBearish and bearAnchorReady, bearishAngles, bearTouchCutoff, bearPrimaryColor, bearPrimaryStyle, bearPrimaryWidth, bearSecondaryColor, bearSecondaryStyle, bearSecondaryWidth)
 
     if showAnchorMarkers
         if showBullish and bullAnchorReady
@@ -410,12 +410,12 @@ if barstate.islast
 // ============================================================
 var table gannTable = na
 
-countRows(array<GannLevel> levels, bool visible, string filterMode) =>
+countRows(array<GannLevel> levels, bool visible, string filterMode, float touchCutoff) =>
     total = 0
     if visible
         total := 1
         for lvl in levels
-            if passesFilter(lvl.isPrimary, filterMode)
+            if passesFilter(lvl.isPrimary, filterMode) and passesTouchFilter(lvl, touchCutoff)
                 total += 1
     total
 
@@ -429,8 +429,8 @@ if barstate.islast
             => position.bottom_left
         bullTableVisible = showBullish and bullAnchorReady and not squareBlocked
         bearTableVisible = showBearish and bearAnchorReady and not squareBlocked
-        bullRowCount = countRows(bullLevels, bullTableVisible, bullishAngles)
-        bearRowCount = countRows(bearLevels, bearTableVisible, bearishAngles)
+        bullRowCount = countRows(bullLevels, bullTableVisible, bullishAngles, bullTouchCutoff)
+        bearRowCount = countRows(bearLevels, bearTableVisible, bearishAngles, bearTouchCutoff)
         noRows       = bullRowCount == 0 and bearRowCount == 0
         neededRows   = noRows ? 2 : 1 + bullRowCount + bearRowCount
         rowCount     = math.min(neededRows, 100)
@@ -450,7 +450,7 @@ if barstate.islast
             table.cell(gannTable, 2, nextRow, "—", text_color = color.gray)
             nextRow += 1
             for lvl in bullLevels
-                if nextRow < rowCount and passesFilter(lvl.isPrimary, bullishAngles)
+                if nextRow < rowCount and passesFilter(lvl.isPrimary, bullishAngles) and passesTouchFilter(lvl, bullTouchCutoff)
                     table.cell(gannTable, 0, nextRow, lvl.label, text_color = lvl.isPrimary ? bullPrimaryColor : bullSecondaryColor)
                     table.cell(gannTable, 1, nextRow, str.tostring(lvl.price, format.mintick), text_color = color.white)
                     table.cell(gannTable, 2, nextRow, lvl.touched ? "Touched" : "Pending", text_color = lvl.touched ? color.lime : color.gray)
@@ -462,7 +462,7 @@ if barstate.islast
             table.cell(gannTable, 2, nextRow, "—", text_color = color.gray)
             nextRow += 1
             for lvl in bearLevels
-                if nextRow < rowCount and passesFilter(lvl.isPrimary, bearishAngles)
+                if nextRow < rowCount and passesFilter(lvl.isPrimary, bearishAngles) and passesTouchFilter(lvl, bearTouchCutoff)
                     table.cell(gannTable, 0, nextRow, lvl.label, text_color = lvl.isPrimary ? bearPrimaryColor : bearSecondaryColor)
                     table.cell(gannTable, 1, nextRow, str.tostring(lvl.price, format.mintick), text_color = color.white)
                     table.cell(gannTable, 2, nextRow, lvl.touched ? "Touched" : "Pending", text_color = lvl.touched ? color.lime : color.gray)
