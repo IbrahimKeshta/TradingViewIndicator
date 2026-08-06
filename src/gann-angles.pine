@@ -429,3 +429,47 @@ if barstate.islast
                     table.cell(gannTable, 1, nextRow, str.tostring(lvl.price, format.mintick), text_color = color.white)
                     table.cell(gannTable, 2, nextRow, lvl.touched ? "Touched" : "Pending", text_color = lvl.touched ? color.lime : color.gray)
                     nextRow += 1
+
+// ============================================================
+// TIME TABLE
+// ============================================================
+var table timeTable = na
+
+if barstate.islast
+    table.delete(timeTable)
+    bullTimeVisible = showTimeLines and showBullTimeLines and bullAnchorReady
+    bearTimeVisible = showTimeLines and showBearTimeLines and bearAnchorReady
+    if showTimeLines and showTimeTable
+        timeTablePos = switch timeTablePosInput
+            "Top Right"    => position.top_right
+            "Top Left"     => position.top_left
+            "Bottom Right" => position.bottom_right
+            => position.bottom_left
+        timeRowsNeeded = (bullTimeVisible ? 9 : 0) + (bearTimeVisible ? 9 : 0)
+        timeRowCount   = timeRowsNeeded == 0 ? 2 : 1 + timeRowsNeeded
+        timeTable := table.new(timeTablePos, 3, timeRowCount, bgcolor = color.new(color.black, 80), border_width = 1)
+        table.cell(timeTable, 0, 0, "Cycle", text_color = color.white, bgcolor = color.new(color.gray, 50))
+        table.cell(timeTable, 1, 0, "Date", text_color = color.white, bgcolor = color.new(color.gray, 50))
+        table.cell(timeTable, 2, 0, "Status", text_color = color.white, bgcolor = color.new(color.gray, 50))
+
+        timeRow = 1
+        if timeRowsNeeded == 0
+            table.cell(timeTable, 0, timeRow, "Waiting for a swing pivot", text_color = color.silver)
+        if bullTimeVisible
+            for i = 0 to 8
+                cycle     = array.get(timeCycles, i)
+                targetBar = bullAnchorBar + cycle
+                reached   = bar_index >= targetBar
+                table.cell(timeTable, 0, timeRow, "Bull T+" + str.tostring(cycle), text_color = bullTimeColor)
+                table.cell(timeTable, 1, timeRow, cycleDateText(targetBar, avgBarMs), text_color = color.white)
+                table.cell(timeTable, 2, timeRow, reached ? "Reached" : "Pending", text_color = reached ? color.lime : color.gray)
+                timeRow += 1
+        if bearTimeVisible
+            for i = 0 to 8
+                cycle     = array.get(timeCycles, i)
+                targetBar = bearAnchorBar + cycle
+                reached   = bar_index >= targetBar
+                table.cell(timeTable, 0, timeRow, "Bear T+" + str.tostring(cycle), text_color = bearTimeColor)
+                table.cell(timeTable, 1, timeRow, cycleDateText(targetBar, avgBarMs), text_color = color.white)
+                table.cell(timeTable, 2, timeRow, reached ? "Reached" : "Pending", text_color = reached ? color.lime : color.gray)
+                timeRow += 1
