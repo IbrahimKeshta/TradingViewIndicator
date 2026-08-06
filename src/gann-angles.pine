@@ -34,7 +34,7 @@ fanProjection = input.int(100, "Fan Projection (bars)", minval = 1, maxval = 500
 boxGridDivisions = input.int(8, "Box Grid Divisions", minval = 1, maxval = 20, group = "Gann Square")
 
 // ---------------- Square of 9 ----------------
-ringCount   = input.int(2, "Rings", minval = 1, maxval = 3, group = "Square of 9", tooltip = "Each ring is 16 levels at 22.5-degree increments. Capped at 3 so the table stays within Pine's 100-row limit.")
+ringCount   = input.int(2, "Rings", minval = 1, maxval = 3, group = "Square of 9", tooltip = "Each ring is 16 levels at 22.5-degree increments. Capped at 3 so the table stays within Pine's 100-row limit.") // maxval 3 also caps levels/side at 3*16=48, which is what makes Max Touched Levels' "100 means show all" tooltip true — raising this maxval breaks that claim
 scaleFactor = input.float(1.0, "Scale Factor", minval = 0.001, group = "Square of 9", tooltip = "Controls level spacing. Higher values tighten the levels together, lower values spread them apart. Raise this on high-priced instruments where the default packs all levels into a narrow band.")
 
 // ---------------- Gann Time ----------------
@@ -339,10 +339,10 @@ drawStartLine(int anchorBar, float startPrice, bool visible, color lineColor, st
             array.push(drawnLabels, label.new(bar_index + labelOffset, startPrice, lineLabel + ": " + str.tostring(startPrice, format.mintick), style = label.style_label_left, color = lineColor, textcolor = color.white, size = size.small))
     array.size(drawnLines)
 
-drawSet(array<GannLevel> levels, int anchorBar, bool visible, string filterMode, float touchCutoff, color priColor, string priStyle, int priWidth, color secColor, string secStyle, int secWidth) =>
+drawSet(array<GannLevel> levels, int anchorBar, bool visible, string filterMode, float cutoff, color priColor, string priStyle, int priWidth, color secColor, string secStyle, int secWidth) =>
     if visible and not na(anchorBar)
         for lvl in levels
-            if passesFilter(lvl.isPrimary, filterMode) and passesTouchFilter(lvl, touchCutoff)
+            if passesFilter(lvl.isPrimary, filterMode) and passesTouchFilter(lvl, cutoff)
                 lvlColor = lvl.isPrimary ? priColor : secColor
                 lvlStyle = styleFromString(lvl.isPrimary ? priStyle : secStyle)
                 lvlWidth = lvl.isPrimary ? priWidth : secWidth
@@ -410,12 +410,12 @@ if barstate.islast
 // ============================================================
 var table gannTable = na
 
-countRows(array<GannLevel> levels, bool visible, string filterMode, float touchCutoff) =>
+countRows(array<GannLevel> levels, bool visible, string filterMode, float cutoff) =>
     total = 0
     if visible
         total := 1
         for lvl in levels
-            if passesFilter(lvl.isPrimary, filterMode) and passesTouchFilter(lvl, touchCutoff)
+            if passesFilter(lvl.isPrimary, filterMode) and passesTouchFilter(lvl, cutoff)
                 total += 1
     total
 

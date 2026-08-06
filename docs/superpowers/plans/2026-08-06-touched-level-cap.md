@@ -119,6 +119,10 @@ git add src/gann-angles.pine && git commit -m "feat: add touched-level cutoff fi
 
 ### Task 2: Wire the filter into the renderer and the table
 
+> **Note:** the line numbers quoted below were computed against the file before Task 1's insertions
+> and are ~30 lines stale by the time Task 2 runs. Locate each edit by matching the quoted
+> before-text, not by trusting the line number.
+
 **Files:**
 - Modify: `src/gann-angles.pine` — `drawSet` and its two call sites; `countRows` and its two call sites; the two table row-writing loop guards.
 
@@ -266,7 +270,7 @@ Re-read `docs/superpowers/specs/2026-08-06-touched-level-cap-design.md` alongsid
 2. Pending levels are never filtered — quote the first clause of `passesTouchFilter`.
 3. The cap is per direction — confirm two independent cutoffs exist and neither side reads the other's.
 4. The time table is untouched — grep the `TIME TABLE` section for `passesTouchFilter` and `TouchCutoff` and confirm zero hits.
-5. Run `git diff 9ea2336 -- src/gann-angles.pine` and confirm every hunk is either the new section, the new input, or one of the eight edited lines named in Tasks 1 and 2. Report any hunk that is not.
+5. Run `git diff 9ea2336 -- src/gann-angles.pine` and confirm every hunk is either the new section, the new input, or one of the ten edited lines named in Tasks 1 and 2 (2 signature lines + 2 in-function filter conditions + 4 call sites + 2 table row-loop guards). Report any hunk that is not.
 
 - [ ] **Step 8: Commit**
 

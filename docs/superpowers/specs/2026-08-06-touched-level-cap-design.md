@@ -53,9 +53,19 @@ SKPC example above drops from 35 rows to about 7. That is the intent; the unread
 this exists. Defaulting to `100` to preserve current behaviour was considered and rejected as
 shipping the feature switched off.
 
+**The cap applies in all three modes**, not only Square of 9. The default of 5 is motivated above by
+the 35-row Square of 9 case, but Gann Fan and Gann Square each produce only 9 levels per side. In
+Gann Square mode in particular, most of those 9 will typically read `Touched`, so a default of 5 can
+trim up to 4 of 9 rows from a table that was not crowded to begin with. Raise `Max Touched Levels`
+(or set it to `100`) on those modes if the default feels overeager.
+
 ## Selection
 
 Rank the side's touched levels by `math.abs(lvl.price - close)` and keep the nearest N.
+
+`close` is the live, intrabar close on the current bar, not a confirmed value — so on the last bar
+the cutoff recomputes on every tick and the set of surviving touched levels can change mid-bar as
+price crosses a boundary. This is the correct behaviour of "nearest current price," not a bug.
 
 Implemented as a **cutoff distance** rather than sort-and-slice: Pine can sort a `float` array but
 cannot carry the original indices through the sort, so sorting distances and reading back which
@@ -151,3 +161,6 @@ plus a deferred human pass in TradingView covering:
 - Confirm the table is correctly sized in each case: no blank trailing row, no truncated last level.
 - Switch to Gann Square mode and confirm the empty `bearLevels` array causes no error.
 - Confirm a side whose touched levels are all filtered out still shows its start row.
+- Watch a live bar on a fast timeframe and confirm the cutoff's intrabar churn — lines, labels and
+  rows appearing or disappearing together as `close` crosses a level's distance boundary — reads as
+  acceptable behaviour rather than as a glitch.
