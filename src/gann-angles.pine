@@ -79,6 +79,7 @@ showLabels    = input.bool(true, "Show Labels", group = "Display")
 labelOffset   = input.int(5, "Label Offset (bars)", minval = 0, maxval = 100, group = "Display")
 showTable     = input.bool(true, "Show Table", group = "Display")
 tablePosInput = input.string("Top Right", "Table Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Display")
+maxTouchedLevels = input.int(5, "Max Touched Levels", minval = 0, maxval = 100, group = "Display", tooltip = "Caps how many Touched levels are shown per direction, keeping the ones nearest current price. Pending levels are never hidden. Set to 0 to hide every Touched level, or to 100 to show them all — that is more than any ring count can produce.")
 
 // ============================================================
 // RATIO TABLE
@@ -293,6 +294,36 @@ if bearAnchorReady
     for lvl in bearLevels
         if not lvl.touched and low <= lvl.price and high >= lvl.price
             lvl.touched := true
+
+// ============================================================
+// TOUCHED LEVEL FILTER
+// ============================================================
+// Distance from the close of the Nth-nearest touched level that also passes the
+// angle filter. Returns na when no filtering is needed and -1.0 to exclude every
+// touched level. Distances are collected only from levels the angle filter already
+// admits, so the two filters cannot eat into each other's quota.
+touchedCutoff(array<GannLevel> levels, int maxTouched, string filterMode) =>
+    dists = array.new<float>()
+    for lvl in levels
+        if lvl.touched and passesFilter(lvl.isPrimary, filterMode)
+            array.push(dists, math.abs(lvl.price - close))
+    cutoff = float(na)
+    if maxTouched <= 0
+        cutoff := -1.0
+    else if array.size(dists) > maxTouched
+        array.sort(dists, order.ascending)
+        cutoff := array.get(dists, maxTouched - 1)
+    cutoff
+
+// Untouched levels always pass. Touched ones pass only within the cutoff distance.
+passesTouchFilter(GannLevel lvl, float cutoff) =>
+    not lvl.touched or na(cutoff) or math.abs(lvl.price - close) <= cutoff
+
+var float bullTouchCutoff = na
+var float bearTouchCutoff = na
+if barstate.islast
+    bullTouchCutoff := touchedCutoff(bullLevels, maxTouchedLevels, bullishAngles)
+    bearTouchCutoff := touchedCutoff(bearLevels, maxTouchedLevels, bearishAngles)
 
 // ============================================================
 // RENDERER
