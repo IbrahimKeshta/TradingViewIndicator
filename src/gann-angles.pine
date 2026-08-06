@@ -75,10 +75,10 @@ timeMinorStyle = input.string("Dotted", "Minor Style", options = ["Solid", "Dash
 timeMinorWidth = input.int(1, "", minval = 1, maxval = 4, group = "Time Style", inline = "timeMin")
 
 // ---------------- Display ----------------
-showLabels    = input.bool(true, "Show Labels", group = "Display")
-labelOffset   = input.int(5, "Label Offset (bars)", minval = 0, maxval = 100, group = "Display")
-showTable     = input.bool(true, "Show Table", group = "Display")
-tablePosInput = input.string("Top Right", "Table Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Display")
+showLabels       = input.bool(true, "Show Labels", group = "Display")
+labelOffset      = input.int(5, "Label Offset (bars)", minval = 0, maxval = 100, group = "Display")
+showTable        = input.bool(true, "Show Table", group = "Display")
+tablePosInput    = input.string("Top Right", "Table Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Display")
 maxTouchedLevels = input.int(5, "Max Touched Levels", minval = 0, maxval = 100, group = "Display", tooltip = "Caps how many Touched levels are shown per direction, keeping the ones nearest current price. Pending levels are never hidden. Set to 0 to hide every Touched level, or to 100 to show them all — that is more than any ring count can produce.")
 
 // ============================================================
