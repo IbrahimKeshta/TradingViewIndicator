@@ -1,7 +1,7 @@
 # Trade Engine — Design
 
 **Date:** 2026-08-07
-**Status:** Approved for planning — not yet implemented
+**Status:** Implemented on `feat/trade-engine` (`abbced2`..`3909ecc`) — TradingView verification pending
 **File:** `src/ict-rsi-ma-indicator.pine`
 **Block:** D+E of the roadmap, merged (see *Why D and E are one block*)
 **Depends on:** `2026-08-07-structure-core-design.md` (block A, implemented)
