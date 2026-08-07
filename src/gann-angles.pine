@@ -34,7 +34,7 @@ fanProjection = input.int(100, "Fan Projection (bars)", minval = 1, maxval = 500
 boxGridDivisions = input.int(8, "Box Grid Divisions", minval = 1, maxval = 20, group = "Gann Square")
 
 // ---------------- Square of 9 ----------------
-ringCount   = input.int(2, "Rings", minval = 1, maxval = 3, group = "Square of 9", tooltip = "Each ring is 16 levels at 22.5-degree increments. Capped at 3 so the table stays within Pine's 100-row limit.")
+ringCount   = input.int(2, "Rings", minval = 1, maxval = 3, group = "Square of 9", tooltip = "Each ring is 16 levels at 22.5-degree increments. Capped at 3 so the table stays within Pine's 100-row limit.") // maxval 3 also caps levels/side at 3*16=48, which is what makes Max Touched Levels' "100 means show all" tooltip true — raising this maxval breaks that claim
 scaleFactor = input.float(1.0, "Scale Factor", minval = 0.001, group = "Square of 9", tooltip = "Controls level spacing. Higher values tighten the levels together, lower values spread them apart. Raise this on high-priced instruments where the default packs all levels into a narrow band.")
 
 // ---------------- Gann Time ----------------
@@ -75,10 +75,11 @@ timeMinorStyle = input.string("Dotted", "Minor Style", options = ["Solid", "Dash
 timeMinorWidth = input.int(1, "", minval = 1, maxval = 4, group = "Time Style", inline = "timeMin")
 
 // ---------------- Display ----------------
-showLabels    = input.bool(true, "Show Labels", group = "Display")
-labelOffset   = input.int(5, "Label Offset (bars)", minval = 0, maxval = 100, group = "Display")
-showTable     = input.bool(true, "Show Table", group = "Display")
-tablePosInput = input.string("Top Right", "Table Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Display")
+showLabels       = input.bool(true, "Show Labels", group = "Display")
+labelOffset      = input.int(5, "Label Offset (bars)", minval = 0, maxval = 100, group = "Display")
+showTable        = input.bool(true, "Show Table", group = "Display")
+tablePosInput    = input.string("Top Right", "Table Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Display")
+maxTouchedLevels = input.int(5, "Max Touched Levels", minval = 0, maxval = 100, group = "Display", tooltip = "Caps how many Touched levels are shown per direction, keeping the ones nearest current price. Pending levels are never hidden. Set to 0 to hide every Touched level, or to 100 to show them all — that is more than any ring count can produce.")
 
 // ============================================================
 // RATIO TABLE
@@ -295,6 +296,36 @@ if bearAnchorReady
             lvl.touched := true
 
 // ============================================================
+// TOUCHED LEVEL FILTER
+// ============================================================
+// Distance from the close of the Nth-nearest touched level that also passes the
+// angle filter. Returns na when no filtering is needed and -1.0 to exclude every
+// touched level. Distances are collected only from levels the angle filter already
+// admits, so the two filters cannot eat into each other's quota.
+touchedCutoff(array<GannLevel> levels, int maxTouched, string filterMode) =>
+    dists = array.new<float>()
+    for lvl in levels
+        if lvl.touched and passesFilter(lvl.isPrimary, filterMode)
+            array.push(dists, math.abs(lvl.price - close))
+    cutoff = float(na)
+    if maxTouched <= 0
+        cutoff := -1.0
+    else if array.size(dists) > maxTouched
+        array.sort(dists, order.ascending)
+        cutoff := array.get(dists, maxTouched - 1)
+    cutoff
+
+// Untouched levels always pass. Touched ones pass only within the cutoff distance.
+passesTouchFilter(GannLevel lvl, float cutoff) =>
+    not lvl.touched or na(cutoff) or math.abs(lvl.price - close) <= cutoff
+
+var float bullTouchCutoff = na
+var float bearTouchCutoff = na
+if barstate.islast
+    bullTouchCutoff := touchedCutoff(bullLevels, maxTouchedLevels, bullishAngles)
+    bearTouchCutoff := touchedCutoff(bearLevels, maxTouchedLevels, bearishAngles)
+
+// ============================================================
 // RENDERER
 // ============================================================
 var line[]  drawnLines  = array.new<line>()
@@ -308,10 +339,10 @@ drawStartLine(int anchorBar, float startPrice, bool visible, color lineColor, st
             array.push(drawnLabels, label.new(bar_index + labelOffset, startPrice, lineLabel + ": " + str.tostring(startPrice, format.mintick), style = label.style_label_left, color = lineColor, textcolor = color.white, size = size.small))
     array.size(drawnLines)
 
-drawSet(array<GannLevel> levels, int anchorBar, bool visible, string filterMode, color priColor, string priStyle, int priWidth, color secColor, string secStyle, int secWidth) =>
+drawSet(array<GannLevel> levels, int anchorBar, bool visible, string filterMode, float cutoff, color priColor, string priStyle, int priWidth, color secColor, string secStyle, int secWidth) =>
     if visible and not na(anchorBar)
         for lvl in levels
-            if passesFilter(lvl.isPrimary, filterMode)
+            if passesFilter(lvl.isPrimary, filterMode) and passesTouchFilter(lvl, cutoff)
                 lvlColor = lvl.isPrimary ? priColor : secColor
                 lvlStyle = styleFromString(lvl.isPrimary ? priStyle : secStyle)
                 lvlWidth = lvl.isPrimary ? priWidth : secWidth
@@ -361,9 +392,9 @@ if barstate.islast
     bullLevelBar = modeInput == "Gann Square" and squareReady ? math.min(bullAnchorBar, bearAnchorBar) : bullAnchorBar
 
     drawStartLine(bullAnchorBar, bullAnchorPrice, showBullish and bullAnchorReady, bullStartColor, bullStartStyle, bullStartWidth, "Bull Start")
-    drawSet(bullLevels, bullLevelBar, showBullish and bullAnchorReady, bullishAngles, bullPrimaryColor, bullPrimaryStyle, bullPrimaryWidth, bullSecondaryColor, bullSecondaryStyle, bullSecondaryWidth)
+    drawSet(bullLevels, bullLevelBar, showBullish and bullAnchorReady, bullishAngles, bullTouchCutoff, bullPrimaryColor, bullPrimaryStyle, bullPrimaryWidth, bullSecondaryColor, bullSecondaryStyle, bullSecondaryWidth)
     drawStartLine(bearAnchorBar, bearAnchorPrice, showBearish and bearAnchorReady, bearStartColor, bearStartStyle, bearStartWidth, "Bear Start")
-    drawSet(bearLevels, bearAnchorBar, showBearish and bearAnchorReady, bearishAngles, bearPrimaryColor, bearPrimaryStyle, bearPrimaryWidth, bearSecondaryColor, bearSecondaryStyle, bearSecondaryWidth)
+    drawSet(bearLevels, bearAnchorBar, showBearish and bearAnchorReady, bearishAngles, bearTouchCutoff, bearPrimaryColor, bearPrimaryStyle, bearPrimaryWidth, bearSecondaryColor, bearSecondaryStyle, bearSecondaryWidth)
 
     if showAnchorMarkers
         if showBullish and bullAnchorReady
@@ -379,12 +410,12 @@ if barstate.islast
 // ============================================================
 var table gannTable = na
 
-countRows(array<GannLevel> levels, bool visible, string filterMode) =>
+countRows(array<GannLevel> levels, bool visible, string filterMode, float cutoff) =>
     total = 0
     if visible
         total := 1
         for lvl in levels
-            if passesFilter(lvl.isPrimary, filterMode)
+            if passesFilter(lvl.isPrimary, filterMode) and passesTouchFilter(lvl, cutoff)
                 total += 1
     total
 
@@ -398,8 +429,8 @@ if barstate.islast
             => position.bottom_left
         bullTableVisible = showBullish and bullAnchorReady and not squareBlocked
         bearTableVisible = showBearish and bearAnchorReady and not squareBlocked
-        bullRowCount = countRows(bullLevels, bullTableVisible, bullishAngles)
-        bearRowCount = countRows(bearLevels, bearTableVisible, bearishAngles)
+        bullRowCount = countRows(bullLevels, bullTableVisible, bullishAngles, bullTouchCutoff)
+        bearRowCount = countRows(bearLevels, bearTableVisible, bearishAngles, bearTouchCutoff)
         noRows       = bullRowCount == 0 and bearRowCount == 0
         neededRows   = noRows ? 2 : 1 + bullRowCount + bearRowCount
         rowCount     = math.min(neededRows, 100)
@@ -419,7 +450,7 @@ if barstate.islast
             table.cell(gannTable, 2, nextRow, "—", text_color = color.gray)
             nextRow += 1
             for lvl in bullLevels
-                if nextRow < rowCount and passesFilter(lvl.isPrimary, bullishAngles)
+                if nextRow < rowCount and passesFilter(lvl.isPrimary, bullishAngles) and passesTouchFilter(lvl, bullTouchCutoff)
                     table.cell(gannTable, 0, nextRow, lvl.label, text_color = lvl.isPrimary ? bullPrimaryColor : bullSecondaryColor)
                     table.cell(gannTable, 1, nextRow, str.tostring(lvl.price, format.mintick), text_color = color.white)
                     table.cell(gannTable, 2, nextRow, lvl.touched ? "Touched" : "Pending", text_color = lvl.touched ? color.lime : color.gray)
@@ -431,7 +462,7 @@ if barstate.islast
             table.cell(gannTable, 2, nextRow, "—", text_color = color.gray)
             nextRow += 1
             for lvl in bearLevels
-                if nextRow < rowCount and passesFilter(lvl.isPrimary, bearishAngles)
+                if nextRow < rowCount and passesFilter(lvl.isPrimary, bearishAngles) and passesTouchFilter(lvl, bearTouchCutoff)
                     table.cell(gannTable, 0, nextRow, lvl.label, text_color = lvl.isPrimary ? bearPrimaryColor : bearSecondaryColor)
                     table.cell(gannTable, 1, nextRow, str.tostring(lvl.price, format.mintick), text_color = color.white)
                     table.cell(gannTable, 2, nextRow, lvl.touched ? "Touched" : "Pending", text_color = lvl.touched ? color.lime : color.gray)
