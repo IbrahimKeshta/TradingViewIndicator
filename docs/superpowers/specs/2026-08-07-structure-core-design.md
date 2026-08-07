@@ -247,10 +247,22 @@ internal detail available on demand rather than present by default.
 `line.new`/`label.new` calls, and the `bosBullish` / `bosBearish` / `chochBullish` / `chochBearish`
 locals in their current form.
 
-**2. `structureBias` consumers migrate to `trend`** at lines 247, 248, 283 and 284, mapping
-`"bullish" → "up"` and `"bearish" → "down"`. Semantics are unchanged: signals and watch-zones behave
-exactly as they do today. `inRange` is **not** wired into the signal gate here — that is block D's
-decision to make explicitly.
+**2. `structureBias` consumers migrate to `intTrend`** at lines 247, 248, 283 and 284, mapping
+`"bullish" → "up"` and `"bearish" → "down"`.
+
+They migrate to the **internal** tier, not the major one, and this is deliberate. Today's
+`structureBias` is produced by a lookback of 5 — which in the new model *is* the internal tier.
+Pointing these four sites at the major trend would move every signal and watch-zone alert to a
+lookback of 20 as an invisible side effect of a structural refactor. Signals should almost certainly
+end up gated on the major trend, but that is block D's decision, made deliberately and reviewed on its
+own merits.
+
+Bar-for-bar equality with the old code is still not guaranteed even on the same tier: the old
+implementation discarded the opposing swing on every break, so its bias could differ from a
+history-keeping engine in edge cases. Same tier, same lookback, substantially the same firing points —
+large divergences are worth investigating, small ones are expected.
+
+`inRange` is **not** wired into the signal gate here. Also block D's call.
 
 **3. Order blocks become tier-tagged.** Creation (lines 201–221) fires on `bullBreakMajor or
 bullBreakInt` / `bearBreakMajor or bearBreakInt`, stamping which tier produced it. Major OBs draw
@@ -308,7 +320,9 @@ Window, bar by bar.
 - Toggle each display input off and confirm only its own elements disappear.
 - Confirm order blocks now appear from both tiers, that major and internal render distinguishably, and
   that turning off internal OBs leaves major ones untouched.
-- Confirm existing behaviour is preserved where it was meant to be: signals and watch-zone alerts fire
-  in the same places as the pre-change script on the same chart and settings.
+- Confirm existing behaviour is preserved where it was meant to be: with `Internal Swing Lookback` at
+  5, signals and watch-zone alerts fire in substantially the same places as the pre-change script on
+  the same chart and settings. Small differences are expected — the old code discarded the opposing
+  swing on every break — but a signal appearing or vanishing on a strongly trending leg is a defect.
 - Load a chart with several thousand bars and confirm no "too many lines/labels/boxes" error and no
   visible loss of recent structure.
