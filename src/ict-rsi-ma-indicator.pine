@@ -51,7 +51,7 @@ showMajorTags      = input.bool(true, "Show Major Tags", group = "Structure Disp
 showMajorRays      = input.bool(true, "Show Major Rays", group = "Structure Display", tooltip = "Extends every unbroken major swing to the right as live support or resistance. Broken levels stop drawing.")
 showBreakLines     = input.bool(true, "Show Break Lines", group = "Structure Display", tooltip = "Marks each major BOS and CHoCH where it happened. These stay on the chart as history rather than being redrawn.")
 showInternalRays   = input.bool(false, "Show Internal Rays", group = "Structure Display", tooltip = "Entry-level detail. Off by default because on a fast timeframe these are near-continuous.")
-showInternalBreaks = input.bool(false, "Show Internal Break Lines", group = "Structure Display")
+showInternalBreaks = input.bool(false, "Show Internal Break Lines", group = "Structure Display", tooltip = "Off by default. On a fast timeframe internal breaks are near-continuous, and their labels share the chart's 500-label budget with the trade result history — leave this off if you want a long track record to survive.")
 showStructurePanel = input.bool(true, "Show Structure Panel", group = "Structure Display")
 panelPosInput      = input.string("Top Right", "Panel Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Structure Display")
 majorTagColor      = input.color(color.orange, "Major Tag", group = "Structure Display")
@@ -59,6 +59,26 @@ liquidityTagColor  = input.color(color.yellow, "Liquidity Tag (EQH/EQL)", group 
 bosColor           = input.color(color.lime, "BOS", group = "Structure Display")
 chochColor         = input.color(color.fuchsia, "CHoCH", group = "Structure Display")
 rayColor           = input.color(color.gray, "Rays", group = "Structure Display")
+
+// ---------------- Trade Engine ----------------
+minScore           = input.int(4, "Minimum Score", minval = 1, maxval = 15, group = "Trade Engine", tooltip = "How many scored points a setup needs, out of however many are switched on below. The panel shows both numbers — a disabled point is never counted in the denominator, so turning one off does not silently loosen or break the threshold.")
+scoreKillzone      = input.bool(true, "Score: Killzone", group = "Trade Engine", tooltip = "Turn off on single-session markets such as EGX, where a killzone means nothing. If both killzone sessions are disabled for display, this point excludes itself automatically whatever this is set to.")
+scoreRsi           = input.bool(true, "Score: RSI", group = "Trade Engine")
+scoreMa            = input.bool(true, "Score: Moving Average", group = "Trade Engine")
+scoreMajorAgree    = input.bool(true, "Score: Major Trend Agreement", group = "Trade Engine", tooltip = "Whether the major tier agrees with the internal tier. A pullback entry against the major trend is a real setup — just a weaker one — so this scores rather than vetoes.")
+scoreBreakStrength = input.bool(true, "Score: Break Strength", group = "Trade Engine")
+strongBreakMult    = input.float(1.0, "Strong Break (x ATR)", minval = 0.1, step = 0.1, group = "Trade Engine", tooltip = "The breaking candle's body must exceed this multiple of ATR to earn the break-strength point.")
+stopBufferMult     = input.float(0.25, "Stop Buffer (x ATR)", minval = 0.0, step = 0.05, group = "Trade Engine", tooltip = "How far beyond the entry zone's far edge the stop sits, so an ordinary wick into the zone does not clip it. Also used by the trailing stop.")
+minTargetR         = input.float(1.0, "Minimum Target Distance (R)", minval = 0.1, step = 0.1, group = "Trade Engine", tooltip = "Structural levels closer than this are skipped. A target 0.3R away is a winner on paper and not worth the spread.")
+trailTierInput     = input.string("Internal", "Trailing Tier", options = ["Internal", "Major"], group = "Trade Engine", tooltip = "Which tier's swings the stop trails behind once TP1 is hit. Internal trails tightly; Major gives the trade room.")
+longOnly           = input.bool(false, "Long Trades Only", group = "Trade Engine", tooltip = "For cash-equity charts where shorting is unavailable. Bearish setups still mark and alert, but open no trade.")
+showTradeLevels    = input.bool(true, "Show Trade Levels", group = "Trade Engine")
+showTradeHistory   = input.bool(true, "Show Trade History", group = "Trade Engine", tooltip = "Leaves a result label in R at each closed trade's exit bar — the cheapest possible track record.")
+showTradePanel     = input.bool(true, "Show Trade Panel Rows", group = "Trade Engine")
+tradeLongColor     = input.color(color.teal, "Long", group = "Trade Engine")
+tradeShortColor    = input.color(color.maroon, "Short", group = "Trade Engine")
+tradeStopColor     = input.color(color.red, "Stop", group = "Trade Engine")
+tradeTargetColor   = input.color(color.green, "Targets", group = "Trade Engine")
 
 // ============================================================
 // RSI + MA
@@ -268,6 +288,16 @@ type Zone
     string tier
     string side
 
+// What a mitigation pass found, filled in by mitigateZones before the zone is deleted.
+// Reset every bar — a stale hit would place a stop against a zone price left long ago.
+type Touch
+    bool   hit
+    float  top
+    float  bottom
+    // Captured for future use — e.g. scoring "the zone was a major-tier order block" in the
+    // confirmation block still to come. Not read anywhere yet.
+    string tier
+
 var array<Zone> bullishFvgZones = array.new<Zone>()
 var array<Zone> bearishFvgZones = array.new<Zone>()
 
@@ -278,7 +308,9 @@ var array<Zone> bearishFvgZones = array.new<Zone>()
 // any part of its range (not full fill) — simplest, most testable
 // interpretation of "auto-remove when mitigated."
 
-mitigateZones(array<Zone> zones, bool isBullish) =>
+// Records the FIRST touched zone into `t`. The loop runs newest-to-oldest, so that is the
+// most recently formed zone — the one price is reacting to now, not a stale one below it.
+mitigateZones(array<Zone> zones, bool isBullish, Touch t) =>
     touchedAny = false
     if array.size(zones) > 0
         for i = array.size(zones) - 1 to 0
@@ -287,6 +319,11 @@ mitigateZones(array<Zone> zones, bool isBullish) =>
             bottom = box.get_bottom(z.b)
             touched = isBullish ? low <= top : high >= bottom
             if touched
+                if not t.hit
+                    t.hit    := true
+                    t.top    := top
+                    t.bottom := bottom
+                    t.tier   := z.tier
                 box.delete(z.b)
                 label.delete(z.lbl)
                 array.remove(zones, i)
@@ -313,8 +350,20 @@ pruneTier(array<Zone> zones, string tier, int maxCount) =>
     count
 
 // must run before creation — a box must not be tested against its own creation bar
-bullishFvgTouched = mitigateZones(bullishFvgZones, true)
-bearishFvgTouched = mitigateZones(bearishFvgZones, false)
+var Touch bullTouch = Touch.new(false, na, na, na)
+var Touch bearTouch = Touch.new(false, na, na, na)
+
+bullTouch.hit    := false
+bullTouch.top    := na
+bullTouch.bottom := na
+bullTouch.tier   := na
+bearTouch.hit    := false
+bearTouch.top    := na
+bearTouch.bottom := na
+bearTouch.tier   := na
+
+bullishFvgTouched = mitigateZones(bullishFvgZones, true, bullTouch)
+bearishFvgTouched = mitigateZones(bearishFvgZones, false, bearTouch)
 
 bullishFvgDetected = barstate.isconfirmed and showFVG and low > high[2]
 bearishFvgDetected = barstate.isconfirmed and showFVG and high < low[2]
@@ -357,8 +406,11 @@ findOppositeCandle(isBullishBreak) =>
     idx
 
 // must run before creation — a box must not be tested against its own creation bar
-bullishObTouched = mitigateZones(bullishObZones, true)
-bearishObTouched = mitigateZones(bearishObZones, false)
+// Order blocks pass the same Touch objects as the FVGs above. Because mitigateZones only
+// writes when `hit` is still false, an FVG touched earlier this bar keeps its bounds and
+// the order block does not overwrite it.
+bullishObTouched = mitigateZones(bullishObZones, true, bullTouch)
+bearishObTouched = mitigateZones(bearishObZones, false, bearTouch)
 
 if barstate.isconfirmed and showOB and (majorState.bullBreak or (showInternalOb and intState.bullBreak))
     obTier = majorState.bullBreak ? "MAJOR" : "INTERNAL"
@@ -395,27 +447,13 @@ bgcolor(newYorkActive ? color.new(color.orange, 90) : na, title = "New York Kill
 // ============================================================
 // CONFLUENCE SIGNALS
 // ============================================================
-var bool bullishSignalFired = false
-var bool bearishSignalFired = false
-
-if intState.bullBreak
-    bullishSignalFired := false
-if intState.bearBreak
-    bearishSignalFired := false
-
+// inBullishZone/inBearishZone stay here (needed by WATCH-ZONE HEADS-UP just below). The
+// bullishSignal/bearishSignal assignment and its plotshape calls now live after TRADE
+// LIFECYCLE instead, because they read tradeOpened/openedSide, which TRADE LIFECYCLE sets —
+// Pine v6 has no forward references, so they cannot be assigned here and read from a section
+// defined later in the file.
 inBullishZone = bullishFvgTouched or bullishObTouched
 inBearishZone = bearishFvgTouched or bearishObTouched
-
-bullishSignal = intState.trend == "up" and inBullishZone and killzoneActive and rsiBullishConfirm and maBullishConfirm and not bullishSignalFired and barstate.isconfirmed
-bearishSignal = intState.trend == "down" and inBearishZone and killzoneActive and rsiBearishConfirm and maBearishConfirm and not bearishSignalFired and barstate.isconfirmed
-
-if bullishSignal
-    bullishSignalFired := true
-if bearishSignal
-    bearishSignalFired := true
-
-plotshape(showSignalMarkers and bullishSignal, title = "Bullish Signal", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.small)
-plotshape(showSignalMarkers and bearishSignal, title = "Bearish Signal", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.small)
 
 // ============================================================
 // WATCH-ZONE HEADS-UP
@@ -442,6 +480,328 @@ closestBearishDist = na(bearishFvgDist) ? bearishObDist : (na(bearishObDist) ? b
 
 bullishWatchZone = intState.trend == "up" and killzoneActive and not inBullishZone and not na(closestBullishDist) and closestBullishDist <= atrValue * watchZoneAtrMult
 bearishWatchZone = intState.trend == "down" and killzoneActive and not inBearishZone and not na(closestBearishDist) and closestBearishDist <= atrValue * watchZoneAtrMult
+
+// ============================================================
+// TRADE GATE
+// ============================================================
+// Hard requirements are absolute: without a direction and a zone there is no side, no stop
+// and no targets to compute. Everything else is evidence worth a point.
+//
+// The score is proportional — minScore is checked against the number of points actually
+// enabled, never a fixed five. A disabled point left in the denominator would either make
+// minScore unreachable or quietly loosen the gate while appearing to tighten it, and it is
+// what lets later confirmation work add points instead of adding vetoes.
+
+// The killzone point disables itself when neither session is drawn: on a single-session
+// market a permanently-false point would make minScore unreachable.
+killzonePointOn = scoreKillzone and (showLondonKZ or showNewYorkKZ)
+
+// One pass counts the enabled points and the achieved points together. Declaring a point in
+// only one of two parallel lists was the failure this prevents — and the confirmation block
+// still to come adds five more points to this function.
+scoreTally(bool isLong) =>
+    ofPts = 0
+    got   = 0
+    if killzonePointOn
+        ofPts += 1
+        if killzoneActive
+            got += 1
+    if scoreRsi
+        ofPts += 1
+        if isLong ? rsiBullishConfirm : rsiBearishConfirm
+            got += 1
+    if scoreMa
+        ofPts += 1
+        if isLong ? maBullishConfirm : maBearishConfirm
+            got += 1
+    if scoreMajorAgree
+        ofPts += 1
+        if majorState.trend == intState.trend
+            got += 1
+    if scoreBreakStrength
+        ofPts += 1
+        if not na(intState.lastStrength) and intState.lastStrength >= strongBreakMult
+            got += 1
+    [ofPts, got]
+
+// All enabled points = A, one short = B, two short = C. Which grades can actually appear
+// depends on minScore: at the defaults (5 enabled, minScore 4) a C scores 3 and is rejected,
+// so only A and B ever show. Lowering minScore to 3 is what opens C up.
+gradeFor(int score, int ofPoints) =>
+    score >= ofPoints ? "A" : score >= ofPoints - 1 ? "B" : "C"
+
+bullHardOk = intState.trend == "up" and bullTouch.hit and not inRange and barstate.isconfirmed
+bearHardOk = intState.trend == "down" and bearTouch.hit and not inRange and barstate.isconfirmed
+
+var int    setupScoreVal = 0
+var int    setupOfVal    = 0
+var string setupGradeVal = na
+
+// Reset unconditionally every bar. These are `var`, so without this they latch the last
+// qualifying setup forever and read as "there is a setup right now" on every later bar.
+setupScoreVal := 0
+setupOfVal    := 0
+setupGradeVal := na
+
+[ofPtsLong, scoreLong]   = scoreTally(true)
+[ofPtsShort, scoreShort] = scoreTally(false)
+
+bullScore = bullHardOk ? scoreLong : 0
+bearScore = bearHardOk ? scoreShort : 0
+
+longSetup  = bullHardOk and bullScore >= minScore
+shortSetup = bearHardOk and bearScore >= minScore
+
+if longSetup
+    setupScoreVal := bullScore
+    setupOfVal    := ofPtsLong
+    setupGradeVal := gradeFor(bullScore, ofPtsLong)
+if shortSetup
+    setupScoreVal := bearScore
+    setupOfVal    := ofPtsShort
+    setupGradeVal := gradeFor(bearScore, ofPtsShort)
+
+// ============================================================
+// TRADE TARGETS
+// ============================================================
+type Targets
+    float p1
+    float p2
+    float p3
+    bool  liq1
+    bool  liq2
+    bool  liq3
+
+// Accumulator scan: returns the nearer of `curBest` and the best qualifying point in `pts`.
+// Called once per array because selecting between two arrays with a ternary is not something
+// to depend on in Pine. Only unbroken points qualify — a broken level is one price has already
+// closed through, so it is no longer the barrier a target is meant to represent.
+//
+// The liquidity tie-break is what implements the spec's deduplication rule: when two levels
+// sit within eqTol of each other, the EQH/EQL wins, because resting stops are what price is
+// actually travelling toward.
+scanArray(array<SwingPoint> pts, bool isLong, float floorPrice, float curBest, bool curLiq) =>
+    bestPrice = curBest
+    bestLiq   = curLiq
+    for p in pts
+        if not p.broken
+            beyond = isLong ? p.price > floorPrice : p.price < floorPrice
+            if beyond
+                withinTol = not na(bestPrice) and math.abs(p.price - bestPrice) <= eqTolMult * structAtr
+                nearer    = na(bestPrice) or (isLong ? p.price < bestPrice : p.price > bestPrice)
+                // The tie-break must work in BOTH directions, because bestBeyond always scans
+                // the major array before the internal one: `promote` takes a liquidity level
+                // that arrives second, and `keepLiq` stops a nearer plain level that arrives
+                // second from displacing one. With only the first, a major-tier EQH would be
+                // silently overwritten by any nearer internal-tier swing inside the tolerance.
+                promote = withinTol and p.liquidity and not bestLiq
+                keepLiq = withinTol and bestLiq and not p.liquidity
+                if (nearer and not keepLiq) or promote
+                    bestPrice := p.price
+                    bestLiq   := p.liquidity
+    [bestPrice, bestLiq]
+
+bestBeyond(bool isLong, float floorPrice) =>
+    bp = float(na)
+    bl = false
+    if isLong
+        [p1, q1] = scanArray(majorHighs, true, floorPrice, bp, bl)
+        bp := p1
+        bl := q1
+        [p2, q2] = scanArray(intHighs, true, floorPrice, bp, bl)
+        bp := p2
+        bl := q2
+    else
+        [p3, q3] = scanArray(majorLows, false, floorPrice, bp, bl)
+        bp := p3
+        bl := q3
+        [p4, q4] = scanArray(intLows, false, floorPrice, bp, bl)
+        bp := p4
+        bl := q4
+    [bp, bl]
+
+// Three structural targets, nearest first. Each search starts one tolerance beyond the level
+// just taken, which is what stops two levels within eqTol both being selected. Anything closer
+// to entry than minTargetR is skipped by the initial floor.
+//
+// Any target the structure cannot supply is filled at one further R beyond the last one, so a
+// trade always has three places to go and they are always in ascending order.
+selectTargets(bool isLong, float entryPrice, float risk) =>
+    prices = array.new<float>()
+    liqs   = array.new<bool>()
+    floorP = isLong ? entryPrice + minTargetR * risk : entryPrice - minTargetR * risk
+    for n = 1 to 3
+        [bp, bl] = bestBeyond(isLong, floorP)
+        if not na(bp)
+            array.push(prices, bp)
+            array.push(liqs, bl)
+            floorP := isLong ? bp + eqTolMult * structAtr : bp - eqTolMult * structAtr
+    // Seeded one R below the minimum-distance floor so the first fill increment lands exactly
+    // on it: with no structural targets at all the fills are minTargetR, +1R, +2R from entry.
+    lastP = array.size(prices) > 0 ? array.get(prices, array.size(prices) - 1) : (isLong ? entryPrice + (minTargetR - 1) * risk : entryPrice - (minTargetR - 1) * risk)
+    for n = 1 to 3
+        if array.size(prices) < 3
+            lastP := isLong ? lastP + risk : lastP - risk
+            array.push(prices, lastP)
+            array.push(liqs, false)
+    Targets.new(array.get(prices, 0), array.get(prices, 1), array.get(prices, 2), array.get(liqs, 0), array.get(liqs, 1), array.get(liqs, 2))
+
+// ============================================================
+// TRADE LIFECYCLE
+// ============================================================
+type Trade
+    string side
+    string grade
+    int    score
+    int    scoreOf
+    float  entry
+    float  stop
+    float  initialStop
+    float  zoneTop
+    float  zoneBottom
+    float  tp1
+    float  tp2
+    float  tp3
+    bool   liq1
+    bool   liq2
+    bool   liq3
+    int    openBar
+    int    tpHit
+    string closeReason
+    float  closePrice
+
+var Trade activeTrade = na
+
+tradeOpened   = false
+tradeClosed   = false
+targetJustHit = false
+
+var string openedSide = na
+openedSide := na
+
+// Whether there is a trade that has not closed. Written as nested `if`s, never as
+// `not na(activeTrade) and na(activeTrade.closeReason)`: Pine does not guarantee short-circuit
+// evaluation, and reading a field of a `na` object is a runtime error.
+tradeIsLive() =>
+    live = false
+    if not na(activeTrade)
+        if na(activeTrade.closeReason)
+            live := true
+    live
+
+// Newest unbroken swing price in one array, or na.
+newestUnbroken(array<SwingPoint> pts) =>
+    result = float(na)
+    if array.size(pts) > 0
+        for i = array.size(pts) - 1 to 0
+            p = array.get(pts, i)
+            if not p.broken
+                result := p.price
+                break
+    result
+
+// The trailing stop follows structure, so it can only move when a pivot confirms — which is
+// lookback bars after the fact. That lag is inherent to non-repainting pivots, not a defect.
+// The tier is chosen by picking between two float RESULTS, never between two arrays.
+trailAnchor(bool isLong) =>
+    useMajor = trailTierInput == "Major"
+    result = float(na)
+    if isLong
+        result := useMajor ? newestUnbroken(majorLows) : newestUnbroken(intLows)
+    else
+        result := useMajor ? newestUnbroken(majorHighs) : newestUnbroken(intHighs)
+    result
+
+// ---- exits, on confirmed bars only, stop first ----
+if barstate.isconfirmed and tradeIsLive()
+    isLong = activeTrade.side == "long"
+    stopHit = isLong ? low <= activeTrade.stop : high >= activeTrade.stop
+    if stopHit
+        // A bar that OPENS beyond the stop was never fillable at the stop. Recording the
+        // stop price would flatter every gapped exit — routine on auction opens and weekends.
+        activeTrade.closePrice  := isLong ? math.min(activeTrade.stop, open) : math.max(activeTrade.stop, open)
+        activeTrade.closeReason := "Stopped"
+        tradeClosed := true
+    else
+        if activeTrade.tpHit < 1 and (isLong ? high >= activeTrade.tp1 : low <= activeTrade.tp1)
+            activeTrade.tpHit := 1
+            activeTrade.stop  := activeTrade.entry
+            targetJustHit := true
+        if activeTrade.tpHit < 2 and (isLong ? high >= activeTrade.tp2 : low <= activeTrade.tp2)
+            activeTrade.tpHit := 2
+            targetJustHit := true
+        if activeTrade.tpHit < 3 and (isLong ? high >= activeTrade.tp3 : low <= activeTrade.tp3)
+            activeTrade.tpHit := 3
+            targetJustHit := true
+        if activeTrade.tpHit >= 3
+            activeTrade.closePrice  := activeTrade.tp3
+            activeTrade.closeReason := "Target"
+            tradeClosed := true
+        else
+            chochAgainst = isLong ? (intState.bearBreak and intState.lastType == "CHoCH") : (intState.bullBreak and intState.lastType == "CHoCH")
+            if chochAgainst
+                activeTrade.closePrice  := close
+                activeTrade.closeReason := "Invalidated"
+                tradeClosed := true
+            else if activeTrade.tpHit >= 1
+                anchor = trailAnchor(isLong)
+                if not na(anchor)
+                    candidate = isLong ? anchor - stopBufferMult * structAtr : anchor + stopBufferMult * structAtr
+                    if isLong ? candidate > activeTrade.stop : candidate < activeTrade.stop
+                        activeTrade.stop := candidate
+
+// ---- free the slot, never on the closing bar itself ----
+// Nested rather than `and`-chained, for the same reason tradeIsLive() is.
+if not na(activeTrade)
+    if not na(activeTrade.closeReason)
+        if not tradeClosed
+            activeTrade := na
+
+// ---- open ----
+canOpen = na(activeTrade)
+if canOpen and longSetup
+    zTop = bullTouch.top
+    zBot = bullTouch.bottom
+    st   = zBot - stopBufferMult * structAtr
+    if close > st
+        risk = close - st
+        tg   = selectTargets(true, close, risk)
+        activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na)
+        tradeOpened := true
+        openedSide  := "long"
+if na(activeTrade) and shortSetup and not longOnly
+    zTop = bearTouch.top
+    zBot = bearTouch.bottom
+    st   = zTop + stopBufferMult * structAtr
+    if close < st
+        risk = st - close
+        tg   = selectTargets(false, close, risk)
+        activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na)
+        tradeOpened := true
+        openedSide  := "short"
+
+// Open R, using initialStop always — the trailed stop would shrink the denominator and
+// overstate every result.
+tradeOpenR = float(na)
+if not na(activeTrade)
+    r = math.abs(activeTrade.entry - activeTrade.initialStop)
+    if r > 0
+        tradeOpenR := (activeTrade.side == "long" ? close - activeTrade.entry : activeTrade.entry - close) / r
+
+// ---- confluence signal markers (CONFLUENCE SIGNALS, continued) ----
+// The triangles now mark a trade opening, not "five conditions agreed". The old fired-latch
+// is gone: the trade state machine already suppresses re-entry, because only a FLAT slot can
+// open a trade.
+//
+// These read `openedSide`, not `activeTrade.side`, so no UDT field is dereferenced inside an
+// `and` — Pine does not guarantee short-circuit evaluation and a `na` object would error.
+bullishSignal = tradeOpened and openedSide == "long"
+// With Long Trades Only on, no short trade opens — but the setup still qualified and the user
+// still needs to see it. The marker fires on the suppressed setup too.
+bearishSignal = (tradeOpened and openedSide == "short") or (longOnly and shortSetup)
+
+plotshape(showSignalMarkers and bullishSignal, title = "Bullish Signal", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.small)
+plotshape(showSignalMarkers and bearishSignal, title = "Bearish Signal", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.small)
 
 // ============================================================
 // STRUCTURE RENDERING
@@ -495,6 +855,57 @@ if barstate.islast
         drawSwingRays(intHighs, true, true)
         drawSwingRays(intLows, true, true)
 
+// ============================================================
+// TRADE RENDERING
+// ============================================================
+// Same rule as the structure section: state redraws, events persist. The live trade's levels
+// are a claim about now and are rebuilt every last-bar pass; the result label is a thing that
+// happened at a bar and stays.
+var line[]  tradeLines  = array.new<line>()
+var label[] tradeLabels = array.new<label>()
+var box     tradeBox    = na
+
+tradeLevelLine(int openBar, float price, color col, string txt, bool dotted) =>
+    array.push(tradeLines, line.new(openBar, price, bar_index, price, extend = extend.right, color = col, style = dotted ? line.style_dotted : line.style_solid, width = 1))
+    array.push(tradeLabels, label.new(bar_index, price, txt, style = label.style_label_left, color = col, textcolor = color.white, size = size.tiny))
+    array.size(tradeLines)
+
+// One builder for all three target labels — price, R multiple, a liquidity note when the
+// level is an EQH/EQL, and a tick once reached.
+targetLabelText(int n, float price, bool isLiq, bool isLong, float entryPrice, float r, int tpHit) =>
+    rTxt   = r > 0 ? str.tostring(math.abs(price - entryPrice) / r, "0.0") : "0.0"
+    liqTxt = isLiq ? (isLong ? " · EQH" : " · EQL") : ""
+    hitTxt = tpHit >= n ? " ✓" : ""
+    "TP" + str.tostring(n) + " " + str.tostring(price, format.mintick) + " · " + rTxt + "R" + liqTxt + hitTxt
+
+if barstate.islast
+    for ln in tradeLines
+        line.delete(ln)
+    array.clear(tradeLines)
+    for lb in tradeLabels
+        label.delete(lb)
+    array.clear(tradeLabels)
+    box.delete(tradeBox)
+    if showTradeLevels and tradeIsLive()
+        isLong  = activeTrade.side == "long"
+        sideCol = isLong ? tradeLongColor : tradeShortColor
+        r       = math.abs(activeTrade.entry - activeTrade.initialStop)
+        tradeBox := box.new(activeTrade.openBar, activeTrade.zoneTop, bar_index, activeTrade.zoneBottom, border_color = sideCol, bgcolor = color.new(sideCol, 88))
+        array.push(tradeLabels, label.new(activeTrade.openBar, activeTrade.zoneTop, (isLong ? "LONG · " : "SHORT · ") + activeTrade.grade + " · " + str.tostring(activeTrade.score) + "/" + str.tostring(activeTrade.scoreOf), style = label.style_label_down, color = sideCol, textcolor = color.white, size = size.tiny))
+        tradeLevelLine(activeTrade.openBar, activeTrade.entry, sideCol, "Entry " + str.tostring(activeTrade.entry, format.mintick), false)
+        tradeLevelLine(activeTrade.openBar, activeTrade.stop, tradeStopColor, "SL " + str.tostring(activeTrade.stop, format.mintick), false)
+        tradeLevelLine(activeTrade.openBar, activeTrade.tp1, tradeTargetColor, targetLabelText(1, activeTrade.tp1, activeTrade.liq1, isLong, activeTrade.entry, r, activeTrade.tpHit), activeTrade.tpHit >= 1)
+        tradeLevelLine(activeTrade.openBar, activeTrade.tp2, tradeTargetColor, targetLabelText(2, activeTrade.tp2, activeTrade.liq2, isLong, activeTrade.entry, r, activeTrade.tpHit), activeTrade.tpHit >= 2)
+        tradeLevelLine(activeTrade.openBar, activeTrade.tp3, tradeTargetColor, targetLabelText(3, activeTrade.tp3, activeTrade.liq3, isLong, activeTrade.entry, r, activeTrade.tpHit), activeTrade.tpHit >= 3)
+
+// Persistent — deliberately not tracked in tradeLines/tradeLabels, so the redraw above never
+// deletes it. One label per closed trade is the whole track record.
+if tradeClosed and showTradeHistory and not na(activeTrade)
+    rr = math.abs(activeTrade.entry - activeTrade.initialStop)
+    realisedR = rr > 0 ? (activeTrade.side == "long" ? activeTrade.closePrice - activeTrade.entry : activeTrade.entry - activeTrade.closePrice) / rr : 0.0
+    resCol = realisedR >= 0 ? color.new(color.green, 20) : color.new(color.red, 20)
+    label.new(bar_index, activeTrade.closePrice, (realisedR >= 0 ? "+" : "") + str.tostring(realisedR, "0.0") + "R · " + activeTrade.closeReason, style = activeTrade.side == "long" ? label.style_label_up : label.style_label_down, color = resCol, textcolor = color.white, size = size.tiny)
+
 var table structPanel = na
 
 if barstate.islast
@@ -513,7 +924,10 @@ if barstate.islast
         trendText    = na(majorState.trend) ? "—" : str.upper(majorState.trend)
         trendCol     = majorState.trend == "up" ? color.lime : majorState.trend == "down" ? color.red : color.gray
         internalText = na(majorState.trend) or na(intState.trend) ? "—" : intState.trend == majorState.trend ? "aligned" : "pullback"
-        structPanel := table.new(panelPos, 2, 5, bgcolor = color.new(color.black, 80), border_width = 1)
+        tradeRows = 0
+        if showTradePanel and tradeIsLive()
+            tradeRows := 6
+        structPanel := table.new(panelPos, 2, 5 + tradeRows, bgcolor = color.new(color.black, 80), border_width = 1)
         table.cell(structPanel, 0, 0, "STRUCTURE", text_color = color.white, bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 1, 0, "", bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 0, 1, "Major trend", text_color = color.silver)
@@ -524,15 +938,57 @@ if barstate.islast
         table.cell(structPanel, 1, 3, evtText, text_color = color.white)
         table.cell(structPanel, 0, 4, "Internal", text_color = color.silver)
         table.cell(structPanel, 1, 4, internalText, text_color = color.aqua)
+        if tradeRows > 0
+            isLongT = activeTrade.side == "long"
+            rT      = math.abs(activeTrade.entry - activeTrade.initialStop)
+            rTxt    = rT > 0 ? str.tostring(tradeOpenR, "0.00") + "R" : "—"
+            table.cell(structPanel, 0, 5, "TRADE", text_color = color.white, bgcolor = color.new(color.gray, 50))
+            table.cell(structPanel, 1, 5, (isLongT ? "LONG" : "SHORT") + " · " + activeTrade.grade + " · " + str.tostring(activeTrade.score) + "/" + str.tostring(activeTrade.scoreOf), text_color = isLongT ? tradeLongColor : tradeShortColor, bgcolor = color.new(color.gray, 50))
+            table.cell(structPanel, 0, 6, "Entry", text_color = color.silver)
+            table.cell(structPanel, 1, 6, str.tostring(activeTrade.entry, format.mintick), text_color = color.white)
+            table.cell(structPanel, 0, 7, "Stop", text_color = color.silver)
+            table.cell(structPanel, 1, 7, str.tostring(activeTrade.stop, format.mintick) + (activeTrade.tpHit >= 1 ? " · BE+" : "") + " · " + str.tostring(rT > 0 ? math.abs(activeTrade.entry - activeTrade.stop) / rT : 0.0, "0.0") + "R", text_color = tradeStopColor)
+            table.cell(structPanel, 0, 8, "TP1 / TP2", text_color = color.silver)
+            table.cell(structPanel, 1, 8, str.tostring(activeTrade.tp1, format.mintick) + (activeTrade.tpHit >= 1 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp1 - activeTrade.entry) / rT : 0.0, "0.0") + "R)" + "  " + str.tostring(activeTrade.tp2, format.mintick) + (activeTrade.tpHit >= 2 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp2 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
+            table.cell(structPanel, 0, 9, "TP3", text_color = color.silver)
+            table.cell(structPanel, 1, 9, str.tostring(activeTrade.tp3, format.mintick) + (activeTrade.tpHit >= 3 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp3 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
+            table.cell(structPanel, 0, 10, "Open R", text_color = color.silver)
+            table.cell(structPanel, 1, 10, rTxt, text_color = tradeOpenR >= 0 ? color.lime : color.red)
 
 // ============================================================
 // ALERTS
 // ============================================================
-alertcondition(bullishSignal, title = "Bullish Confluence Signal", message = "Bullish confluence signal on {{ticker}} {{interval}}: structure + FVG/OB + killzone + RSI/MA aligned bullish.")
-alertcondition(bearishSignal, title = "Bearish Confluence Signal", message = "Bearish confluence signal on {{ticker}} {{interval}}: structure + FVG/OB + killzone + RSI/MA aligned bearish.")
+alertcondition(bullishSignal, title = "Bullish Trade Entry", message = "Long trade opened on {{ticker}} {{interval}} — see the chart for entry zone, stop and targets.")
+alertcondition(bearishSignal, title = "Bearish Trade Entry", message = "Bearish setup on {{ticker}} {{interval}} — short trade opened, or suppressed by Long Trades Only. See the chart.")
 alertcondition(bullishWatchZone, title = "Bullish Watch-Zone", message = "Watch: price approaching an unmitigated bullish FVG/OB during a killzone on {{ticker}} {{interval}}.")
 alertcondition(bearishWatchZone, title = "Bearish Watch-Zone", message = "Watch: price approaching an unmitigated bearish FVG/OB during a killzone on {{ticker}} {{interval}}.")
 
 majorEventFired = majorState.bullBreak or majorState.bearBreak
 alertcondition(majorEventFired and majorState.lastType == "CHoCH", title = "Major CHoCH (trend reversal)", message = "Major CHoCH on {{ticker}} {{interval}}: structure trend reversed.")
 alertcondition(majorEventFired and majorState.lastType == "BOS", title = "Major BOS (trend continuation)", message = "Major BOS on {{ticker}} {{interval}}: structure trend continued.")
+
+alertcondition(tradeOpened, title = "Trade Opened", message = "Trade opened on {{ticker}} {{interval}} — check the panel for side, grade, stop and targets.")
+alertcondition(targetJustHit, title = "Target Hit", message = "Take-profit target reached on {{ticker}} {{interval}}.")
+alertcondition(tradeClosed, title = "Trade Closed", message = "Trade closed on {{ticker}} {{interval}} — see the result label on the chart for R and reason.")
+
+// Data Window readouts — the verification surface. Values are gathered inside an `if` rather
+// than with ternaries on activeTrade, because reading a field of a `na` object is a runtime
+// error and Pine does not guarantee short-circuit evaluation.
+dbgTradeState = 0
+dbgTradeSide  = 0
+dbgTpHit      = 0
+dbgTradeStop  = float(na)
+if tradeIsLive()
+    dbgTradeState := 1
+    dbgTradeSide  := activeTrade.side == "long" ? 1 : -1
+    dbgTpHit      := activeTrade.tpHit
+    dbgTradeStop  := activeTrade.stop
+
+plot(dbgTradeState, "DBG Trade State (1=open)", display = display.data_window)
+plot(dbgTradeSide, "DBG Trade Side (1=long -1=short)", display = display.data_window)
+plot(dbgTpHit, "DBG TP Hit (0-3)", display = display.data_window)
+plot(dbgTradeStop, "DBG Trade Stop", display = display.data_window)
+plot(tradeOpenR, "DBG Open R", display = display.data_window)
+plot(setupScoreVal, "DBG Setup Score", display = display.data_window)
+plot(setupOfVal, "DBG Setup Of", display = display.data_window)
+plot(ofPtsLong, "DBG Enabled Points", display = display.data_window)
