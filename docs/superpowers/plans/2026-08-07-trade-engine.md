@@ -371,9 +371,16 @@ scanArray(array<SwingPoint> pts, bool isLong, float floorPrice, float curBest, b
         if not p.broken
             beyond = isLong ? p.price > floorPrice : p.price < floorPrice
             if beyond
-                nearer = na(bestPrice) or (isLong ? p.price < bestPrice : p.price > bestPrice)
-                tie    = not na(bestPrice) and p.liquidity and not bestLiq and math.abs(p.price - bestPrice) <= eqTolMult * structAtr
-                if nearer or tie
+                withinTol = not na(bestPrice) and math.abs(p.price - bestPrice) <= eqTolMult * structAtr
+                nearer    = na(bestPrice) or (isLong ? p.price < bestPrice : p.price > bestPrice)
+                // The tie-break must work in BOTH directions, because bestBeyond always scans
+                // the major array before the internal one: `promote` takes a liquidity level
+                // that arrives second, and `keepLiq` stops a nearer plain level that arrives
+                // second from displacing one. With only the first, a major-tier EQH would be
+                // silently overwritten by any nearer internal-tier swing inside the tolerance.
+                promote = withinTol and p.liquidity and not bestLiq
+                keepLiq = withinTol and bestLiq and not p.liquidity
+                if (nearer and not keepLiq) or promote
                     bestPrice := p.price
                     bestLiq   := p.liquidity
     [bestPrice, bestLiq]
@@ -434,7 +441,8 @@ Read the file back and confirm each, reporting the actual result:
 6. The fill loop's `lastP` starts at the last structural target when one exists, and at the `minTargetR` floor when none does. Quote the initialisation and explain why starting at `entryPrice` instead would place TP1 closer than `minTargetR`.
 7. The dedup mechanism is the `floorP` advance, not a separate pass. Quote the line that advances it and confirm it moves by `eqTolMult * structAtr` in the trade's direction.
 8. `scanArray` skips points where `p.broken` is true. Quote the guard.
-9. The `tie` term cannot dereference a `na` best: quote it and show which clause makes `bestPrice` non-`na` before `math.abs` is evaluated.
+9. The `withinTol` term cannot dereference a `na` best: quote it and show which clause makes `bestPrice` non-`na` before `math.abs` is evaluated.
+9b. **The liquidity tie-break works in both scan orders.** Trace two cases with tolerance 2 and floor 110: (i) `majorHighs` holds 113 flagged liquidity and `intHighs` holds a plain 112; (ii) the reverse. Both must yield 113 with `liq = true`. `bestBeyond` always scans major before internal, so an asymmetric tie-break would silently discard the liquidity level in case (i) — which is the whole point of tracking EQH/EQL.
 10. For a short, every comparison is inverted: `p.price < floorPrice`, `p.price > bestPrice`, `floorP` decreasing, `lastP` decreasing. Check all four and quote them.
 11. Nothing outside the new section changed. `git diff --stat` shows one file, insertions only, zero deletions.
 
