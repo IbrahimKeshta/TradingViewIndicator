@@ -125,32 +125,38 @@ if chochBearish
 // Mitigation rule for v1: a box is removed the first time price touches
 // any part of its range (not full fill) — simplest, most testable
 // interpretation of "auto-remove when mitigated."
-var box[] bullishFvgBoxes = array.new<box>()
-var box[] bearishFvgBoxes = array.new<box>()
-var label[] bullishFvgLabels = array.new<label>()
-var label[] bearishFvgLabels = array.new<label>()
+// One record per drawn zone. `tier` is "MAJOR" or "INTERNAL" for order blocks and ""
+// for fair value gaps, which have no tier. Keeping the box and its label in one object
+// is what removes the parallel-array indexing this file used to do.
+type Zone
+    box    b
+    label  lbl
+    string tier
+    string side
 
-mitigateBoxes(boxArray, labelArray, isBullish) =>
+var array<Zone> bullishFvgZones = array.new<Zone>()
+var array<Zone> bearishFvgZones = array.new<Zone>()
+
+mitigateZones(array<Zone> zones, bool isBullish) =>
     touchedAny = false
-    if array.size(boxArray) > 0
-        for i = array.size(boxArray) - 1 to 0
-            b = array.get(boxArray, i)
-            top = box.get_top(b)
-            bottom = box.get_bottom(b)
+    if array.size(zones) > 0
+        for i = array.size(zones) - 1 to 0
+            z = array.get(zones, i)
+            top = box.get_top(z.b)
+            bottom = box.get_bottom(z.b)
             touched = isBullish ? low <= top : high >= bottom
             if touched
-                box.delete(b)
-                array.remove(boxArray, i)
-                label.delete(array.get(labelArray, i))
-                array.remove(labelArray, i)
+                box.delete(z.b)
+                label.delete(z.lbl)
+                array.remove(zones, i)
                 touchedAny := true
             else
-                box.set_right(b, bar_index)
+                box.set_right(z.b, bar_index)
     touchedAny
 
 // must run before creation — a box must not be tested against its own creation bar
-bullishFvgTouched = mitigateBoxes(bullishFvgBoxes, bullishFvgLabels, true)
-bearishFvgTouched = mitigateBoxes(bearishFvgBoxes, bearishFvgLabels, false)
+bullishFvgTouched = mitigateZones(bullishFvgZones, true)
+bearishFvgTouched = mitigateZones(bearishFvgZones, false)
 
 bullishFvgDetected = barstate.isconfirmed and showFVG and low > high[2]
 bearishFvgDetected = barstate.isconfirmed and showFVG and high < low[2]
@@ -158,28 +164,26 @@ bearishFvgDetected = barstate.isconfirmed and showFVG and high < low[2]
 if bullishFvgDetected
     newBullishFvg = box.new(bar_index[2], low, bar_index, high[2], border_color = color.new(color.teal, 40), bgcolor = color.new(color.teal, 85))
     newBullishFvgLabel = label.new(x = bar_index[2], y = low, text = "FVG", color = color.new(color.teal, 40), style = label.style_label_up, textcolor = color.white, size = size.tiny)
-    array.push(bullishFvgBoxes, newBullishFvg)
-    array.push(bullishFvgLabels, newBullishFvgLabel)
-    if array.size(bullishFvgBoxes) > fvgMaxCount
-        box.delete(array.shift(bullishFvgBoxes))
-        label.delete(array.shift(bullishFvgLabels))
+    array.push(bullishFvgZones, Zone.new(newBullishFvg, newBullishFvgLabel, "", "bull"))
+    if array.size(bullishFvgZones) > fvgMaxCount
+        dropped = array.shift(bullishFvgZones)
+        box.delete(dropped.b)
+        label.delete(dropped.lbl)
 
 if bearishFvgDetected
     newBearishFvg = box.new(bar_index[2], low[2], bar_index, high, border_color = color.new(color.red, 40), bgcolor = color.new(color.red, 85))
     newBearishFvgLabel = label.new(x = bar_index[2], y = low[2], text = "FVG", color = color.new(color.red, 40), style = label.style_label_up, textcolor = color.white, size = size.tiny)
-    array.push(bearishFvgBoxes, newBearishFvg)
-    array.push(bearishFvgLabels, newBearishFvgLabel)
-    if array.size(bearishFvgBoxes) > fvgMaxCount
-        box.delete(array.shift(bearishFvgBoxes))
-        label.delete(array.shift(bearishFvgLabels))
+    array.push(bearishFvgZones, Zone.new(newBearishFvg, newBearishFvgLabel, "", "bear"))
+    if array.size(bearishFvgZones) > fvgMaxCount
+        dropped = array.shift(bearishFvgZones)
+        box.delete(dropped.b)
+        label.delete(dropped.lbl)
 
 // ============================================================
 // ORDER BLOCKS
 // ============================================================
-var box[] bullishObBoxes = array.new<box>()
-var box[] bearishObBoxes = array.new<box>()
-var label[] bullishObLabels = array.new<label>()
-var label[] bearishObLabels = array.new<label>()
+var array<Zone> bullishObZones = array.new<Zone>()
+var array<Zone> bearishObZones = array.new<Zone>()
 
 findOppositeCandle(isBullishBreak) =>
     idx = -1
@@ -195,30 +199,30 @@ findOppositeCandle(isBullishBreak) =>
     idx
 
 // must run before creation — a box must not be tested against its own creation bar
-bullishObTouched = mitigateBoxes(bullishObBoxes, bullishObLabels, true)
-bearishObTouched = mitigateBoxes(bearishObBoxes, bearishObLabels, false)
+bullishObTouched = mitigateZones(bullishObZones, true)
+bearishObTouched = mitigateZones(bearishObZones, false)
 
 if barstate.isconfirmed and showOB and (bosBullish or chochBullish)
     obOffset = findOppositeCandle(true)
     if obOffset >= 0
         newBullishOb = box.new(bar_index[obOffset], high[obOffset], bar_index, low[obOffset], border_color = color.new(color.blue, 40), bgcolor = color.new(color.blue, 85))
         newBullishObLabel = label.new(x = bar_index[obOffset], y = high[obOffset], text = "OB", color = color.new(color.blue, 40), style = label.style_label_up, textcolor = color.white, size = size.tiny)
-        array.push(bullishObBoxes, newBullishOb)
-        array.push(bullishObLabels, newBullishObLabel)
-        if array.size(bullishObBoxes) > obMaxCount
-            box.delete(array.shift(bullishObBoxes))
-            label.delete(array.shift(bullishObLabels))
+        array.push(bullishObZones, Zone.new(newBullishOb, newBullishObLabel, "INTERNAL", "bull"))
+        if array.size(bullishObZones) > obMaxCount
+            dropped = array.shift(bullishObZones)
+            box.delete(dropped.b)
+            label.delete(dropped.lbl)
 
 if barstate.isconfirmed and showOB and (bosBearish or chochBearish)
     obOffset = findOppositeCandle(false)
     if obOffset >= 0
         newBearishOb = box.new(bar_index[obOffset], high[obOffset], bar_index, low[obOffset], border_color = color.new(color.purple, 40), bgcolor = color.new(color.purple, 85))
         newBearishObLabel = label.new(x = bar_index[obOffset], y = high[obOffset], text = "OB", color = color.new(color.purple, 40), style = label.style_label_up, textcolor = color.white, size = size.tiny)
-        array.push(bearishObBoxes, newBearishOb)
-        array.push(bearishObLabels, newBearishObLabel)
-        if array.size(bearishObBoxes) > obMaxCount
-            box.delete(array.shift(bearishObBoxes))
-            label.delete(array.shift(bearishObLabels))
+        array.push(bearishObZones, Zone.new(newBearishOb, newBearishObLabel, "INTERNAL", "bear"))
+        if array.size(bearishObZones) > obMaxCount
+            dropped = array.shift(bearishObZones)
+            box.delete(dropped.b)
+            label.delete(dropped.lbl)
 
 // ============================================================
 // KILLZONE SESSIONS
@@ -260,22 +264,20 @@ plotshape(showSignalMarkers and bearishSignal, title = "Bearish Signal", style =
 // ============================================================
 atrValue = ta.atr(watchZoneAtrLength)
 
-nearestBoxDistance(boxArray) =>
+nearestZoneDistance(array<Zone> zones) =>
     minDist = float(na)
-    if array.size(boxArray) > 0
-        for i = 0 to array.size(boxArray) - 1
-            b = array.get(boxArray, i)
-            top = box.get_top(b)
-            bottom = box.get_bottom(b)
-            dist = close > top ? close - top : (close < bottom ? bottom - close : 0.0)
-            if na(minDist) or dist < minDist
-                minDist := dist
+    for z in zones
+        top = box.get_top(z.b)
+        bottom = box.get_bottom(z.b)
+        dist = close > top ? close - top : (close < bottom ? bottom - close : 0.0)
+        if na(minDist) or dist < minDist
+            minDist := dist
     minDist
 
-bullishFvgDist = nearestBoxDistance(bullishFvgBoxes)
-bullishObDist  = nearestBoxDistance(bullishObBoxes)
-bearishFvgDist = nearestBoxDistance(bearishFvgBoxes)
-bearishObDist  = nearestBoxDistance(bearishObBoxes)
+bullishFvgDist = nearestZoneDistance(bullishFvgZones)
+bullishObDist  = nearestZoneDistance(bullishObZones)
+bearishFvgDist = nearestZoneDistance(bearishFvgZones)
+bearishObDist  = nearestZoneDistance(bearishObZones)
 
 closestBullishDist = na(bullishFvgDist) ? bullishObDist : (na(bullishObDist) ? bullishFvgDist : math.min(bullishFvgDist, bullishObDist))
 closestBearishDist = na(bearishFvgDist) ? bearishObDist : (na(bearishObDist) ? bearishFvgDist : math.min(bearishFvgDist, bearishObDist))
