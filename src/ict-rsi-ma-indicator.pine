@@ -15,7 +15,6 @@ maTypeInput = input.string("EMA", "MA Type", options = ["EMA", "SMA"], group = "
 maLength    = input.int(50, "MA Length", minval = 1, group = "Moving Average")
 
 // ---------------- Market Structure ----------------
-pivotLookback = input.int(5, "Swing Pivot Lookback", minval = 2, group = "Market Structure")
 majorLookback     = input.int(20, "Major Swing Lookback", minval = 2, maxval = 100, group = "Market Structure", tooltip = "Bars either side a bar must dominate to count as a major swing. Major swings define the headline trend and the range test. Capped at 100 to stay inside Pine's default history buffer.")
 internalLookback  = input.int(5, "Internal Swing Lookback", minval = 2, maxval = 50, group = "Market Structure", tooltip = "The fine-grained tier: pullback state, internal order blocks, and entry-level detail. Signals and watch-zone alerts read this tier's trend.")
 maxSwings         = input.int(10, "Max Swings Kept (per side, per tier)", minval = 2, maxval = 30, group = "Market Structure", tooltip = "Broken swings are kept, not deleted — only this cap removes them, oldest first.")
@@ -32,6 +31,7 @@ fvgMaxCount = input.int(20, "Max Tracked FVGs (per side)", minval = 1, maxval = 
 showOB       = input.bool(true, "Show Order Blocks", group = "Order Blocks")
 obMaxCount   = input.int(20, "Max Tracked Order Blocks (per side)", minval = 1, maxval = 50, group = "Order Blocks")
 obSearchBars = input.int(50, "Order Block Backward Search (bars)", minval = 5, maxval = 200, group = "Order Blocks")
+showInternalOb = input.bool(true, "Include Internal-Tier Order Blocks", group = "Order Blocks", tooltip = "Internal-tier breaks are what produced every order block before the two-tier structure engine existed, so this defaults on. Turn it off to keep only order blocks born from major structural breaks.")
 
 // ---------------- Killzones ----------------
 sessionTimezone = input.string("Africa/Cairo", "Session Timezone", group = "Killzones")
@@ -69,62 +69,6 @@ rsiStateSuffix = rsiOverboughtState ? " OB" : rsiOversoldState ? " OS" : ""
 if showRsiReadout and barstate.islast
     label.delete(rsiReadoutLabel)
     rsiReadoutLabel := label.new(x = bar_index, y = high, text = "RSI " + str.tostring(rsiValue, "#.##") + rsiStateSuffix, color = color.new(color.blue, 80), style = label.style_label_down, textcolor = color.white, size = size.small)
-
-// ============================================================
-// MARKET STRUCTURE (swings, BOS, CHoCH)
-// ============================================================
-// Simplification for v1: tracks a single active swing high and a single
-// active swing low (the most recent confirmed pivot on each side), not a
-// full multi-level swing history.
-swingHigh = ta.pivothigh(high, pivotLookback, pivotLookback)
-swingLow  = ta.pivotlow(low, pivotLookback, pivotLookback)
-
-var float lastSwingHigh = na
-var float lastSwingLow  = na
-var int lastSwingHighBarIndex = na
-var int lastSwingLowBarIndex  = na
-var string structureBias = na
-
-if not na(swingHigh)
-    lastSwingHigh := swingHigh
-    lastSwingHighBarIndex := bar_index - pivotLookback
-if not na(swingLow)
-    lastSwingLow := swingLow
-    lastSwingLowBarIndex := bar_index - pivotLookback
-
-bosBullish   = false
-bosBearish   = false
-chochBullish = false
-chochBearish = false
-
-if barstate.isconfirmed and not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
-    if structureBias == "bearish"
-        chochBullish := true
-        line.new(lastSwingHighBarIndex, lastSwingHigh, bar_index, lastSwingHigh, color = color.new(color.green, 0), style = line.style_dotted)
-    else
-        bosBullish := true
-        line.new(lastSwingHighBarIndex, lastSwingHigh, bar_index, lastSwingHigh, color = color.new(color.lime, 0), style = line.style_dotted)
-    structureBias := "bullish"
-    lastSwingHigh := na
-
-if barstate.isconfirmed and not na(lastSwingLow) and close < lastSwingLow and close[1] >= lastSwingLow
-    if structureBias == "bullish"
-        chochBearish := true
-        line.new(lastSwingLowBarIndex, lastSwingLow, bar_index, lastSwingLow, color = color.new(color.maroon, 0), style = line.style_dotted)
-    else
-        bosBearish := true
-        line.new(lastSwingLowBarIndex, lastSwingLow, bar_index, lastSwingLow, color = color.new(color.red, 0), style = line.style_dotted)
-    structureBias := "bearish"
-    lastSwingLow := na
-
-if bosBullish
-    label.new(bar_index, low, "BOS", color = color.new(color.lime, 0), style = label.style_label_up, textcolor = color.black, size = size.tiny)
-if chochBullish
-    label.new(bar_index, low, "CHoCH", color = color.new(color.green, 0), style = label.style_label_up, textcolor = color.white, size = size.tiny)
-if bosBearish
-    label.new(bar_index, high, "BOS", color = color.new(color.red, 0), style = label.style_label_down, textcolor = color.white, size = size.tiny)
-if chochBearish
-    label.new(bar_index, high, "CHoCH", color = color.new(color.maroon, 0), style = label.style_label_down, textcolor = color.white, size = size.tiny)
 
 // ============================================================
 // STRUCTURE ENGINE (two-tier swings, BOS/CHoCH, range)
@@ -330,6 +274,23 @@ mitigateZones(array<Zone> zones, bool isBullish) =>
                 box.set_right(z.b, bar_index)
     touchedAny
 
+// Evicts the oldest zone of one tier when that tier exceeds its cap. Tier caps are separate
+// because internal breaks are far more frequent than major ones — under a shared cap they
+// would evict every major order block.
+pruneTier(array<Zone> zones, string tier, int maxCount) =>
+    count = 0
+    for z in zones
+        if z.tier == tier
+            count += 1
+    if count > maxCount
+        for i = 0 to array.size(zones) - 1
+            if array.get(zones, i).tier == tier
+                dropped = array.remove(zones, i)
+                box.delete(dropped.b)
+                label.delete(dropped.lbl)
+                break
+    count
+
 // must run before creation — a box must not be tested against its own creation bar
 bullishFvgTouched = mitigateZones(bullishFvgZones, true)
 bearishFvgTouched = mitigateZones(bearishFvgZones, false)
@@ -378,27 +339,27 @@ findOppositeCandle(isBullishBreak) =>
 bullishObTouched = mitigateZones(bullishObZones, true)
 bearishObTouched = mitigateZones(bearishObZones, false)
 
-if barstate.isconfirmed and showOB and (bosBullish or chochBullish)
+if barstate.isconfirmed and showOB and (majorState.bullBreak or (showInternalOb and intState.bullBreak))
+    obTier = majorState.bullBreak ? "MAJOR" : "INTERNAL"
+    obTrans = obTier == "MAJOR" ? 40 : 70
+    obFill = obTier == "MAJOR" ? 85 : 92
     obOffset = findOppositeCandle(true)
     if obOffset >= 0
-        newBullishOb = box.new(bar_index[obOffset], high[obOffset], bar_index, low[obOffset], border_color = color.new(color.blue, 40), bgcolor = color.new(color.blue, 85))
-        newBullishObLabel = label.new(x = bar_index[obOffset], y = high[obOffset], text = "OB", color = color.new(color.blue, 40), style = label.style_label_up, textcolor = color.white, size = size.tiny)
-        array.push(bullishObZones, Zone.new(newBullishOb, newBullishObLabel, "INTERNAL", "bull"))
-        if array.size(bullishObZones) > obMaxCount
-            dropped = array.shift(bullishObZones)
-            box.delete(dropped.b)
-            label.delete(dropped.lbl)
+        newBullishOb = box.new(bar_index[obOffset], high[obOffset], bar_index, low[obOffset], border_color = color.new(color.blue, obTrans), bgcolor = color.new(color.blue, obFill))
+        newBullishObLabel = label.new(x = bar_index[obOffset], y = high[obOffset], text = obTier == "MAJOR" ? "OB" : "ob", color = color.new(color.blue, obTrans), style = label.style_label_up, textcolor = color.white, size = size.tiny)
+        array.push(bullishObZones, Zone.new(newBullishOb, newBullishObLabel, obTier, "bull"))
+        pruneTier(bullishObZones, obTier, obMaxCount)
 
-if barstate.isconfirmed and showOB and (bosBearish or chochBearish)
+if barstate.isconfirmed and showOB and (majorState.bearBreak or (showInternalOb and intState.bearBreak))
+    obTier = majorState.bearBreak ? "MAJOR" : "INTERNAL"
+    obTrans = obTier == "MAJOR" ? 40 : 70
+    obFill = obTier == "MAJOR" ? 85 : 92
     obOffset = findOppositeCandle(false)
     if obOffset >= 0
-        newBearishOb = box.new(bar_index[obOffset], high[obOffset], bar_index, low[obOffset], border_color = color.new(color.purple, 40), bgcolor = color.new(color.purple, 85))
-        newBearishObLabel = label.new(x = bar_index[obOffset], y = high[obOffset], text = "OB", color = color.new(color.purple, 40), style = label.style_label_up, textcolor = color.white, size = size.tiny)
-        array.push(bearishObZones, Zone.new(newBearishOb, newBearishObLabel, "INTERNAL", "bear"))
-        if array.size(bearishObZones) > obMaxCount
-            dropped = array.shift(bearishObZones)
-            box.delete(dropped.b)
-            label.delete(dropped.lbl)
+        newBearishOb = box.new(bar_index[obOffset], high[obOffset], bar_index, low[obOffset], border_color = color.new(color.purple, obTrans), bgcolor = color.new(color.purple, obFill))
+        newBearishObLabel = label.new(x = bar_index[obOffset], y = high[obOffset], text = obTier == "MAJOR" ? "OB" : "ob", color = color.new(color.purple, obTrans), style = label.style_label_up, textcolor = color.white, size = size.tiny)
+        array.push(bearishObZones, Zone.new(newBearishOb, newBearishObLabel, obTier, "bear"))
+        pruneTier(bearishObZones, obTier, obMaxCount)
 
 // ============================================================
 // KILLZONE SESSIONS
@@ -416,16 +377,16 @@ bgcolor(newYorkActive ? color.new(color.orange, 90) : na, title = "New York Kill
 var bool bullishSignalFired = false
 var bool bearishSignalFired = false
 
-if chochBullish or bosBullish
+if intState.bullBreak
     bullishSignalFired := false
-if chochBearish or bosBearish
+if intState.bearBreak
     bearishSignalFired := false
 
 inBullishZone = bullishFvgTouched or bullishObTouched
 inBearishZone = bearishFvgTouched or bearishObTouched
 
-bullishSignal = structureBias == "bullish" and inBullishZone and killzoneActive and rsiBullishConfirm and maBullishConfirm and not bullishSignalFired and barstate.isconfirmed
-bearishSignal = structureBias == "bearish" and inBearishZone and killzoneActive and rsiBearishConfirm and maBearishConfirm and not bearishSignalFired and barstate.isconfirmed
+bullishSignal = intState.trend == "up" and inBullishZone and killzoneActive and rsiBullishConfirm and maBullishConfirm and not bullishSignalFired and barstate.isconfirmed
+bearishSignal = intState.trend == "down" and inBearishZone and killzoneActive and rsiBearishConfirm and maBearishConfirm and not bearishSignalFired and barstate.isconfirmed
 
 if bullishSignal
     bullishSignalFired := true
@@ -458,8 +419,8 @@ bearishObDist  = nearestZoneDistance(bearishObZones)
 closestBullishDist = na(bullishFvgDist) ? bullishObDist : (na(bullishObDist) ? bullishFvgDist : math.min(bullishFvgDist, bullishObDist))
 closestBearishDist = na(bearishFvgDist) ? bearishObDist : (na(bearishObDist) ? bearishFvgDist : math.min(bearishFvgDist, bearishObDist))
 
-bullishWatchZone = structureBias == "bullish" and killzoneActive and not inBullishZone and not na(closestBullishDist) and closestBullishDist <= atrValue * watchZoneAtrMult
-bearishWatchZone = structureBias == "bearish" and killzoneActive and not inBearishZone and not na(closestBearishDist) and closestBearishDist <= atrValue * watchZoneAtrMult
+bullishWatchZone = intState.trend == "up" and killzoneActive and not inBullishZone and not na(closestBullishDist) and closestBullishDist <= atrValue * watchZoneAtrMult
+bearishWatchZone = intState.trend == "down" and killzoneActive and not inBearishZone and not na(closestBearishDist) and closestBearishDist <= atrValue * watchZoneAtrMult
 
 // ============================================================
 // ALERTS
