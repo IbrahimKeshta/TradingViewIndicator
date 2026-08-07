@@ -31,6 +31,12 @@ Pine cannot share state across scripts. Blocks and their dependencies:
 | D | Signal engine — breakout signal, buy/sell zone, targets | A + B + C | active trade: entry, SL, TP |
 | E | Trade lifecycle — trailing stop, target hits, invalidation | D | live SL, trade status |
 
+> **This roadmap was revised on 2026-08-07**, after A shipped. B is not a block — nearest
+> support/resistance is a query over A's swing arrays, not a feature — and D and E are one state
+> machine, since a trade's levels and the management of those levels cannot be specified apart. Both are
+> absorbed into `2026-08-07-trade-engine-design.md`. C survives unchanged as optional confirmations.
+> The current sequence is **A → trade engine → C**.
+
 A is deliberately **unopinionated**: it records every break with its strength and filters nothing.
 Judgements about what is strong enough to trade belong to D. This is the reason displacement is not a
 condition of recording a break — if it were, a real break on a small candle would never enter the
