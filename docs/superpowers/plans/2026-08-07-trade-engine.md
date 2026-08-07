@@ -632,7 +632,14 @@ plotshape(showSignalMarkers and bullishSignal, title = "Bullish Signal", style =
 plotshape(showSignalMarkers and bearishSignal, title = "Bearish Signal", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.small)
 ```
 
-**The `TRADE LIFECYCLE` section must sit above this**, because `tradeOpened` and `activeTrade` are read here. Confirm the file order after editing.
+**Section order matters here, and the file is not laid out the way you might assume.** `CONFLUENCE SIGNALS` sits at roughly line 446, *before* `WATCH-ZONE HEADS-UP` — and every trade section was appended after the watch zone (`TRADE GATE` ~483, `TRADE TARGETS` ~545, `TRADE LIFECYCLE` ~627). So `bullishSignal` cannot stay where it is: it would read `tradeOpened` and `openedSide` about 180 lines before they are assigned, and Pine has no forward references.
+
+Split the section instead:
+
+- **`inBullishZone` / `inBearishZone` stay put.** The untouched watch-zone code immediately below depends on them.
+- **`bullishSignal`, `bearishSignal` and both `plotshape` calls move down**, to just after the `TRADE LIFECYCLE` section you added in Step 1 and before the `alertcondition` block that reads them.
+
+Confirm the finished file has no forward reference: every name must be assigned above its first read.
 
 - [ ] **Step 3: Verify by self-review**
 
@@ -785,6 +792,24 @@ alertcondition(tradeClosed, title = "Trade Closed", message = "Trade closed on {
 ```
 
 **`alertcondition` messages cannot interpolate script variables** — only TradingView's own `{{...}}` placeholders. The messages therefore point at the chart rather than claiming to carry the side, grade or R.
+
+- [ ] **Step 3b: Correct the two now-stale confluence alert messages**
+
+`bullishSignal` and `bearishSignal` changed meaning in Task 4 — from "five conditions agreed" to "a trade opened" — but the two oldest `alertcondition` messages still describe the old semantics and now mislead. Replace:
+
+```pinescript
+alertcondition(bullishSignal, title = "Bullish Confluence Signal", message = "Bullish confluence signal on {{ticker}} {{interval}}: structure + FVG/OB + killzone + RSI/MA aligned bullish.")
+alertcondition(bearishSignal, title = "Bearish Confluence Signal", message = "Bearish confluence signal on {{ticker}} {{interval}}: structure + FVG/OB + killzone + RSI/MA aligned bearish.")
+```
+
+with:
+
+```pinescript
+alertcondition(bullishSignal, title = "Bullish Trade Entry", message = "Long trade opened on {{ticker}} {{interval}} — see the chart for entry zone, stop and targets.")
+alertcondition(bearishSignal, title = "Bearish Trade Entry", message = "Short trade opened on {{ticker}} {{interval}} — see the chart for entry zone, stop and targets.")
+```
+
+The other four existing alerts — the two watch-zone and the two major-structure ones — are unchanged and still accurate.
 
 - [ ] **Step 4: Add the Data Window debug plots**
 
