@@ -6,7 +6,7 @@ into TradingView.
 
 | Script | What it does | Pane |
 |---|---|---|
-| [`src/ict-rsi-ma-indicator.pine`](src/ict-rsi-ma-indicator.pine) | Market structure, order blocks, fair value gaps and session killzones, combined with RSI and a moving average into a single confluence signal | On the price chart |
+| [`src/ict-rsi-ma-indicator.pine`](src/ict-rsi-ma-indicator.pine) | Market structure, order blocks, fair value gaps and session killzones, scored into graded trade setups with an entry zone, a stop, targets and a trailing stop | On the price chart |
 | [`src/gann-angles.pine`](src/gann-angles.pine) | Gann price levels (three modes) projected from an automatic or manual anchor, plus Gann time cycles | On the price chart |
 
 They are independent. Run either on its own, or both together.
@@ -122,27 +122,86 @@ coincidentally sit in a narrow band and read as consolidation when nothing of th
 | **Last event** | The most recent break: type, which tier, and its strength in ATR (e.g. `BOS · MAJOR · 1.4x`) |
 | **Internal** | `aligned` when both tiers agree; `pullback` when the small tier is moving against the big one — often the setup you want |
 
-## When a signal fires
+## The trade engine
 
-A triangle appears below (or above) the bar only when **all five** of these are true on a closed bar:
+A triangle no longer just means "conditions agreed" — it means **a trade opened**, with an entry
+zone, a stop, three targets and a stop that trails. One trade runs at a time; while it is open,
+further setups are ignored.
+
+![Annotated chart showing a long trade with its entry zone, stop, three targets, the trailing stop stepping up, and the result label at the close](docs/img/trade-anatomy.svg)
+
+### How a setup qualifies
+
+Two different kinds of condition, and the difference matters:
 
 ```mermaid
 flowchart LR
-    A["Internal trend<br/>is up / down"] --> G{"all five<br/>true?"}
-    B["Price just touched an<br/>unmitigated FVG or order block"] --> G
-    C["Inside a killzone"] --> G
-    D["RSI above 50<br/>/ below 50"] --> G
-    E["Price above the MA<br/>/ below the MA"] --> G
-    G -->|yes| S["Signal marker<br/>+ alert"]
-    G -->|no| W["Nothing"]
+    subgraph H["HARD — all four, or no trade"]
+        H1["Internal trend<br/>has a direction"]
+        H2["Price touched an unmitigated<br/>FVG or order block"]
+        H3["Not in a range"]
+        H4["Bar is closed"]
+    end
+    subgraph S["SCORED — one point each"]
+        S1["Killzone active"]
+        S2["RSI on side"]
+        S3["Price on side of MA"]
+        S4["Major trend agrees"]
+        S5["Break was strong"]
+    end
+    H --> G{"hard all met<br/>AND score &ge; minimum?"}
+    S --> G
+    G -->|yes| T["Trade opens<br/>graded A / B / C"]
+    G -->|no| N["Nothing"]
 ```
 
-Only one signal fires per structural leg — it re-arms when the next break happens, so you don't get
-the same idea five bars in a row.
+The hard four are absolute because without them there is nothing to compute — no direction means no
+side, and no zone means no entry price and no stop.
 
-> **Killzones gate every signal.** With both killzones switched off, or outside their hours, the
-> indicator is silent by design. If you trade other sessions, change the killzone hours to yours —
-> and check `Session Timezone`, which defaults to `Africa/Cairo`.
+**The score is out of however many points you switch on, not a fixed five.** That is deliberate.
+Killzones mean nothing on a single-session market like EGX, so if killzone were a mandatory veto the
+indicator would go permanently silent there. Switch the killzone point off and the panel reads `4/4`
+instead of `4/5` — the threshold adjusts rather than quietly loosening. If you turn off *both*
+killzone sessions but forget the score toggle, the point removes itself anyway.
+
+Set `Minimum Score` equal to the number of enabled points to get the strictest possible behaviour.
+
+### Entry, stop and targets
+
+| | Where it comes from |
+|---|---|
+| **Entry zone** | The FVG or order block price just touched — the range in which the setup is valid |
+| **Entry price** | The signal bar's close. Not the zone midpoint: the close is what a market order would actually have got |
+| **Stop** | The zone's far edge, plus an ATR buffer so an ordinary wick doesn't clip it |
+| **1R** | Entry minus stop. Every R figure on the chart uses the *initial* stop, never the trailed one |
+| **Targets** | The three nearest unbroken structure levels ahead, plus any EQH/EQL liquidity pool, each at least 1R away. If structure can't supply three, the rest fill at 1R/2R/3R |
+
+### How the stop moves
+
+1. **TP1 hit** → stop moves to entry. The trade can no longer lose.
+2. **After that** → it follows each newly confirmed swing low (for a long), from whichever tier you
+   pick in `Trailing Tier`. Internal trails tightly; Major gives the trade room.
+3. **It never moves backwards.**
+
+A trade closes when the stop is hit, when TP3 is reached, or when a **CHoCH** prints against it — you
+can be wrong structurally without price having to travel all the way to your stop.
+
+Two details that stop the results flattering themselves: if a bar's range spans both your stop and a
+target, the trade is recorded as **stopped** (a bar-by-bar script cannot know which came first, so it
+assumes the unfavourable one); and if a bar *gaps* through the stop, the exit is recorded at the open,
+not at the stop price.
+
+### Reading the trade panel
+
+The structure panel grows extra rows while a trade is live: the setup and its grade with the score
+fraction, entry, the current stop with its R distance, all three targets with R multiples and tick
+marks as they are reached, and the trade's open R.
+
+When a trade closes it leaves a single label at the exit bar — `+2.5R · Target`, `−1.0R · Stopped`.
+Scroll back and those labels are your track record.
+
+> **On cash-equity markets where you can't short**, set `Long Trades Only`. Bearish setups still mark
+> and still alert, so you keep the information — they just don't open a trade.
 
 ## Alerts
 
@@ -150,10 +209,16 @@ Set these up with the alarm-clock icon → *Condition: ICT + RSI/MA Confluence*.
 
 | Alert | Fires when |
 |---|---|
-| Bullish / Bearish Confluence Signal | All five signal conditions agree |
+| Bullish / Bearish Trade Entry | A trade opened — or, for the bearish one, a short setup qualified but was suppressed by `Long Trades Only` |
+| Trade Opened | Any trade opened; check the panel for side, grade, stop and targets |
+| Target Hit | A take-profit level was reached |
+| Trade Closed | The trade ended — the result label on the chart carries the R and the reason |
 | Bullish / Bearish Watch-Zone | Price is approaching an unmitigated zone during a killzone — a heads-up, not a signal |
 | Major CHoCH | The major trend reversed |
 | Major BOS | The major trend continued |
+
+TradingView alert messages can't carry script values, so they point you at the chart rather than
+claiming to quote a price or an R figure.
 
 ## Settings
 
@@ -169,8 +234,25 @@ Set these up with the alarm-clock icon → *Condition: ICT + RSI/MA Confluence*.
 | Range Band (× ATR) | 2.5 | How tight the four swings must be to call it a range. Lower = stricter |
 | Range Lookback (bars) | 100 | How recent those swings must be |
 
+**Trade Engine** — the gate and the trade.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Minimum Score | 4 | Points needed, out of however many are enabled below |
+| Score: Killzone | on | **Turn off on single-session markets like EGX** |
+| Score: RSI / Moving Average | on | Whether each confirms the trade's direction |
+| Score: Major Trend Agreement | on | Whether the major tier agrees with the internal one |
+| Score: Break Strength | on | Whether the break that set up the trade was a big candle |
+| Strong Break (× ATR) | 1.0 | How big that candle's body must be to earn the point |
+| Stop Buffer (× ATR) | 0.25 | How far beyond the zone edge the stop sits |
+| Minimum Target Distance (R) | 1.0 | Structural levels closer than this are skipped |
+| Trailing Tier | Internal | Which tier's swings the stop trails behind |
+| Long Trades Only | off | For markets where you can't short |
+
 **Structure Display** — what gets drawn. Internal rays and internal break lines are **off** by
-default; on a fast timeframe they are near-continuous. Turn them on when you want entry-level detail.
+default; on a fast timeframe they are near-continuous. Leave internal break lines off if you want a
+long trade history to survive — their labels share the chart's 500-label budget with your result
+labels.
 
 **Fair Value Gaps / Order Blocks** — `Max Tracked` caps how many are kept per side (order blocks: per
 side *and* per tier). `Include Internal-Tier Order Blocks` is on by default; turning it off leaves
@@ -262,8 +344,9 @@ chart a major lookback of 20 finds very few swings; on a 1-minute chart it finds
 chart looks wrong, this is almost always why.
 
 **These are decision-support tools, not a strategy.** Neither script backtests, sizes a position, or
-places an order. No indicator knows the future, and confluence between five lagging measurements is
-still five lagging measurements. Nothing here is financial advice.
+places an order. The trade engine computes levels and records what would have happened; it does not
+size a position and it has no idea what your account can absorb. No indicator knows the future, and
+confluence between several lagging measurements is still lagging. Nothing here is financial advice.
 
 ---
 
