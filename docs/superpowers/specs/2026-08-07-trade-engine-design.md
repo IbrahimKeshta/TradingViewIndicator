@@ -167,7 +167,14 @@ resting stop-losses and price is actively drawn to them, which is why block A re
 Selection, in order:
 
 1. **Deduplicate.** Two candidates within `eqTol × ATR` of each other are the same level. Keep the
-   `liquidity` one; failing that, the major-tier one.
+   `liquidity` one.
+
+   An earlier draft also said "failing that, the major-tier one." That is not implementable as
+   written: `SwingPoint` carries no tier field — tier is expressed by *which array* holds the point —
+   so the scan would need a third argument threaded through purely to break ties between two equally
+   ordinary levels a fraction of an ATR apart. The liquidity preference is the one that matters,
+   because it is the one that changes where price is actually headed. Requirement dropped rather than
+   left as a silent gap.
 2. **Filter by distance.** Discard anything closer to entry than `minR × risk` (default 1.0). A target
    0.3R away is a winner on paper and not worth the spread.
 3. **Take the three nearest.**
