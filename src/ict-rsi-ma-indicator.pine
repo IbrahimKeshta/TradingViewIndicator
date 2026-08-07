@@ -580,9 +580,16 @@ scanArray(array<SwingPoint> pts, bool isLong, float floorPrice, float curBest, b
         if not p.broken
             beyond = isLong ? p.price > floorPrice : p.price < floorPrice
             if beyond
-                nearer = na(bestPrice) or (isLong ? p.price < bestPrice : p.price > bestPrice)
-                tie    = not na(bestPrice) and p.liquidity and not bestLiq and math.abs(p.price - bestPrice) <= eqTolMult * structAtr
-                if nearer or tie
+                withinTol = not na(bestPrice) and math.abs(p.price - bestPrice) <= eqTolMult * structAtr
+                nearer    = na(bestPrice) or (isLong ? p.price < bestPrice : p.price > bestPrice)
+                // The tie-break must work in BOTH directions, because bestBeyond always scans
+                // the major array before the internal one: `promote` takes a liquidity level
+                // that arrives second, and `keepLiq` stops a nearer plain level that arrives
+                // second from displacing one. With only the first, a major-tier EQH would be
+                // silently overwritten by any nearer internal-tier swing inside the tolerance.
+                promote = withinTol and p.liquidity and not bestLiq
+                keepLiq = withinTol and bestLiq and not p.liquidity
+                if (nearer and not keepLiq) or promote
                     bestPrice := p.price
                     bestLiq   := p.liquidity
     [bestPrice, bestLiq]
