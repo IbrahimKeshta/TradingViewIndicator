@@ -90,10 +90,10 @@ if showRsiReadout and barstate.islast
 type SwingPoint
     float  price
     int    bar
-    string class      // "HH" | "HL" | "LH" | "LL" | "EQH" | "EQL"; na for the first point on a side
+    string kind       // "HH" | "HL" | "LH" | "LL" | "EQH" | "EQL"; na for the first point on a side
     bool   broken
     int    brokenBar
-    bool   liquidity  // true when class is EQH or EQL — resting stops, a target for later blocks
+    bool   liquidity  // true when kind is EQH or EQL — resting stops, a target for later blocks
 
 type TierState
     string trend           // "up" | "down" | na until the first break
@@ -453,9 +453,9 @@ var label[] structLabels = array.new<label>()
 
 drawSwingTags(array<SwingPoint> points, bool isHigh) =>
     for p in points
-        if not na(p.class)
+        if not na(p.kind)
             tagCol = p.liquidity ? liquidityTagColor : majorTagColor
-            array.push(structLabels, label.new(p.bar, p.price, p.class, style = isHigh ? label.style_label_down : label.style_label_up, color = tagCol, textcolor = color.white, size = size.tiny))
+            array.push(structLabels, label.new(p.bar, p.price, p.kind, style = isHigh ? label.style_label_down : label.style_label_up, color = tagCol, textcolor = color.white, size = size.tiny))
     array.size(structLabels)
 
 drawSwingRays(array<SwingPoint> points, bool dotted, bool faded) =>
