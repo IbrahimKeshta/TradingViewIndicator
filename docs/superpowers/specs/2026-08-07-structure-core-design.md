@@ -1,7 +1,7 @@
 # Structure Core — Design
 
 **Date:** 2026-08-07
-**Status:** Approved for planning — not yet implemented
+**Status:** Implemented on `feat/structure-core` (`dd7e485`..`1bb60db`) — TradingView verification pending
 **File:** `src/ict-rsi-ma-indicator.pine`
 **Block:** A of a five-block roadmap (see *Roadmap context*)
 
