@@ -268,6 +268,14 @@ type Zone
     string tier
     string side
 
+// What a mitigation pass found, filled in by mitigateZones before the zone is deleted.
+// Reset every bar — a stale hit would place a stop against a zone price left long ago.
+type Touch
+    bool   hit
+    float  top
+    float  bottom
+    string tier
+
 var array<Zone> bullishFvgZones = array.new<Zone>()
 var array<Zone> bearishFvgZones = array.new<Zone>()
 
@@ -278,7 +286,9 @@ var array<Zone> bearishFvgZones = array.new<Zone>()
 // any part of its range (not full fill) — simplest, most testable
 // interpretation of "auto-remove when mitigated."
 
-mitigateZones(array<Zone> zones, bool isBullish) =>
+// Records the FIRST touched zone into `t`. The loop runs newest-to-oldest, so that is the
+// most recently formed zone — the one price is reacting to now, not a stale one below it.
+mitigateZones(array<Zone> zones, bool isBullish, Touch t) =>
     touchedAny = false
     if array.size(zones) > 0
         for i = array.size(zones) - 1 to 0
@@ -287,6 +297,11 @@ mitigateZones(array<Zone> zones, bool isBullish) =>
             bottom = box.get_bottom(z.b)
             touched = isBullish ? low <= top : high >= bottom
             if touched
+                if not t.hit
+                    t.hit    := true
+                    t.top    := top
+                    t.bottom := bottom
+                    t.tier   := z.tier
                 box.delete(z.b)
                 label.delete(z.lbl)
                 array.remove(zones, i)
@@ -313,8 +328,20 @@ pruneTier(array<Zone> zones, string tier, int maxCount) =>
     count
 
 // must run before creation — a box must not be tested against its own creation bar
-bullishFvgTouched = mitigateZones(bullishFvgZones, true)
-bearishFvgTouched = mitigateZones(bearishFvgZones, false)
+var Touch bullTouch = Touch.new(false, na, na, na)
+var Touch bearTouch = Touch.new(false, na, na, na)
+
+bullTouch.hit    := false
+bullTouch.top    := na
+bullTouch.bottom := na
+bullTouch.tier   := na
+bearTouch.hit    := false
+bearTouch.top    := na
+bearTouch.bottom := na
+bearTouch.tier   := na
+
+bullishFvgTouched = mitigateZones(bullishFvgZones, true, bullTouch)
+bearishFvgTouched = mitigateZones(bearishFvgZones, false, bearTouch)
 
 bullishFvgDetected = barstate.isconfirmed and showFVG and low > high[2]
 bearishFvgDetected = barstate.isconfirmed and showFVG and high < low[2]
@@ -357,8 +384,11 @@ findOppositeCandle(isBullishBreak) =>
     idx
 
 // must run before creation — a box must not be tested against its own creation bar
-bullishObTouched = mitigateZones(bullishObZones, true)
-bearishObTouched = mitigateZones(bearishObZones, false)
+// Order blocks pass the same Touch objects as the FVGs above. Because mitigateZones only
+// writes when `hit` is still false, an FVG touched earlier this bar keeps its bounds and
+// the order block does not overwrite it.
+bullishObTouched = mitigateZones(bullishObZones, true, bullTouch)
+bearishObTouched = mitigateZones(bearishObZones, false, bearTouch)
 
 if barstate.isconfirmed and showOB and (majorState.bullBreak or (showInternalOb and intState.bullBreak))
     obTier = majorState.bullBreak ? "MAJOR" : "INTERNAL"
