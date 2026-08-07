@@ -445,27 +445,13 @@ bgcolor(newYorkActive ? color.new(color.orange, 90) : na, title = "New York Kill
 // ============================================================
 // CONFLUENCE SIGNALS
 // ============================================================
-var bool bullishSignalFired = false
-var bool bearishSignalFired = false
-
-if intState.bullBreak
-    bullishSignalFired := false
-if intState.bearBreak
-    bearishSignalFired := false
-
+// inBullishZone/inBearishZone stay here (needed by WATCH-ZONE HEADS-UP just below). The
+// bullishSignal/bearishSignal assignment and its plotshape calls now live after TRADE
+// LIFECYCLE instead, because they read tradeOpened/openedSide, which TRADE LIFECYCLE sets —
+// Pine v6 has no forward references, so they cannot be assigned here and read from a section
+// defined later in the file.
 inBullishZone = bullishFvgTouched or bullishObTouched
 inBearishZone = bearishFvgTouched or bearishObTouched
-
-bullishSignal = intState.trend == "up" and inBullishZone and killzoneActive and rsiBullishConfirm and maBullishConfirm and not bullishSignalFired and barstate.isconfirmed
-bearishSignal = intState.trend == "down" and inBearishZone and killzoneActive and rsiBearishConfirm and maBearishConfirm and not bearishSignalFired and barstate.isconfirmed
-
-if bullishSignal
-    bullishSignalFired := true
-if bearishSignal
-    bearishSignalFired := true
-
-plotshape(showSignalMarkers and bullishSignal, title = "Bullish Signal", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.small)
-plotshape(showSignalMarkers and bearishSignal, title = "Bearish Signal", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.small)
 
 // ============================================================
 // WATCH-ZONE HEADS-UP
@@ -636,6 +622,161 @@ selectTargets(bool isLong, float entryPrice, float risk) =>
             array.push(prices, lastP)
             array.push(liqs, false)
     Targets.new(array.get(prices, 0), array.get(prices, 1), array.get(prices, 2), array.get(liqs, 0), array.get(liqs, 1), array.get(liqs, 2))
+
+// ============================================================
+// TRADE LIFECYCLE
+// ============================================================
+type Trade
+    string side
+    string grade
+    int    score
+    int    scoreOf
+    float  entry
+    float  stop
+    float  initialStop
+    float  zoneTop
+    float  zoneBottom
+    float  tp1
+    float  tp2
+    float  tp3
+    bool   liq1
+    bool   liq2
+    bool   liq3
+    int    openBar
+    int    tpHit
+    string closeReason
+    float  closePrice
+
+var Trade activeTrade = na
+
+tradeOpened   = false
+tradeClosed   = false
+targetJustHit = false
+
+var string openedSide = na
+openedSide := na
+
+// Whether there is a trade that has not closed. Written as nested `if`s, never as
+// `not na(activeTrade) and na(activeTrade.closeReason)`: Pine does not guarantee short-circuit
+// evaluation, and reading a field of a `na` object is a runtime error.
+tradeIsLive() =>
+    live = false
+    if not na(activeTrade)
+        if na(activeTrade.closeReason)
+            live := true
+    live
+
+// Newest unbroken swing price in one array, or na.
+newestUnbroken(array<SwingPoint> pts) =>
+    result = float(na)
+    if array.size(pts) > 0
+        for i = array.size(pts) - 1 to 0
+            p = array.get(pts, i)
+            if not p.broken
+                result := p.price
+                break
+    result
+
+// The trailing stop follows structure, so it can only move when a pivot confirms — which is
+// lookback bars after the fact. That lag is inherent to non-repainting pivots, not a defect.
+// The tier is chosen by picking between two float RESULTS, never between two arrays.
+trailAnchor(bool isLong) =>
+    useMajor = trailTierInput == "Major"
+    result = float(na)
+    if isLong
+        result := useMajor ? newestUnbroken(majorLows) : newestUnbroken(intLows)
+    else
+        result := useMajor ? newestUnbroken(majorHighs) : newestUnbroken(intHighs)
+    result
+
+// ---- exits, on confirmed bars only, stop first ----
+if barstate.isconfirmed and tradeIsLive()
+    isLong = activeTrade.side == "long"
+    stopHit = isLong ? low <= activeTrade.stop : high >= activeTrade.stop
+    if stopHit
+        // A bar that OPENS beyond the stop was never fillable at the stop. Recording the
+        // stop price would flatter every gapped exit — routine on auction opens and weekends.
+        activeTrade.closePrice  := isLong ? math.min(activeTrade.stop, open) : math.max(activeTrade.stop, open)
+        activeTrade.closeReason := "Stopped"
+        tradeClosed := true
+    else
+        if activeTrade.tpHit < 1 and (isLong ? high >= activeTrade.tp1 : low <= activeTrade.tp1)
+            activeTrade.tpHit := 1
+            activeTrade.stop  := activeTrade.entry
+            targetJustHit := true
+        if activeTrade.tpHit < 2 and (isLong ? high >= activeTrade.tp2 : low <= activeTrade.tp2)
+            activeTrade.tpHit := 2
+            targetJustHit := true
+        if activeTrade.tpHit < 3 and (isLong ? high >= activeTrade.tp3 : low <= activeTrade.tp3)
+            activeTrade.tpHit := 3
+            targetJustHit := true
+        if activeTrade.tpHit >= 3
+            activeTrade.closePrice  := activeTrade.tp3
+            activeTrade.closeReason := "Target"
+            tradeClosed := true
+        else
+            chochAgainst = isLong ? (intState.bearBreak and intState.lastType == "CHoCH") : (intState.bullBreak and intState.lastType == "CHoCH")
+            if chochAgainst
+                activeTrade.closePrice  := close
+                activeTrade.closeReason := "Invalidated"
+                tradeClosed := true
+            else if activeTrade.tpHit >= 1
+                anchor = trailAnchor(isLong)
+                if not na(anchor)
+                    candidate = isLong ? anchor - stopBufferMult * structAtr : anchor + stopBufferMult * structAtr
+                    if isLong ? candidate > activeTrade.stop : candidate < activeTrade.stop
+                        activeTrade.stop := candidate
+
+// ---- free the slot, never on the closing bar itself ----
+// Nested rather than `and`-chained, for the same reason tradeIsLive() is.
+if not na(activeTrade)
+    if not na(activeTrade.closeReason)
+        if not tradeClosed
+            activeTrade := na
+
+// ---- open ----
+canOpen = na(activeTrade)
+if canOpen and longSetup
+    zTop = bullTouch.top
+    zBot = bullTouch.bottom
+    st   = zBot - stopBufferMult * structAtr
+    if close > st
+        risk = close - st
+        tg   = selectTargets(true, close, risk)
+        activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na)
+        tradeOpened := true
+        openedSide  := "long"
+if canOpen and shortSetup and not longOnly
+    zTop = bearTouch.top
+    zBot = bearTouch.bottom
+    st   = zTop + stopBufferMult * structAtr
+    if close < st
+        risk = st - close
+        tg   = selectTargets(false, close, risk)
+        activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na)
+        tradeOpened := true
+        openedSide  := "short"
+
+// Open R, using initialStop always — the trailed stop would shrink the denominator and
+// overstate every result.
+tradeOpenR = float(na)
+if not na(activeTrade)
+    r = math.abs(activeTrade.entry - activeTrade.initialStop)
+    if r > 0
+        tradeOpenR := (activeTrade.side == "long" ? close - activeTrade.entry : activeTrade.entry - close) / r
+
+// ---- confluence signal markers (CONFLUENCE SIGNALS, continued) ----
+// The triangles now mark a trade opening, not "five conditions agreed". The old fired-latch
+// is gone: the trade state machine already suppresses re-entry, because only a FLAT slot can
+// open a trade.
+//
+// These read `openedSide`, not `activeTrade.side`, so no UDT field is dereferenced inside an
+// `and` — Pine does not guarantee short-circuit evaluation and a `na` object would error.
+bullishSignal = tradeOpened and openedSide == "long"
+bearishSignal = tradeOpened and openedSide == "short"
+
+plotshape(showSignalMarkers and bullishSignal, title = "Bullish Signal", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.small)
+plotshape(showSignalMarkers and bearishSignal, title = "Bearish Signal", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.small)
 
 // ============================================================
 // STRUCTURE RENDERING
