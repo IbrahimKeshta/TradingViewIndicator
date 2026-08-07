@@ -685,6 +685,14 @@ tradeLevelLine(float price, color col, string txt, bool dotted) =>
     array.push(tradeLabels, label.new(bar_index, price, txt, style = label.style_label_left, color = col, textcolor = color.white, size = size.tiny))
     array.size(tradeLines)
 
+// One builder for all three target labels — price, R multiple, a liquidity note when the
+// level is an EQH/EQL, and a tick once reached.
+targetLabelText(int n, float price, bool isLiq, bool isLong, float entryPrice, float r, int tpHit) =>
+    rTxt   = r > 0 ? str.tostring(math.abs(price - entryPrice) / r, "0.0") : "0.0"
+    liqTxt = isLiq ? (isLong ? " · EQH" : " · EQL") : ""
+    hitTxt = tpHit >= n ? " ✓" : ""
+    "TP" + str.tostring(n) + " " + str.tostring(price, format.mintick) + " · " + rTxt + "R" + liqTxt + hitTxt
+
 if barstate.islast
     for ln in tradeLines
         line.delete(ln)
@@ -701,12 +709,9 @@ if barstate.islast
         array.push(tradeLabels, label.new(activeTrade.openBar, activeTrade.zoneTop, (isLong ? "LONG · " : "SHORT · ") + activeTrade.grade + " · " + str.tostring(activeTrade.score) + "/" + str.tostring(activeTrade.scoreOf), style = label.style_label_down, color = sideCol, textcolor = color.white, size = size.tiny))
         tradeLevelLine(activeTrade.entry, sideCol, "Entry " + str.tostring(activeTrade.entry, format.mintick), false)
         tradeLevelLine(activeTrade.stop, tradeStopColor, "SL " + str.tostring(activeTrade.stop, format.mintick), false)
-        tp1Txt = "TP1 " + str.tostring(activeTrade.tp1, format.mintick) + " · " + str.tostring(r > 0 ? math.abs(activeTrade.tp1 - activeTrade.entry) / r : 0.0, "0.0") + "R" + (activeTrade.liq1 ? (isLong ? " · EQH" : " · EQL") : "") + (activeTrade.tpHit >= 1 ? " ✓" : "")
-        tp2Txt = "TP2 " + str.tostring(activeTrade.tp2, format.mintick) + " · " + str.tostring(r > 0 ? math.abs(activeTrade.tp2 - activeTrade.entry) / r : 0.0, "0.0") + "R" + (activeTrade.liq2 ? (isLong ? " · EQH" : " · EQL") : "") + (activeTrade.tpHit >= 2 ? " ✓" : "")
-        tp3Txt = "TP3 " + str.tostring(activeTrade.tp3, format.mintick) + " · " + str.tostring(r > 0 ? math.abs(activeTrade.tp3 - activeTrade.entry) / r : 0.0, "0.0") + "R" + (activeTrade.liq3 ? (isLong ? " · EQH" : " · EQL") : "") + (activeTrade.tpHit >= 3 ? " ✓" : "")
-        tradeLevelLine(activeTrade.tp1, tradeTargetColor, tp1Txt, activeTrade.tpHit >= 1)
-        tradeLevelLine(activeTrade.tp2, tradeTargetColor, tp2Txt, activeTrade.tpHit >= 2)
-        tradeLevelLine(activeTrade.tp3, tradeTargetColor, tp3Txt, activeTrade.tpHit >= 3)
+        tradeLevelLine(activeTrade.tp1, tradeTargetColor, targetLabelText(1, activeTrade.tp1, activeTrade.liq1, isLong, activeTrade.entry, r, activeTrade.tpHit), activeTrade.tpHit >= 1)
+        tradeLevelLine(activeTrade.tp2, tradeTargetColor, targetLabelText(2, activeTrade.tp2, activeTrade.liq2, isLong, activeTrade.entry, r, activeTrade.tpHit), activeTrade.tpHit >= 2)
+        tradeLevelLine(activeTrade.tp3, tradeTargetColor, targetLabelText(3, activeTrade.tp3, activeTrade.liq3, isLong, activeTrade.entry, r, activeTrade.tpHit), activeTrade.tpHit >= 3)
 
 // Persistent — deliberately not tracked in tradeLines/tradeLabels, so the redraw above never
 // deletes it. One label per closed trade is the whole track record.
@@ -805,7 +810,7 @@ plot(enabledPoints(), "DBG Enabled Points", display = display.data_window)
 
 Read the file back and confirm each, reporting the actual result:
 
-1. `tradeLevelLine` ends on an expression (`array.size(tradeLines)`).
+1. `tradeLevelLine` ends on an expression (`array.size(tradeLines)`), and `targetLabelText` ends on its concatenated string. The three target labels are built by **one** shared function, not three copied expressions.
 2. The redraw block deletes and clears `tradeLines`, `tradeLabels` **and** `tradeBox` before drawing anything. Quote the order.
 3. The result label is **not** pushed into `tradeLines` or `tradeLabels`. Confirm `label.new` there is a bare call with no `array.push`. Tracking it would erase the entire history on the next redraw.
 4. The result-label block is at global scope, not inside `if barstate.islast` — it must run on the bar the trade closes.
