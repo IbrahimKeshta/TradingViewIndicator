@@ -129,7 +129,7 @@ Each event records:
 | `tier` | `"MAJOR"` or `"INTERNAL"` |
 | `side` | `"bull"` (a high broke) or `"bear"` (a low broke) |
 | `strength` | `math.abs(close − open)` of the breaking bar ÷ `structAtr` — displacement, for D to filter on |
-| `penetration` | `(close − level) ÷ structAtr`, signed by side |
+| `penetration` | `\|close − level\| ÷ structAtr` — unsigned; the sign is recoverable from `side` |
 | `bar` | `bar_index` of the breaking bar |
 
 ## Trend state machine
