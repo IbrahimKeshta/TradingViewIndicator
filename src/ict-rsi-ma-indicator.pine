@@ -16,6 +16,13 @@ maLength    = input.int(50, "MA Length", minval = 1, group = "Moving Average")
 
 // ---------------- Market Structure ----------------
 pivotLookback = input.int(5, "Swing Pivot Lookback", minval = 2, group = "Market Structure")
+majorLookback     = input.int(20, "Major Swing Lookback", minval = 2, maxval = 100, group = "Market Structure", tooltip = "Bars either side a bar must dominate to count as a major swing. Major swings define the headline trend and the range test. Capped at 100 to stay inside Pine's default history buffer.")
+internalLookback  = input.int(5, "Internal Swing Lookback", minval = 2, maxval = 50, group = "Market Structure", tooltip = "The fine-grained tier: pullback state, internal order blocks, and entry-level detail. Signals and watch-zone alerts read this tier's trend.")
+maxSwings         = input.int(10, "Max Swings Kept (per side, per tier)", minval = 2, maxval = 30, group = "Market Structure", tooltip = "Broken swings are kept, not deleted — only this cap removes them, oldest first.")
+structAtrLength   = input.int(14, "Structure ATR Length", minval = 1, group = "Market Structure", tooltip = "Scales the equal-level tolerance, the range band and break strength. Separate from the Watch-Zone ATR on purpose, so tuning proximity cannot reclassify structure.")
+eqTolMult         = input.float(0.15, "Equal-Level Tolerance (x ATR)", minval = 0.0, step = 0.05, group = "Market Structure", tooltip = "Two consecutive swings within this distance are equal highs/lows (EQH/EQL) — resting liquidity, not a directional swing. They never change the trend.")
+rangeAtrMult      = input.float(2.5, "Range Band (x ATR)", minval = 0.1, step = 0.1, group = "Market Structure", tooltip = "When the last two major highs and last two major lows all fit inside this band, structure is compressing and Range reads YES.")
+rangeLookbackBars = input.int(100, "Range Lookback (bars)", minval = 10, group = "Market Structure", tooltip = "Staleness guard for the range test. Without it, four pivots spread over hundreds of bars could sit in a narrow band and read as consolidation.")
 
 // ---------------- Fair Value Gaps ----------------
 showFVG     = input.bool(true, "Show Fair Value Gaps", group = "Fair Value Gaps")
@@ -118,6 +125,175 @@ if bosBearish
     label.new(bar_index, high, "BOS", color = color.new(color.red, 0), style = label.style_label_down, textcolor = color.white, size = size.tiny)
 if chochBearish
     label.new(bar_index, high, "CHoCH", color = color.new(color.maroon, 0), style = label.style_label_down, textcolor = color.white, size = size.tiny)
+
+// ============================================================
+// STRUCTURE ENGINE (two-tier swings, BOS/CHoCH, range)
+// ============================================================
+type SwingPoint
+    float  price
+    int    bar
+    string class      // "HH" | "HL" | "LH" | "LL" | "EQH" | "EQL"; na for the first point on a side
+    bool   broken
+    int    brokenBar
+    bool   liquidity  // true when class is EQH or EQL — resting stops, a target for later blocks
+
+type TierState
+    string trend           // "up" | "down" | na until the first break
+    string lastType        // "BOS" | "CHoCH"
+    string lastSide        // "bull" (a high broke) | "bear" (a low broke)
+    float  lastStrength    // breaking bar's body / ATR — displacement, for the signal engine to filter on
+    float  lastPenetration // |close - level| / ATR
+    float  lastLevel       // price of the level that broke
+    int    lastLevelBar    // bar the broken level formed on
+    int    lastBar         // bar the event fired on
+    bool   bullBreak       // reset every bar; true only on the bar a high broke
+    bool   bearBreak
+
+var array<SwingPoint> majorHighs = array.new<SwingPoint>()
+var array<SwingPoint> majorLows  = array.new<SwingPoint>()
+var array<SwingPoint> intHighs   = array.new<SwingPoint>()
+var array<SwingPoint> intLows    = array.new<SwingPoint>()
+
+var TierState majorState = TierState.new(na, na, na, na, na, na, na, na, false, false)
+var TierState intState   = TierState.new(na, na, na, na, na, na, na, na, false, false)
+
+structAtr = ta.atr(structAtrLength)
+
+// Classify against the previous point on the same side, then store. Only the cap removes
+// points — a broken swing is still a price level and later blocks need it.
+pushPivot(array<SwingPoint> points, float price, int bar, float atrAtPivot, bool isHigh) =>
+    cls = string(na)
+    if array.size(points) > 0
+        prev = array.get(points, array.size(points) - 1)
+        diff = price - prev.price
+        if math.abs(diff) <= eqTolMult * atrAtPivot
+            cls := isHigh ? "EQH" : "EQL"
+        else if diff > 0
+            cls := isHigh ? "HH" : "HL"
+        else
+            cls := isHigh ? "LH" : "LL"
+    isLiq = not na(cls) and (cls == "EQH" or cls == "EQL")
+    array.push(points, SwingPoint.new(price, bar, cls, false, na, isLiq))
+    if array.size(points) > maxSwings
+        array.shift(points)
+    array.size(points)
+
+// Index of the most recent point price has not yet closed through, or -1.
+lastUnbrokenIndex(array<SwingPoint> points) =>
+    idx = -1
+    if array.size(points) > 0
+        for i = array.size(points) - 1 to 0
+            if not array.get(points, i).broken
+                idx := i
+                break
+    idx
+
+// Marks every unbroken point the close has passed. Runs on every confirmed bar, not just
+// event bars, so a level price drifted past never keeps its ray.
+markBroken(array<SwingPoint> points, bool isHigh) =>
+    n = 0
+    for p in points
+        if not p.broken and (isHigh ? close > p.price : close < p.price)
+            p.broken    := true
+            p.brokenBar := bar_index
+            n += 1
+    n
+
+// The trend state machine. A break in the trend's direction is a BOS; a break against it
+// is a CHoCH and flips the trend. Both sides can never fire on one bar: that would need an
+// unbroken high below an unbroken low, which price could not have produced.
+// Nothing is filtered — strength is recorded so the signal engine can filter later.
+processTier(TierState st, array<SwingPoint> highs, array<SwingPoint> lows) =>
+    hIdx = lastUnbrokenIndex(highs)
+    lIdx = lastUnbrokenIndex(lows)
+    bullBroke = false
+    bearBroke = false
+    lvlPrice  = float(na)
+    lvlBar    = int(na)
+    if hIdx >= 0
+        hp = array.get(highs, hIdx)
+        if close > hp.price
+            bullBroke := true
+            lvlPrice  := hp.price
+            lvlBar    := hp.bar
+    if not bullBroke and lIdx >= 0
+        lp = array.get(lows, lIdx)
+        if close < lp.price
+            bearBroke := true
+            lvlPrice  := lp.price
+            lvlBar    := lp.bar
+    markBroken(highs, true)
+    markBroken(lows, false)
+    if bullBroke or bearBroke
+        newTrend = bullBroke ? "up" : "down"
+        st.lastType        := na(st.trend) or st.trend == newTrend ? "BOS" : "CHoCH"
+        st.trend           := newTrend
+        st.lastSide        := bullBroke ? "bull" : "bear"
+        st.lastStrength    := structAtr > 0 ? math.abs(close - open) / structAtr : 0.0
+        st.lastPenetration := structAtr > 0 ? math.abs(close - lvlPrice) / structAtr : 0.0
+        st.lastLevel       := lvlPrice
+        st.lastLevelBar    := lvlBar
+        st.lastBar         := bar_index
+        st.bullBreak       := bullBroke
+        st.bearBreak       := bearBroke
+    st.trend
+
+// Compression test over the last two major highs and last two major lows. The bar-age
+// condition is a staleness guard — four pivots strewn across hundreds of bars can sit in a
+// narrow band without the market having consolidated at all.
+inRangeNow(array<SwingPoint> highs, array<SwingPoint> lows) =>
+    result = false
+    if array.size(highs) >= 2 and array.size(lows) >= 2
+        h1 = array.get(highs, array.size(highs) - 1)
+        h2 = array.get(highs, array.size(highs) - 2)
+        l1 = array.get(lows, array.size(lows) - 1)
+        l2 = array.get(lows, array.size(lows) - 2)
+        top    = math.max(h1.price, h2.price)
+        bottom = math.min(l1.price, l2.price)
+        oldest = math.min(math.min(h1.bar, h2.bar), math.min(l1.bar, l2.bar))
+        result := (top - bottom) <= rangeAtrMult * structAtr and (bar_index - oldest) <= rangeLookbackBars
+    result
+
+// ta.* must be evaluated every bar, so these are assigned at global scope and consumed below.
+majorHighRaw = ta.pivothigh(high, majorLookback, majorLookback)
+majorLowRaw  = ta.pivotlow(low, majorLookback, majorLookback)
+intHighRaw   = ta.pivothigh(high, internalLookback, internalLookback)
+intLowRaw    = ta.pivotlow(low, internalLookback, internalLookback)
+
+// Reset outside the confirmed guard — inside it, the flags would stay true through the
+// whole of the next developing bar and fire duplicate drawings and alerts.
+majorState.bullBreak := false
+majorState.bearBreak := false
+intState.bullBreak   := false
+intState.bearBreak   := false
+
+if barstate.isconfirmed
+    if not na(majorHighRaw)
+        pushPivot(majorHighs, majorHighRaw, bar_index - majorLookback, structAtr[majorLookback], true)
+    if not na(majorLowRaw)
+        pushPivot(majorLows, majorLowRaw, bar_index - majorLookback, structAtr[majorLookback], false)
+    if not na(intHighRaw)
+        pushPivot(intHighs, intHighRaw, bar_index - internalLookback, structAtr[internalLookback], true)
+    if not na(intLowRaw)
+        pushPivot(intLows, intLowRaw, bar_index - internalLookback, structAtr[internalLookback], false)
+    processTier(majorState, majorHighs, majorLows)
+    processTier(intState, intHighs, intLows)
+
+inRange = inRangeNow(majorHighs, majorLows)
+
+// Data Window readouts. These are the verification surface — engine state as numbers,
+// bar by bar, instead of eyeballing labels.
+majorTrendCode = majorState.trend == "up" ? 1 : majorState.trend == "down" ? -1 : 0
+intTrendCode   = intState.trend == "up" ? 1 : intState.trend == "down" ? -1 : 0
+lastEventCode  = majorState.lastType == "BOS" ? 1 : majorState.lastType == "CHoCH" ? 2 : 0
+
+plot(majorTrendCode, "DBG Major Trend (1/-1/0)", display = display.data_window)
+plot(intTrendCode, "DBG Internal Trend (1/-1/0)", display = display.data_window)
+plot(inRange ? 1 : 0, "DBG In Range (1/0)", display = display.data_window)
+plot(lastEventCode, "DBG Last Major Event (1=BOS 2=CHoCH)", display = display.data_window)
+plot(array.size(majorHighs), "DBG Major Highs Kept", display = display.data_window)
+plot(array.size(majorLows), "DBG Major Lows Kept", display = display.data_window)
+plot(majorState.lastStrength, "DBG Last Major Strength (xATR)", display = display.data_window)
 
 // ============================================================
 // FAIR VALUE GAPS
