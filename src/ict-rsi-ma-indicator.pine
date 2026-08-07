@@ -830,6 +830,57 @@ if barstate.islast
         drawSwingRays(intHighs, true, true)
         drawSwingRays(intLows, true, true)
 
+// ============================================================
+// TRADE RENDERING
+// ============================================================
+// Same rule as the structure section: state redraws, events persist. The live trade's levels
+// are a claim about now and are rebuilt every last-bar pass; the result label is a thing that
+// happened at a bar and stays.
+var line[]  tradeLines  = array.new<line>()
+var label[] tradeLabels = array.new<label>()
+var box     tradeBox    = na
+
+tradeLevelLine(float price, color col, string txt, bool dotted) =>
+    array.push(tradeLines, line.new(activeTrade.openBar, price, bar_index, price, extend = extend.right, color = col, style = dotted ? line.style_dotted : line.style_solid, width = 1))
+    array.push(tradeLabels, label.new(bar_index, price, txt, style = label.style_label_left, color = col, textcolor = color.white, size = size.tiny))
+    array.size(tradeLines)
+
+// One builder for all three target labels — price, R multiple, a liquidity note when the
+// level is an EQH/EQL, and a tick once reached.
+targetLabelText(int n, float price, bool isLiq, bool isLong, float entryPrice, float r, int tpHit) =>
+    rTxt   = r > 0 ? str.tostring(math.abs(price - entryPrice) / r, "0.0") : "0.0"
+    liqTxt = isLiq ? (isLong ? " · EQH" : " · EQL") : ""
+    hitTxt = tpHit >= n ? " ✓" : ""
+    "TP" + str.tostring(n) + " " + str.tostring(price, format.mintick) + " · " + rTxt + "R" + liqTxt + hitTxt
+
+if barstate.islast
+    for ln in tradeLines
+        line.delete(ln)
+    array.clear(tradeLines)
+    for lb in tradeLabels
+        label.delete(lb)
+    array.clear(tradeLabels)
+    box.delete(tradeBox)
+    if showTradeLevels and tradeIsLive()
+        isLong  = activeTrade.side == "long"
+        sideCol = isLong ? tradeLongColor : tradeShortColor
+        r       = math.abs(activeTrade.entry - activeTrade.initialStop)
+        tradeBox := box.new(activeTrade.openBar, activeTrade.zoneTop, bar_index, activeTrade.zoneBottom, border_color = sideCol, bgcolor = color.new(sideCol, 88))
+        array.push(tradeLabels, label.new(activeTrade.openBar, activeTrade.zoneTop, (isLong ? "LONG · " : "SHORT · ") + activeTrade.grade + " · " + str.tostring(activeTrade.score) + "/" + str.tostring(activeTrade.scoreOf), style = label.style_label_down, color = sideCol, textcolor = color.white, size = size.tiny))
+        tradeLevelLine(activeTrade.entry, sideCol, "Entry " + str.tostring(activeTrade.entry, format.mintick), false)
+        tradeLevelLine(activeTrade.stop, tradeStopColor, "SL " + str.tostring(activeTrade.stop, format.mintick), false)
+        tradeLevelLine(activeTrade.tp1, tradeTargetColor, targetLabelText(1, activeTrade.tp1, activeTrade.liq1, isLong, activeTrade.entry, r, activeTrade.tpHit), activeTrade.tpHit >= 1)
+        tradeLevelLine(activeTrade.tp2, tradeTargetColor, targetLabelText(2, activeTrade.tp2, activeTrade.liq2, isLong, activeTrade.entry, r, activeTrade.tpHit), activeTrade.tpHit >= 2)
+        tradeLevelLine(activeTrade.tp3, tradeTargetColor, targetLabelText(3, activeTrade.tp3, activeTrade.liq3, isLong, activeTrade.entry, r, activeTrade.tpHit), activeTrade.tpHit >= 3)
+
+// Persistent — deliberately not tracked in tradeLines/tradeLabels, so the redraw above never
+// deletes it. One label per closed trade is the whole track record.
+if tradeClosed and showTradeHistory and not na(activeTrade)
+    rr = math.abs(activeTrade.entry - activeTrade.initialStop)
+    realisedR = rr > 0 ? (activeTrade.side == "long" ? activeTrade.closePrice - activeTrade.entry : activeTrade.entry - activeTrade.closePrice) / rr : 0.0
+    resCol = realisedR >= 0 ? color.new(color.green, 20) : color.new(color.red, 20)
+    label.new(bar_index, activeTrade.closePrice, (realisedR >= 0 ? "+" : "") + str.tostring(realisedR, "0.0") + "R · " + activeTrade.closeReason, style = activeTrade.side == "long" ? label.style_label_up : label.style_label_down, color = resCol, textcolor = color.white, size = size.tiny)
+
 var table structPanel = na
 
 if barstate.islast
@@ -848,7 +899,10 @@ if barstate.islast
         trendText    = na(majorState.trend) ? "—" : str.upper(majorState.trend)
         trendCol     = majorState.trend == "up" ? color.lime : majorState.trend == "down" ? color.red : color.gray
         internalText = na(majorState.trend) or na(intState.trend) ? "—" : intState.trend == majorState.trend ? "aligned" : "pullback"
-        structPanel := table.new(panelPos, 2, 5, bgcolor = color.new(color.black, 80), border_width = 1)
+        tradeRows = 0
+        if showTradePanel and tradeIsLive()
+            tradeRows := 6
+        structPanel := table.new(panelPos, 2, 5 + tradeRows, bgcolor = color.new(color.black, 80), border_width = 1)
         table.cell(structPanel, 0, 0, "STRUCTURE", text_color = color.white, bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 1, 0, "", bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 0, 1, "Major trend", text_color = color.silver)
@@ -859,15 +913,57 @@ if barstate.islast
         table.cell(structPanel, 1, 3, evtText, text_color = color.white)
         table.cell(structPanel, 0, 4, "Internal", text_color = color.silver)
         table.cell(structPanel, 1, 4, internalText, text_color = color.aqua)
+        if tradeRows > 0
+            isLongT = activeTrade.side == "long"
+            rT      = math.abs(activeTrade.entry - activeTrade.initialStop)
+            rTxt    = rT > 0 ? str.tostring(tradeOpenR, "0.00") + "R" : "—"
+            table.cell(structPanel, 0, 5, "TRADE", text_color = color.white, bgcolor = color.new(color.gray, 50))
+            table.cell(structPanel, 1, 5, (isLongT ? "LONG" : "SHORT") + " · " + activeTrade.grade + " · " + str.tostring(activeTrade.score) + "/" + str.tostring(activeTrade.scoreOf), text_color = isLongT ? tradeLongColor : tradeShortColor, bgcolor = color.new(color.gray, 50))
+            table.cell(structPanel, 0, 6, "Entry", text_color = color.silver)
+            table.cell(structPanel, 1, 6, str.tostring(activeTrade.entry, format.mintick), text_color = color.white)
+            table.cell(structPanel, 0, 7, "Stop", text_color = color.silver)
+            table.cell(structPanel, 1, 7, str.tostring(activeTrade.stop, format.mintick) + (activeTrade.tpHit >= 1 ? " · BE+" : ""), text_color = tradeStopColor)
+            table.cell(structPanel, 0, 8, "TP1 / TP2", text_color = color.silver)
+            table.cell(structPanel, 1, 8, str.tostring(activeTrade.tp1, format.mintick) + (activeTrade.tpHit >= 1 ? " ✓" : "") + "  " + str.tostring(activeTrade.tp2, format.mintick) + (activeTrade.tpHit >= 2 ? " ✓" : ""), text_color = tradeTargetColor)
+            table.cell(structPanel, 0, 9, "TP3", text_color = color.silver)
+            table.cell(structPanel, 1, 9, str.tostring(activeTrade.tp3, format.mintick) + (activeTrade.tpHit >= 3 ? " ✓" : ""), text_color = tradeTargetColor)
+            table.cell(structPanel, 0, 10, "Open R", text_color = color.silver)
+            table.cell(structPanel, 1, 10, rTxt, text_color = tradeOpenR >= 0 ? color.lime : color.red)
 
 // ============================================================
 // ALERTS
 // ============================================================
-alertcondition(bullishSignal, title = "Bullish Confluence Signal", message = "Bullish confluence signal on {{ticker}} {{interval}}: structure + FVG/OB + killzone + RSI/MA aligned bullish.")
-alertcondition(bearishSignal, title = "Bearish Confluence Signal", message = "Bearish confluence signal on {{ticker}} {{interval}}: structure + FVG/OB + killzone + RSI/MA aligned bearish.")
+alertcondition(bullishSignal, title = "Bullish Trade Entry", message = "Long trade opened on {{ticker}} {{interval}} — see the chart for entry zone, stop and targets.")
+alertcondition(bearishSignal, title = "Bearish Trade Entry", message = "Short trade opened on {{ticker}} {{interval}} — see the chart for entry zone, stop and targets.")
 alertcondition(bullishWatchZone, title = "Bullish Watch-Zone", message = "Watch: price approaching an unmitigated bullish FVG/OB during a killzone on {{ticker}} {{interval}}.")
 alertcondition(bearishWatchZone, title = "Bearish Watch-Zone", message = "Watch: price approaching an unmitigated bearish FVG/OB during a killzone on {{ticker}} {{interval}}.")
 
 majorEventFired = majorState.bullBreak or majorState.bearBreak
 alertcondition(majorEventFired and majorState.lastType == "CHoCH", title = "Major CHoCH (trend reversal)", message = "Major CHoCH on {{ticker}} {{interval}}: structure trend reversed.")
 alertcondition(majorEventFired and majorState.lastType == "BOS", title = "Major BOS (trend continuation)", message = "Major BOS on {{ticker}} {{interval}}: structure trend continued.")
+
+alertcondition(tradeOpened, title = "Trade Opened", message = "Trade opened on {{ticker}} {{interval}} — check the panel for side, grade, stop and targets.")
+alertcondition(targetJustHit, title = "Target Hit", message = "Take-profit target reached on {{ticker}} {{interval}}.")
+alertcondition(tradeClosed, title = "Trade Closed", message = "Trade closed on {{ticker}} {{interval}} — see the result label on the chart for R and reason.")
+
+// Data Window readouts — the verification surface. Values are gathered inside an `if` rather
+// than with ternaries on activeTrade, because reading a field of a `na` object is a runtime
+// error and Pine does not guarantee short-circuit evaluation.
+dbgTradeState = 0
+dbgTradeSide  = 0
+dbgTpHit      = 0
+dbgTradeStop  = float(na)
+if tradeIsLive()
+    dbgTradeState := 1
+    dbgTradeSide  := activeTrade.side == "long" ? 1 : -1
+    dbgTpHit      := activeTrade.tpHit
+    dbgTradeStop  := activeTrade.stop
+
+plot(dbgTradeState, "DBG Trade State (1=open)", display = display.data_window)
+plot(dbgTradeSide, "DBG Trade Side (1=long -1=short)", display = display.data_window)
+plot(dbgTpHit, "DBG TP Hit (0-3)", display = display.data_window)
+plot(dbgTradeStop, "DBG Trade Stop", display = display.data_window)
+plot(tradeOpenR, "DBG Open R", display = display.data_window)
+plot(setupScoreVal, "DBG Setup Score", display = display.data_window)
+plot(setupOfVal, "DBG Setup Of", display = display.data_window)
+plot(enabledPoints(), "DBG Enabled Points", display = display.data_window)
