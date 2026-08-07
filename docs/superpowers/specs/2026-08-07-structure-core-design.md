@@ -68,10 +68,10 @@ alongside `trend` and the two can be compared.
 type SwingPoint
     float  price
     int    bar
-    string class       // "HH" | "HL" | "LH" | "LL" | "EQH" | "EQL" | na for the first on a side
+    string kind        // "HH" | "HL" | "LH" | "LL" | "EQH" | "EQL" | na for the first on a side
     bool   broken
     int    brokenBar
-    bool   liquidity   // true when class is EQH or EQL
+    bool   liquidity   // true when kind is EQH or EQL
 ```
 
 Four arrays: `majorHighs`, `majorLows`, `intHighs`, `intLows`. Each capped at `maxSwings` (default
@@ -93,7 +93,10 @@ else if diff > 0                     →  "HH"  (highs) / "HL"  (lows)
 else                                 →  "LH"  (highs) / "LL"  (lows)
 ```
 
-An empty array means no predecessor: the point is stored with `class = na`.
+An empty array means no predecessor: the point is stored with `kind = na`.
+
+The field is named `kind`, not `class`: Pine v6 reserves `class` and rejects it as an identifier
+(compile error `CE10150`).
 
 `atrAtPivot` is `structAtr[lookback]` — the ATR at the pivot's own bar, not the confirmation bar.
 Sampling it at confirmation would classify the same pivot differently depending on volatility that
