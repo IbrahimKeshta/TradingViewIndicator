@@ -1,5 +1,5 @@
 //@version=6
-indicator("ICT + RSI/MA Confluence", shorttitle = "ICT-RSI-MA", overlay = true, max_boxes_count = 200, max_labels_count = 500, max_lines_count = 200)
+indicator("ICT + RSI/MA Confluence", shorttitle = "ICT-RSI-MA", overlay = true, max_boxes_count = 200, max_labels_count = 500, max_lines_count = 500)
 
 // ============================================================
 // INPUTS
@@ -45,6 +45,20 @@ showSignalMarkers  = input.bool(true, "Show Signal Markers", group = "Alerts / D
 showRsiReadout     = input.bool(true, "Show RSI Readout Label", group = "Alerts / Display")
 watchZoneAtrLength = input.int(14, "Watch-Zone ATR Length", minval = 1, group = "Alerts / Display")
 watchZoneAtrMult   = input.float(1.0, "Watch-Zone Proximity (x ATR)", minval = 0.1, step = 0.1, group = "Alerts / Display")
+
+// ---------------- Structure Display ----------------
+showMajorTags      = input.bool(true, "Show Major Tags", group = "Structure Display", tooltip = "HH / HL / LH / LL / EQH / EQL on each retained major swing.")
+showMajorRays      = input.bool(true, "Show Major Rays", group = "Structure Display", tooltip = "Extends every unbroken major swing to the right as live support or resistance. Broken levels stop drawing.")
+showBreakLines     = input.bool(true, "Show Break Lines", group = "Structure Display", tooltip = "Marks each major BOS and CHoCH where it happened. These stay on the chart as history rather than being redrawn.")
+showInternalRays   = input.bool(false, "Show Internal Rays", group = "Structure Display", tooltip = "Entry-level detail. Off by default because on a fast timeframe these are near-continuous.")
+showInternalBreaks = input.bool(false, "Show Internal Break Lines", group = "Structure Display")
+showStructurePanel = input.bool(true, "Show Structure Panel", group = "Structure Display")
+panelPosInput      = input.string("Top Right", "Panel Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Structure Display")
+majorTagColor      = input.color(color.orange, "Major Tag", group = "Structure Display")
+liquidityTagColor  = input.color(color.yellow, "Liquidity Tag (EQH/EQL)", group = "Structure Display")
+bosColor           = input.color(color.lime, "BOS", group = "Structure Display")
+chochColor         = input.color(color.fuchsia, "CHoCH", group = "Structure Display")
+rayColor           = input.color(color.gray, "Rays", group = "Structure Display")
 
 // ============================================================
 // RSI + MA
@@ -423,9 +437,93 @@ bullishWatchZone = intState.trend == "up" and killzoneActive and not inBullishZo
 bearishWatchZone = intState.trend == "down" and killzoneActive and not inBearishZone and not na(closestBearishDist) and closestBearishDist <= atrValue * watchZoneAtrMult
 
 // ============================================================
+// STRUCTURE RENDERING
+// ============================================================
+// Events persist, state redraws. A BOS happened at a bar and is worth keeping when you
+// scroll back; a ray is a claim about the present and must never be stale.
+var line[]  structLines  = array.new<line>()
+var label[] structLabels = array.new<label>()
+
+drawSwingTags(array<SwingPoint> points, bool isHigh) =>
+    for p in points
+        if not na(p.class)
+            tagCol = p.liquidity ? liquidityTagColor : majorTagColor
+            array.push(structLabels, label.new(p.bar, p.price, p.class, style = isHigh ? label.style_label_down : label.style_label_up, color = tagCol, textcolor = color.white, size = size.tiny))
+    array.size(structLabels)
+
+drawSwingRays(array<SwingPoint> points, bool dotted) =>
+    for p in points
+        if not p.broken
+            array.push(structLines, line.new(p.bar, p.price, bar_index, p.price, extend = extend.right, color = rayColor, style = dotted ? line.style_dotted : line.style_solid, width = 1))
+    array.size(structLines)
+
+// Persistent — deliberately not tracked in structLines/structLabels, so the redraw below
+// never deletes them.
+drawBreakEvent(TierState st, bool enabled, int lineWidth) =>
+    if enabled and (st.bullBreak or st.bearBreak)
+        evtColor = st.lastType == "CHoCH" ? chochColor : bosColor
+        line.new(st.lastLevelBar, st.lastLevel, bar_index, st.lastLevel, color = evtColor, style = line.style_dotted, width = lineWidth)
+        label.new(bar_index, st.lastLevel, st.lastType, style = st.lastSide == "bull" ? label.style_label_up : label.style_label_down, color = evtColor, textcolor = color.white, size = size.tiny)
+    st.lastBar
+
+drawBreakEvent(majorState, showBreakLines, 2)
+drawBreakEvent(intState, showInternalBreaks, 1)
+
+if barstate.islast
+    for ln in structLines
+        line.delete(ln)
+    array.clear(structLines)
+    for lb in structLabels
+        label.delete(lb)
+    array.clear(structLabels)
+    if showMajorTags
+        drawSwingTags(majorHighs, true)
+        drawSwingTags(majorLows, false)
+    if showMajorRays
+        drawSwingRays(majorHighs, false)
+        drawSwingRays(majorLows, false)
+    if showInternalRays
+        drawSwingRays(intHighs, true)
+        drawSwingRays(intLows, true)
+
+var table structPanel = na
+
+if barstate.islast
+    table.delete(structPanel)
+    if showStructurePanel
+        panelPos = switch panelPosInput
+            "Top Right"    => position.top_right
+            "Top Left"     => position.top_left
+            "Bottom Right" => position.bottom_right
+            => position.bottom_left
+        useInt       = not na(intState.lastBar) and (na(majorState.lastBar) or intState.lastBar > majorState.lastBar)
+        evtTier      = useInt ? "INTERNAL" : "MAJOR"
+        evtType      = useInt ? intState.lastType : majorState.lastType
+        evtStrength  = useInt ? intState.lastStrength : majorState.lastStrength
+        evtText      = na(evtType) ? "—" : evtType + " · " + evtTier + " · " + str.tostring(evtStrength, "#.0") + "x"
+        trendText    = na(majorState.trend) ? "—" : str.upper(majorState.trend)
+        trendCol     = majorState.trend == "up" ? color.lime : majorState.trend == "down" ? color.red : color.gray
+        internalText = na(majorState.trend) or na(intState.trend) ? "—" : intState.trend == majorState.trend ? "aligned" : "pullback"
+        structPanel := table.new(panelPos, 2, 5, bgcolor = color.new(color.black, 80), border_width = 1)
+        table.cell(structPanel, 0, 0, "STRUCTURE", text_color = color.white, bgcolor = color.new(color.gray, 50))
+        table.cell(structPanel, 1, 0, "", bgcolor = color.new(color.gray, 50))
+        table.cell(structPanel, 0, 1, "Major trend", text_color = color.silver)
+        table.cell(structPanel, 1, 1, trendText, text_color = trendCol)
+        table.cell(structPanel, 0, 2, "Range", text_color = color.silver)
+        table.cell(structPanel, 1, 2, inRange ? "YES" : "no", text_color = inRange ? color.orange : color.gray)
+        table.cell(structPanel, 0, 3, "Last event", text_color = color.silver)
+        table.cell(structPanel, 1, 3, evtText, text_color = color.white)
+        table.cell(structPanel, 0, 4, "Internal", text_color = color.silver)
+        table.cell(structPanel, 1, 4, internalText, text_color = color.aqua)
+
+// ============================================================
 // ALERTS
 // ============================================================
 alertcondition(bullishSignal, title = "Bullish Confluence Signal", message = "Bullish confluence signal on {{ticker}} {{interval}}: structure + FVG/OB + killzone + RSI/MA aligned bullish.")
 alertcondition(bearishSignal, title = "Bearish Confluence Signal", message = "Bearish confluence signal on {{ticker}} {{interval}}: structure + FVG/OB + killzone + RSI/MA aligned bearish.")
 alertcondition(bullishWatchZone, title = "Bullish Watch-Zone", message = "Watch: price approaching an unmitigated bullish FVG/OB during a killzone on {{ticker}} {{interval}}.")
 alertcondition(bearishWatchZone, title = "Bearish Watch-Zone", message = "Watch: price approaching an unmitigated bearish FVG/OB during a killzone on {{ticker}} {{interval}}.")
+
+majorEventFired = majorState.bullBreak or majorState.bearBreak
+alertcondition(majorEventFired and majorState.lastType == "CHoCH", title = "Major CHoCH (trend reversal)", message = "Major CHoCH on {{ticker}} {{interval}}: structure trend reversed.")
+alertcondition(majorEventFired and majorState.lastType == "BOS", title = "Major BOS (trend continuation)", message = "Major BOS on {{ticker}} {{interval}}: structure trend continued.")
