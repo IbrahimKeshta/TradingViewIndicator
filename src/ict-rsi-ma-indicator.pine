@@ -555,6 +555,82 @@ if shortSetup
     setupGradeVal := gradeFor(bearScore, ofPoints)
 
 // ============================================================
+// TRADE TARGETS
+// ============================================================
+type Targets
+    float p1
+    float p2
+    float p3
+    bool  liq1
+    bool  liq2
+    bool  liq3
+
+// Accumulator scan: returns the nearer of `curBest` and the best qualifying point in `pts`.
+// Called once per array because selecting between two arrays with a ternary is not something
+// to depend on in Pine. Only unbroken points qualify — a broken level is one price has already
+// closed through, so it is no longer the barrier a target is meant to represent.
+//
+// The liquidity tie-break is what implements the spec's deduplication rule: when two levels
+// sit within eqTol of each other, the EQH/EQL wins, because resting stops are what price is
+// actually travelling toward.
+scanArray(array<SwingPoint> pts, bool isLong, float floorPrice, float curBest, bool curLiq) =>
+    bestPrice = curBest
+    bestLiq   = curLiq
+    for p in pts
+        if not p.broken
+            beyond = isLong ? p.price > floorPrice : p.price < floorPrice
+            if beyond
+                nearer = na(bestPrice) or (isLong ? p.price < bestPrice : p.price > bestPrice)
+                tie    = not na(bestPrice) and p.liquidity and not bestLiq and math.abs(p.price - bestPrice) <= eqTolMult * structAtr
+                if nearer or tie
+                    bestPrice := p.price
+                    bestLiq   := p.liquidity
+    [bestPrice, bestLiq]
+
+bestBeyond(bool isLong, float floorPrice) =>
+    bp = float(na)
+    bl = false
+    if isLong
+        [p1, q1] = scanArray(majorHighs, true, floorPrice, bp, bl)
+        bp := p1
+        bl := q1
+        [p2, q2] = scanArray(intHighs, true, floorPrice, bp, bl)
+        bp := p2
+        bl := q2
+    else
+        [p3, q3] = scanArray(majorLows, false, floorPrice, bp, bl)
+        bp := p3
+        bl := q3
+        [p4, q4] = scanArray(intLows, false, floorPrice, bp, bl)
+        bp := p4
+        bl := q4
+    [bp, bl]
+
+// Three structural targets, nearest first. Each search starts one tolerance beyond the level
+// just taken, which is what stops two levels within eqTol both being selected. Anything closer
+// to entry than minTargetR is skipped by the initial floor.
+//
+// Any target the structure cannot supply is filled at one further R beyond the last one, so a
+// trade always has three places to go and they are always in ascending order.
+selectTargets(bool isLong, float entryPrice, float risk) =>
+    prices = array.new<float>()
+    liqs   = array.new<bool>()
+    floorP = isLong ? entryPrice + minTargetR * risk : entryPrice - minTargetR * risk
+    for n = 1 to 3
+        [bp, bl] = bestBeyond(isLong, floorP)
+        if not na(bp)
+            array.push(prices, bp)
+            array.push(liqs, bl)
+            floorP := isLong ? bp + eqTolMult * structAtr : bp - eqTolMult * structAtr
+    lastP = array.size(prices) > 0 ? array.get(prices, array.size(prices) - 1) : (isLong ? entryPrice + minTargetR * risk : entryPrice - minTargetR * risk)
+    for n = 1 to 3
+        if array.size(prices) < 3
+            lastP := isLong ? lastP + risk : lastP - risk
+            array.push(prices, lastP)
+            array.push(liqs, false)
+    Targets.new(array.get(prices, 0), array.get(prices, 1), array.get(prices, 2), array.get(liqs, 0), array.get(liqs, 1), array.get(liqs, 2))
+
+// ============================================================
 // STRUCTURE RENDERING
 // ============================================================
 // Events persist, state redraws. A BOS happened at a bar and is worth keeping when you
