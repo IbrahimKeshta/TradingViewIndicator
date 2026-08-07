@@ -60,6 +60,26 @@ bosColor           = input.color(color.lime, "BOS", group = "Structure Display")
 chochColor         = input.color(color.fuchsia, "CHoCH", group = "Structure Display")
 rayColor           = input.color(color.gray, "Rays", group = "Structure Display")
 
+// ---------------- Trade Engine ----------------
+minScore           = input.int(4, "Minimum Score", minval = 1, maxval = 10, group = "Trade Engine", tooltip = "How many scored points a setup needs, out of however many are switched on below. The panel shows both numbers — a disabled point is never counted in the denominator, so turning one off does not silently loosen or break the threshold.")
+scoreKillzone      = input.bool(true, "Score: Killzone", group = "Trade Engine", tooltip = "Turn off on single-session markets such as EGX, where a killzone means nothing. If both killzone sessions are disabled for display, this point excludes itself automatically whatever this is set to.")
+scoreRsi           = input.bool(true, "Score: RSI", group = "Trade Engine")
+scoreMa            = input.bool(true, "Score: Moving Average", group = "Trade Engine")
+scoreMajorAgree    = input.bool(true, "Score: Major Trend Agreement", group = "Trade Engine", tooltip = "Whether the major tier agrees with the internal tier. A pullback entry against the major trend is a real setup — just a weaker one — so this scores rather than vetoes.")
+scoreBreakStrength = input.bool(true, "Score: Break Strength", group = "Trade Engine")
+strongBreakMult    = input.float(1.0, "Strong Break (x ATR)", minval = 0.1, step = 0.1, group = "Trade Engine", tooltip = "The breaking candle's body must exceed this multiple of ATR to earn the break-strength point.")
+stopBufferMult     = input.float(0.25, "Stop Buffer (x ATR)", minval = 0.0, step = 0.05, group = "Trade Engine", tooltip = "How far beyond the entry zone's far edge the stop sits, so an ordinary wick into the zone does not clip it. Also used by the trailing stop.")
+minTargetR         = input.float(1.0, "Minimum Target Distance (R)", minval = 0.1, step = 0.1, group = "Trade Engine", tooltip = "Structural levels closer than this are skipped. A target 0.3R away is a winner on paper and not worth the spread.")
+trailTierInput     = input.string("Internal", "Trailing Tier", options = ["Internal", "Major"], group = "Trade Engine", tooltip = "Which tier's swings the stop trails behind once TP1 is hit. Internal trails tightly; Major gives the trade room.")
+longOnly           = input.bool(false, "Long Trades Only", group = "Trade Engine", tooltip = "For cash-equity charts where shorting is unavailable. Bearish setups still mark and alert, but open no trade.")
+showTradeLevels    = input.bool(true, "Show Trade Levels", group = "Trade Engine")
+showTradeHistory   = input.bool(true, "Show Trade History", group = "Trade Engine", tooltip = "Leaves a result label in R at each closed trade's exit bar — the cheapest possible track record.")
+showTradePanel     = input.bool(true, "Show Trade Panel Rows", group = "Trade Engine")
+tradeLongColor     = input.color(color.teal, "Long", group = "Trade Engine")
+tradeShortColor    = input.color(color.maroon, "Short", group = "Trade Engine")
+tradeStopColor     = input.color(color.red, "Stop", group = "Trade Engine")
+tradeTargetColor   = input.color(color.green, "Targets", group = "Trade Engine")
+
 // ============================================================
 // RSI + MA
 // ============================================================
@@ -472,6 +492,67 @@ closestBearishDist = na(bearishFvgDist) ? bearishObDist : (na(bearishObDist) ? b
 
 bullishWatchZone = intState.trend == "up" and killzoneActive and not inBullishZone and not na(closestBullishDist) and closestBullishDist <= atrValue * watchZoneAtrMult
 bearishWatchZone = intState.trend == "down" and killzoneActive and not inBearishZone and not na(closestBearishDist) and closestBearishDist <= atrValue * watchZoneAtrMult
+
+// ============================================================
+// TRADE GATE
+// ============================================================
+// Hard requirements are absolute: without a direction and a zone there is no side, no stop
+// and no targets to compute. Everything else is evidence worth a point.
+//
+// The score is proportional — minScore is checked against the number of points actually
+// enabled, never a fixed five. A disabled point left in the denominator would either make
+// minScore unreachable or quietly loosen the gate while appearing to tighten it, and it is
+// what lets later confirmation work add points instead of adding vetoes.
+
+// The killzone point disables itself when neither session is drawn: on a single-session
+// market a permanently-false point would make minScore unreachable.
+killzonePointOn = scoreKillzone and (showLondonKZ or showNewYorkKZ)
+
+enabledPoints() =>
+    (killzonePointOn ? 1 : 0) + (scoreRsi ? 1 : 0) + (scoreMa ? 1 : 0) + (scoreMajorAgree ? 1 : 0) + (scoreBreakStrength ? 1 : 0)
+
+setupScore(bool isLong) =>
+    total = 0
+    if killzonePointOn and killzoneActive
+        total += 1
+    if scoreRsi and (isLong ? rsiValue > 50 : rsiValue < 50)
+        total += 1
+    if scoreMa and (isLong ? close > maValue : close < maValue)
+        total += 1
+    if scoreMajorAgree and majorState.trend == intState.trend
+        total += 1
+    if scoreBreakStrength and not na(intState.lastStrength) and intState.lastStrength >= strongBreakMult
+        total += 1
+    total
+
+// All enabled points = A, one short = B, two short = C. Which grades can actually appear
+// depends on minScore: at the defaults (5 enabled, minScore 4) a C scores 3 and is rejected,
+// so only A and B ever show. Lowering minScore to 3 is what opens C up.
+gradeFor(int score, int ofPoints) =>
+    score >= ofPoints ? "A" : score >= ofPoints - 1 ? "B" : "C"
+
+bullHardOk = intState.trend == "up" and bullTouch.hit and not inRange and barstate.isconfirmed
+bearHardOk = intState.trend == "down" and bearTouch.hit and not inRange and barstate.isconfirmed
+
+var int    setupScoreVal = 0
+var int    setupOfVal    = 0
+var string setupGradeVal = na
+
+ofPoints  = enabledPoints()
+bullScore = bullHardOk ? setupScore(true) : 0
+bearScore = bearHardOk ? setupScore(false) : 0
+
+longSetup  = bullHardOk and bullScore >= minScore
+shortSetup = bearHardOk and bearScore >= minScore
+
+if longSetup
+    setupScoreVal := bullScore
+    setupOfVal    := ofPoints
+    setupGradeVal := gradeFor(bullScore, ofPoints)
+if shortSetup
+    setupScoreVal := bearScore
+    setupOfVal    := ofPoints
+    setupGradeVal := gradeFor(bearScore, ofPoints)
 
 // ============================================================
 // STRUCTURE RENDERING
