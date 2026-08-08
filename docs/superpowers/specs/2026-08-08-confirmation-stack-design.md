@@ -1,7 +1,7 @@
 # Confirmation Stack — Design
 
 **Date:** 2026-08-08
-**Status:** Specified, not implemented
+**Status:** Implemented on `feat/confirmation-stack` (`19f7c54`..`3c06d31`) — TradingView verification pending
 **File:** `src/ict-rsi-ma-indicator.pine`
 **Block:** C of the roadmap — the last one
 **Depends on:** `2026-08-07-trade-engine-design.md` (D+E, implemented and running in TradingView)
@@ -304,4 +304,9 @@ as 1/0 series, so every check below is read as a number rather than eyeballed.
 - Confirm `minScore` 5 rejects a 4/7 setup, and that raising it to 7 admits only A grades.
 - Confirm the trade rows still render correctly with the confirmation row present, both while a trade
   is live and while flat.
-- Confirm no drawing appears anywhere on the chart with `Show Kumo Cloud` off.
+- Confirm no drawing appears anywhere on the chart with `Show Kumo Cloud` off. Check specifically that
+  the two `offset = 26` plots do not reserve 26 bars of empty space to the right of the last bar — they
+  plot `na`, so they should not, but offset reservation is worth eyeballing rather than assuming.
+- Print a bar with `na` volume if the symbol ever produces one, and confirm the denominator stays at
+  `/7` rather than dropping for the next 20 bars. This was a real bug found in review: `ta.sma` over
+  raw `volume` propagates `na` across its whole window, and the fix averages `nz(volume)` instead.
