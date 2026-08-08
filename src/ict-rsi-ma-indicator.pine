@@ -591,6 +591,40 @@ plot(climaxLong ? 1 : 0, "DBG Climax Long (1/0)", display = display.data_window)
 plot(climaxShort ? 1 : 0, "DBG Climax Short (1/0)", display = display.data_window)
 plot(ichiBullConfirm ? 1 : ichiBearConfirm ? -1 : 0, "DBG Ichimoku (1/-1/0)", display = display.data_window)
 
+// ---- group votes ----
+// At least half the enabled members, rounded up: 2 of 3, 1 of 2, 1 of 1. Never a strict
+// majority — that needs 2 of 2 but only 2 of 3, so switching a member OFF would make the
+// point EASIER to earn, which is the same class of bug the proportional denominator exists
+// to prevent. math.ceil takes a float and returns an int; int/int division is not relied on.
+momEnabledCount = (momRsi ? 1 : 0) + (momMacd ? 1 : 0) + (momStoch ? 1 : 0)
+momNeed         = math.ceil(momEnabledCount / 2.0)
+momLongHits     = (momRsi and rsiBullishConfirm ? 1 : 0) + (momMacd and macdBullConfirm ? 1 : 0) + (momStoch and stochBullConfirm ? 1 : 0)
+momShortHits    = (momRsi and rsiBearishConfirm ? 1 : 0) + (momMacd and macdBearConfirm ? 1 : 0) + (momStoch and stochBearConfirm ? 1 : 0)
+momOn           = scoreMomentum and momEnabledCount > 0
+momLongOk       = momLongHits >= momNeed
+momShortOk      = momShortHits >= momNeed
+
+// Both participation members need real volume data, so both disable themselves on a symbol
+// that has never reported any — and the point then leaves the denominator entirely.
+partVolOn        = partVolume and volReady
+partClimaxOn     = partClimax and volReady
+partEnabledCount = (partVolOn ? 1 : 0) + (partClimaxOn ? 1 : 0)
+partNeed         = math.ceil(partEnabledCount / 2.0)
+partLongHits     = (partVolOn and volSurge ? 1 : 0) + (partClimaxOn and climaxLong ? 1 : 0)
+partShortHits    = (partVolOn and volSurge ? 1 : 0) + (partClimaxOn and climaxShort ? 1 : 0)
+partOn           = scoreParticipation and partEnabledCount > 0
+partLongOk       = partLongHits >= partNeed
+partShortOk      = partShortHits >= partNeed
+
+// Excluded until the cloud exists at all — senkouB needs senkouBLen + ichiDisp bars of
+// history, and a permanently-dark point in the denominator would grade early setups
+// harshly for a reason that says nothing about them.
+ichiOn = scoreIchimoku and ichiReady
+
+plot(momOn ? 1 : 0, "DBG Momentum Point Enabled (1/0)", display = display.data_window)
+plot(partOn ? 1 : 0, "DBG Participation Point Enabled (1/0)", display = display.data_window)
+plot(ichiOn ? 1 : 0, "DBG Ichimoku Point Enabled (1/0)", display = display.data_window)
+
 // ============================================================
 // TRADE GATE
 // ============================================================
@@ -607,8 +641,8 @@ plot(ichiBullConfirm ? 1 : ichiBearConfirm ? -1 : 0, "DBG Ichimoku (1/-1/0)", di
 killzonePointOn = scoreKillzone and (showLondonKZ or showNewYorkKZ)
 
 // One pass counts the enabled points and the achieved points together. Declaring a point in
-// only one of two parallel lists was the failure this prevents — and the confirmation block
-// still to come adds five more points to this function.
+// only one of two parallel lists was the failure this prevents. Seven points now: the
+// confirmation block added three, not five, because RSI/MACD/Stochastic share one vote.
 scoreTally(bool isLong) =>
     ofPts = 0
     got   = 0
@@ -616,9 +650,9 @@ scoreTally(bool isLong) =>
         ofPts += 1
         if killzoneActive
             got += 1
-    if momRsi
+    if momOn
         ofPts += 1
-        if isLong ? rsiBullishConfirm : rsiBearishConfirm
+        if isLong ? momLongOk : momShortOk
             got += 1
     if scoreMa
         ofPts += 1
@@ -632,13 +666,26 @@ scoreTally(bool isLong) =>
         ofPts += 1
         if not na(intState.lastStrength) and intState.lastStrength >= strongBreakMult
             got += 1
+    if partOn
+        ofPts += 1
+        if isLong ? partLongOk : partShortOk
+            got += 1
+    if ichiOn
+        ofPts += 1
+        if isLong ? ichiBullConfirm : ichiBearConfirm
+            got += 1
     [ofPts, got]
 
-// All enabled points = A, one short = B, two short = C. Which grades can actually appear
-// depends on minScore: at the defaults (5 enabled, minScore 4) a C scores 3 and is rejected,
-// so only A and B ever show. Lowering minScore to 3 is what opens C up.
+// Grades are a fraction of the enabled points: A at 90%, B at 75%, C otherwise. Absolute
+// shortfall did not scale — "two short" is 3/5 on one chart and 8/10 on another, and both
+// graded C. Integer arithmetic, so no float rounding sits between a setup and its grade.
+//
+// At five enabled points this reproduces the old rule exactly (5=A, 4=B, 3=C), which is what
+// makes the change safe; the two only diverge once the denominator moves. C is the fallback
+// branch rather than a threshold — minScore is what stops a weak setup reaching the chart at
+// all. At seven points with minScore 5, the lowest grade that can appear is 5/7.
 gradeFor(int score, int ofPoints) =>
-    score >= ofPoints ? "A" : score >= ofPoints - 1 ? "B" : "C"
+    score * 100 >= 90 * ofPoints ? "A" : score * 100 >= 75 * ofPoints ? "B" : "C"
 
 bullHardOk = intState.trend == "up" and bullTouch.hit and not inRange and barstate.isconfirmed
 bearHardOk = intState.trend == "down" and bearTouch.hit and not inRange and barstate.isconfirmed
