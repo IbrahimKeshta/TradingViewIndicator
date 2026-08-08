@@ -110,8 +110,9 @@ four swings are recent (default within 100 bars).
 The second condition matters — without it, four swings scattered across hundreds of bars could
 coincidentally sit in a narrow band and read as consolidation when nothing of the sort happened.
 
-> **Range is displayed but does not yet block signals.** It is shown in the panel so you can use your
-> own judgement. Wiring it into the signal gate is deliberately left for later work.
+> **Range is a hard veto.** No trade opens while it reads `YES`, however good the setup looks — that is
+> the point of tracking it. It is also shown in the panel so you can apply your own judgement to
+> everything else on the chart.
 
 ### The structure panel
 
