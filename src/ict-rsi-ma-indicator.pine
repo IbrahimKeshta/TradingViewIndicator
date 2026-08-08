@@ -518,6 +518,80 @@ bullishWatchZone = intState.trend == "up" and killzoneActive and not inBullishZo
 bearishWatchZone = intState.trend == "down" and killzoneActive and not inBearishZone and not na(closestBearishDist) and closestBearishDist <= atrValue * watchZoneAtrMult
 
 // ============================================================
+// CONFIRMATIONS
+// ============================================================
+// Placed here because the climax test scales by structAtr and the momentum test reuses the
+// RSI confirms — both defined above — and everything here is read by scoreTally below.
+
+// ---- momentum ----
+[macdLine, macdSignalLine, _macdHist] = ta.macd(close, macdFast, macdSlow, macdSignalLen)
+macdBullConfirm = macdLine > macdSignalLine
+macdBearConfirm = macdLine < macdSignalLine
+
+// %K/%D cross, not an overbought/oversold level: in a trend the oscillator pins to its
+// extreme and a level test would veto the continuation setups this engine is built to take.
+stochK = ta.sma(ta.stoch(close, high, low, stochLength), stochSmoothK)
+stochD = ta.sma(stochK, stochDLength)
+stochBullConfirm = stochK > stochD
+stochBearConfirm = stochK < stochD
+
+// ---- participation ----
+// A latch, not a per-bar na test. A single legitimately-zero bar in a thin session must not
+// disable the point for that bar alone: the denominator would flicker between /6 and /7 and
+// change the grade for a reason that has nothing to do with the setup.
+var bool volumeSeen = false
+if not na(volume) and volume > 0
+    volumeSeen := true
+
+volAvg   = ta.sma(volume, volLen)
+volReady = volumeSeen and not na(volAvg) and volAvg > 0
+volSurge = volReady and volume >= volMult * volAvg
+
+// Exhaustion, not displacement. For a long this looks for a heavy DOWN bar closing on its
+// low — the pullback spending itself into support, which is where the reversal starts.
+// The window ends at the current bar and includes it.
+climaxFound(bool isLong) =>
+    found = false
+    for i = 0 to climaxBars - 1
+        rng = high[i] - low[i]
+        if rng > 0 and volReady and not na(structAtr)
+            against  = isLong ? close[i] < open[i] : close[i] > open[i]
+            farThird = isLong ? close[i] <= low[i] + rng / 3 : close[i] >= high[i] - rng / 3
+            bigRange = rng >= climaxRangeMult * structAtr
+            bigVol   = volume[i] >= climaxVolMult * volAvg
+            if against and farThird and bigRange and bigVol
+                found := true
+    found
+
+climaxLong  = climaxFound(true)
+climaxShort = climaxFound(false)
+
+// ---- ichimoku ----
+ichiTenkan = math.avg(ta.highest(high, tenkanLen), ta.lowest(low, tenkanLen))
+ichiKijun  = math.avg(ta.highest(high, kijunLen), ta.lowest(low, kijunLen))
+ichiSpanA  = math.avg(ichiTenkan, ichiKijun)
+ichiSpanB  = math.avg(ta.highest(high, senkouBLen), ta.lowest(low, senkouBLen))
+
+// The cloud drawn AT this bar was computed ichiDisp bars ago, so the score reads the delayed
+// series. Comparing close to the undisplaced span would compare price against a cloud that
+// will not be drawn for another 26 bars. Chikou is not computed at all: displaced backwards,
+// it reports confirmation that did not exist at the time.
+ichiCloudTop    = math.max(ichiSpanA[ichiDisp], ichiSpanB[ichiDisp])
+ichiCloudBottom = math.min(ichiSpanA[ichiDisp], ichiSpanB[ichiDisp])
+ichiReady       = not na(ichiCloudTop) and not na(ichiCloudBottom)
+ichiBullConfirm = ichiReady and close > ichiCloudTop
+ichiBearConfirm = ichiReady and close < ichiCloudBottom
+
+// Data Window readouts — the verification surface for this block.
+plot(macdBullConfirm ? 1 : macdBearConfirm ? -1 : 0, "DBG MACD (1/-1/0)", display = display.data_window)
+plot(stochBullConfirm ? 1 : stochBearConfirm ? -1 : 0, "DBG Stoch (1/-1/0)", display = display.data_window)
+plot(volumeSeen ? 1 : 0, "DBG Volume Available (1/0)", display = display.data_window)
+plot(volSurge ? 1 : 0, "DBG Volume Surge (1/0)", display = display.data_window)
+plot(climaxLong ? 1 : 0, "DBG Climax Long (1/0)", display = display.data_window)
+plot(climaxShort ? 1 : 0, "DBG Climax Short (1/0)", display = display.data_window)
+plot(ichiBullConfirm ? 1 : ichiBearConfirm ? -1 : 0, "DBG Ichimoku (1/-1/0)", display = display.data_window)
+
+// ============================================================
 // TRADE GATE
 // ============================================================
 // Hard requirements are absolute: without a direction and a zone there is no side, no stop
