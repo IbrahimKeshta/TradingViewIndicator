@@ -1,5 +1,10 @@
 //@version=6
-indicator("ICT + RSI/MA Confluence", shorttitle = "ICT-RSI-MA", overlay = true, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
+// max_bars_back is not optional here. Drawings anchored at a stored bar index (swing tags and
+// rays, break lines, the trade box) make Pine resolve that index as an offset from the current
+// bar, so the historical buffer has to be at least as deep as the oldest anchor. Left to
+// auto-detection the buffer is sized from an early pass and a later, older anchor is a runtime
+// error rather than a clipped drawing.
+indicator("ICT + RSI/MA Confluence", shorttitle = "ICT-RSI-MA", overlay = true, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500, max_bars_back = 5000) // 5000 must match HIST_LIMIT below; a literal is required here
 
 // ============================================================
 // INPUTS
@@ -811,18 +816,32 @@ plotshape(showSignalMarkers and bearishSignal, title = "Bearish Signal", style =
 var line[]  structLines  = array.new<line>()
 var label[] structLabels = array.new<label>()
 
+// Anchor guards. Nothing in this script bounds a stored bar index by age — maxSwings caps swing
+// points by count, and an open trade has no age limit at all — so on a long enough chart an
+// anchor outruns even the 5000-bar buffer. Every drawing built from a stored bar goes through
+// one of these. The one-bar margin is deliberate: the offset Pine charged for an anchor came in
+// one above the plain bar distance.
+var int HIST_LIMIT   = 5000 // must match indicator()'s max_bars_back literal on line 7
+ANCHOR_LIMIT         = HIST_LIMIT - 1
+anchorBar(int b)     => math.max(b, bar_index - ANCHOR_LIMIT)
+anchorInRange(int b) => bar_index - b <= ANCHOR_LIMIT
+
 drawSwingTags(array<SwingPoint> points, bool isHigh) =>
     for p in points
-        if not na(p.kind)
+        // Skipped rather than clamped: a tag is a claim about the bar it sits on, and sliding
+        // one to the edge of the buffer would put "HH" on a bar that never made the high.
+        if not na(p.kind) and anchorInRange(p.bar)
             tagCol = p.liquidity ? liquidityTagColor : majorTagColor
             array.push(structLabels, label.new(p.bar, p.price, p.kind, style = isHigh ? label.style_label_down : label.style_label_up, color = tagCol, textcolor = color.white, size = size.tiny))
     array.size(structLabels)
 
+// Clamped rather than skipped: a ray's meaning is its price and its extension to the right, so
+// starting it late only shortens it.
 drawSwingRays(array<SwingPoint> points, bool dotted, bool faded) =>
     rayCol = faded ? color.new(rayColor, 60) : rayColor
     for p in points
         if not p.broken
-            array.push(structLines, line.new(p.bar, p.price, bar_index, p.price, extend = extend.right, color = rayCol, style = dotted ? line.style_dotted : line.style_solid, width = 1))
+            array.push(structLines, line.new(anchorBar(p.bar), p.price, bar_index, p.price, extend = extend.right, color = rayCol, style = dotted ? line.style_dotted : line.style_solid, width = 1))
     array.size(structLines)
 
 // Persistent — deliberately not tracked in structLines/structLabels, so the redraw below
@@ -831,7 +850,7 @@ drawBreakEvent(TierState st, bool enabled, int lineWidth, bool faded) =>
     if enabled and (st.bullBreak or st.bearBreak)
         evtColor = st.lastType == "CHoCH" ? chochColor : bosColor
         evtCol   = faded ? color.new(evtColor, 50) : evtColor
-        line.new(st.lastLevelBar, st.lastLevel, bar_index, st.lastLevel, color = evtCol, style = line.style_dotted, width = lineWidth)
+        line.new(anchorBar(st.lastLevelBar), st.lastLevel, bar_index, st.lastLevel, color = evtCol, style = line.style_dotted, width = lineWidth)
         label.new(bar_index, st.lastLevel, st.lastType, style = st.lastSide == "bull" ? label.style_label_up : label.style_label_down, color = evtCol, textcolor = color.white, size = size.tiny)
     st.lastBar
 
@@ -866,7 +885,7 @@ var label[] tradeLabels = array.new<label>()
 var box     tradeBox    = na
 
 tradeLevelLine(int openBar, float price, color col, string txt, bool dotted) =>
-    array.push(tradeLines, line.new(openBar, price, bar_index, price, extend = extend.right, color = col, style = dotted ? line.style_dotted : line.style_solid, width = 1))
+    array.push(tradeLines, line.new(anchorBar(openBar), price, bar_index, price, extend = extend.right, color = col, style = dotted ? line.style_dotted : line.style_solid, width = 1))
     array.push(tradeLabels, label.new(bar_index, price, txt, style = label.style_label_left, color = col, textcolor = color.white, size = size.tiny))
     array.size(tradeLines)
 
@@ -890,8 +909,10 @@ if barstate.islast
         isLong  = activeTrade.side == "long"
         sideCol = isLong ? tradeLongColor : tradeShortColor
         r       = math.abs(activeTrade.entry - activeTrade.initialStop)
-        tradeBox := box.new(activeTrade.openBar, activeTrade.zoneTop, bar_index, activeTrade.zoneBottom, border_color = sideCol, bgcolor = color.new(sideCol, 88))
-        array.push(tradeLabels, label.new(activeTrade.openBar, activeTrade.zoneTop, (isLong ? "LONG · " : "SHORT · ") + activeTrade.grade + " · " + str.tostring(activeTrade.score) + "/" + str.tostring(activeTrade.scoreOf), style = label.style_label_down, color = sideCol, textcolor = color.white, size = size.tiny))
+        // Both clamped through the same anchor so the header label stays on the box's corner.
+        boxBar  = anchorBar(activeTrade.openBar)
+        tradeBox := box.new(boxBar, activeTrade.zoneTop, bar_index, activeTrade.zoneBottom, border_color = sideCol, bgcolor = color.new(sideCol, 88))
+        array.push(tradeLabels, label.new(boxBar, activeTrade.zoneTop, (isLong ? "LONG · " : "SHORT · ") + activeTrade.grade + " · " + str.tostring(activeTrade.score) + "/" + str.tostring(activeTrade.scoreOf), style = label.style_label_down, color = sideCol, textcolor = color.white, size = size.tiny))
         tradeLevelLine(activeTrade.openBar, activeTrade.entry, sideCol, "Entry " + str.tostring(activeTrade.entry, format.mintick), false)
         tradeLevelLine(activeTrade.openBar, activeTrade.stop, tradeStopColor, "SL " + str.tostring(activeTrade.stop, format.mintick), false)
         tradeLevelLine(activeTrade.openBar, activeTrade.tp1, tradeTargetColor, targetLabelText(1, activeTrade.tp1, activeTrade.liq1, isLong, activeTrade.entry, r, activeTrade.tpHit), activeTrade.tpHit >= 1)
