@@ -66,9 +66,8 @@ chochColor         = input.color(color.fuchsia, "CHoCH", group = "Structure Disp
 rayColor           = input.color(color.gray, "Rays", group = "Structure Display")
 
 // ---------------- Trade Engine ----------------
-minScore           = input.int(4, "Minimum Score", minval = 1, maxval = 15, group = "Trade Engine", tooltip = "How many scored points a setup needs, out of however many are switched on below. The panel shows both numbers — a disabled point is never counted in the denominator, so turning one off does not silently loosen or break the threshold.")
+minScore           = input.int(5, "Minimum Score", minval = 1, maxval = 15, group = "Trade Engine", tooltip = "How many scored points a setup needs, out of however many are switched on below. The panel shows both numbers — a disabled point is never counted in the denominator, so turning one off does not silently loosen or break the threshold.\n\nRaised from 4 to 5 when the confirmation points were added: at seven points, 4 would be a LOOSER gate than the old 4-of-5. TradingView keeps the value saved on an existing chart, so if this still reads 4, it was carried over and should be raised by hand.")
 scoreKillzone      = input.bool(true, "Score: Killzone", group = "Trade Engine", tooltip = "Turn off on single-session markets such as EGX, where a killzone means nothing. If both killzone sessions are disabled for display, this point excludes itself automatically whatever this is set to.")
-scoreRsi           = input.bool(true, "Score: RSI", group = "Trade Engine")
 scoreMa            = input.bool(true, "Score: Moving Average", group = "Trade Engine")
 scoreMajorAgree    = input.bool(true, "Score: Major Trend Agreement", group = "Trade Engine", tooltip = "Whether the major tier agrees with the internal tier. A pullback entry against the major trend is a real setup — just a weaker one — so this scores rather than vetoes.")
 scoreBreakStrength = input.bool(true, "Score: Break Strength", group = "Trade Engine")
@@ -84,6 +83,38 @@ tradeLongColor     = input.color(color.teal, "Long", group = "Trade Engine")
 tradeShortColor    = input.color(color.maroon, "Short", group = "Trade Engine")
 tradeStopColor     = input.color(color.red, "Stop", group = "Trade Engine")
 tradeTargetColor   = input.color(color.green, "Targets", group = "Trade Engine")
+
+// ---------------- Confirmations ----------------
+// Five indicators, three points. RSI, MACD and Stochastic all read momentum off the same price
+// series — counted separately they would cast three votes for one opinion, and a setup could
+// clear minScore on momentum agreeing with itself. Correlated members share a point instead.
+scoreMomentum      = input.bool(true, "Score: Momentum", group = "Confirmations", tooltip = "One point, earned when at least half the enabled members below agree with the trade's direction (2 of 3, 1 of 2, 1 of 1). If every member is switched off, this point removes itself from the denominator whatever this is set to.")
+momRsi             = input.bool(true, "Momentum: RSI", group = "Confirmations", tooltip = "RSI above 50 for a long, below 50 for a short. This was 'Score: RSI' and was a point of its own; it is now a member of the Momentum vote.")
+momMacd            = input.bool(true, "Momentum: MACD", group = "Confirmations", tooltip = "MACD line above its signal line for a long, below for a short.")
+momStoch           = input.bool(true, "Momentum: Stochastic", group = "Confirmations", tooltip = "%K above %D for a long, below for a short. Read as a cross rather than an overbought/oversold level: in a trend the oscillator pins to its extreme and a level test would veto exactly the continuation setups this engine takes.")
+macdFast           = input.int(12, "MACD Fast", minval = 1, group = "Confirmations")
+macdSlow           = input.int(26, "MACD Slow", minval = 2, group = "Confirmations")
+macdSignalLen      = input.int(9, "MACD Signal", minval = 1, group = "Confirmations")
+stochLength        = input.int(14, "Stochastic %K Length", minval = 1, group = "Confirmations")
+stochSmoothK       = input.int(3, "Stochastic %K Smoothing", minval = 1, group = "Confirmations")
+stochDLength       = input.int(3, "Stochastic %D Length", minval = 1, group = "Confirmations")
+scoreParticipation = input.bool(true, "Score: Participation", group = "Confirmations", tooltip = "One point for evidence that someone is actually trading at this level. On a symbol that reports no volume at all — many forex feeds — both members disable themselves and this point leaves the denominator.")
+partVolume         = input.bool(true, "Participation: Volume Surge", group = "Confirmations", tooltip = "Volume on the bar that touched the zone, against its own recent average.")
+partClimax         = input.bool(true, "Participation: Climax Candle", group = "Confirmations", tooltip = "An exhaustion bar AGAINST the trade in the last few bars — for a long, a heavy down bar closing on its low into support. That is the pullback spending itself, which is where the reversal starts. A heavy up bar before you buy a pullback means you are late, and does not earn this.")
+volLen             = input.int(20, "Volume Average Length", minval = 1, group = "Confirmations")
+volMult            = input.float(1.5, "Volume Surge (x average)", minval = 0.1, step = 0.1, group = "Confirmations")
+climaxRangeMult    = input.float(2.0, "Climax Range (x ATR)", minval = 0.1, step = 0.1, group = "Confirmations", tooltip = "Uses the Structure ATR, so climax detection and the stop buffer are scaled by the same measure.")
+climaxVolMult      = input.float(2.0, "Climax Volume (x average)", minval = 0.1, step = 0.1, group = "Confirmations")
+climaxBars         = input.int(3, "Climax Lookback (bars)", minval = 1, maxval = 20, group = "Confirmations", tooltip = "Window ending at the current bar, inclusive. At 3 it covers this bar and the two before it.")
+scoreIchimoku      = input.bool(true, "Score: Ichimoku", group = "Confirmations", tooltip = "One point when price sits clear of the cloud on the trade's side. Inside the cloud earns nothing — that is the region where the regime is undecided. Chikou is deliberately not used: it is displaced 26 bars backwards and would report confirmation that did not exist at the time.")
+tenkanLen          = input.int(9, "Tenkan Length", minval = 1, group = "Confirmations")
+kijunLen           = input.int(26, "Kijun Length", minval = 1, group = "Confirmations")
+senkouBLen         = input.int(52, "Senkou B Length", minval = 1, group = "Confirmations")
+ichiDisp           = input.int(26, "Ichimoku Displacement", minval = 1, maxval = 100, group = "Confirmations", tooltip = "How far forward the cloud is drawn — and how far back the score has to look to read the cloud you actually see at this bar.")
+showKumo           = input.bool(false, "Show Kumo Cloud", group = "Confirmations", tooltip = "Off by default. The chart already carries swing tags, rays, break lines, order blocks, fair value gaps and a full trade box; the cloud is the only part of this block that can be drawn on a price overlay at all.")
+showConfirmPanel   = input.bool(true, "Show Confirmation Panel Row", group = "Confirmations")
+kumoBullColor      = input.color(color.new(color.green, 85), "Kumo Bullish", group = "Confirmations")
+kumoBearColor      = input.color(color.new(color.red, 85), "Kumo Bearish", group = "Confirmations")
 
 // ============================================================
 // RSI + MA
@@ -511,7 +542,7 @@ scoreTally(bool isLong) =>
         ofPts += 1
         if killzoneActive
             got += 1
-    if scoreRsi
+    if momRsi
         ofPts += 1
         if isLong ? rsiBullishConfirm : rsiBearishConfirm
             got += 1
