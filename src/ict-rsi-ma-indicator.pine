@@ -625,6 +625,15 @@ plot(momOn ? 1 : 0, "DBG Momentum Point Enabled (1/0)", display = display.data_w
 plot(partOn ? 1 : 0, "DBG Participation Point Enabled (1/0)", display = display.data_window)
 plot(ichiOn ? 1 : 0, "DBG Ichimoku Point Enabled (1/0)", display = display.data_window)
 
+// ---- the cloud ----
+// plot() cannot live inside an `if`, so the toggle plots na instead: nothing is drawn and the
+// fill has nothing to fill between. `offset` draws the spans forward, which is what makes the
+// cloud visible at this bar the one computed ichiDisp bars ago — the same series the score
+// reads back through [ichiDisp].
+kumoPlotA = plot(showKumo ? ichiSpanA : na, "Senkou A", color = color.new(color.green, 60), offset = ichiDisp)
+kumoPlotB = plot(showKumo ? ichiSpanB : na, "Senkou B", color = color.new(color.red, 60), offset = ichiDisp)
+fill(kumoPlotA, kumoPlotB, color = ichiSpanA > ichiSpanB ? kumoBullColor : kumoBearColor, title = "Kumo")
+
 // ============================================================
 // TRADE GATE
 // ============================================================
