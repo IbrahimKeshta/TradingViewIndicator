@@ -149,7 +149,7 @@ flowchart LR
         S3["Price on side of MA"]
         S4["Major trend agrees"]
         S5["Break was strong"]
-        S6["<b>Participation</b><br/>volume surge · climax<br/><i>either</i>"]
+        S6["<b>Participation</b><br/>volume surge · climax<br/><i>at least half of those enabled</i>"]
         S7["<b>Ichimoku</b><br/>price clear of the cloud"]
     end
     H --> G{"hard all met<br/>AND score &ge; minimum?"}
@@ -169,7 +169,7 @@ automatically for points that cannot apply: turn off both killzone sessions and 
 removes itself, and on a symbol that reports no volume at all the participation point removes itself.
 
 **Three of the five confirmations share votes, on purpose.** RSI, MACD and Stochastic all measure
-momentum from the same price series — counted separately they would cast three of nine votes for
+momentum from the same price series — counted separately they would cast three of ten votes for
 what is really one opinion, and a setup could clear the threshold on momentum agreeing with itself.
 They share the Momentum point, earned when at least half the enabled ones agree. Volume and the
 climax candle share Participation the same way.
@@ -282,6 +282,7 @@ claiming to quote a price or an R figure.
 | Score: Participation | on | One point for evidence someone is actually trading here |
 | Participation: Volume Surge | on | Volume on the bar that touched the zone, against its own average |
 | Participation: Climax Candle | on | An exhaustion bar **against** the trade — for a long, a heavy down bar closing on its low into support. That is the pullback spending itself |
+| Volume Average Length | 20 | Bars in the volume average that surge and climax both measure against |
 | Volume Surge (× average) | 1.5 | How far above average counts as a surge |
 | Climax Range (× ATR) / Volume (× average) / Lookback | 2.0 / 2.0 / 3 | How big an exhaustion bar has to be, and how recently it can have printed |
 | Score: Ichimoku | on | One point when price is clear of the cloud on the trade's side. Inside the cloud earns nothing |

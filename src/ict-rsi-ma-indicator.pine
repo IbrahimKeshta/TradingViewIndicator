@@ -330,8 +330,8 @@ type Touch
     bool   hit
     float  top
     float  bottom
-    // Captured for future use — e.g. scoring "the zone was a major-tier order block" in the
-    // confirmation block still to come. Not read anywhere yet.
+    // Set by mitigateZones from the touched zone's tier, but not currently read anywhere —
+    // no confirmation or scoring logic consumes it yet.
     string tier
 
 var array<Zone> bullishFvgZones = array.new<Zone>()
@@ -539,11 +539,16 @@ stochBearConfirm = stochK < stochD
 // A latch, not a per-bar na test. A single legitimately-zero bar in a thin session must not
 // disable the point for that bar alone: the denominator would flicker between /6 and /7 and
 // change the grade for a reason that has nothing to do with the setup.
+// ta.sma propagates na across its whole window, so one na-volume bar would blank volAvg — and
+// with it volReady — for the next volLen bars, not just the bar itself. Averaging nz(volume)
+// instead treats a missing print as zero, which only depresses the average briefly instead of
+// disabling the point; the volumeSeen latch and the volAvg > 0 guard below still do the real
+// job of dropping Participation on a symbol that reports no volume at all.
 var bool volumeSeen = false
 if not na(volume) and volume > 0
     volumeSeen := true
 
-volAvg   = ta.sma(volume, volLen)
+volAvg   = ta.sma(nz(volume), volLen)
 volReady = volumeSeen and not na(volAvg) and volAvg > 0
 volSurge = volReady and volume >= volMult * volAvg
 
@@ -554,11 +559,11 @@ climaxFound(bool isLong) =>
     found = false
     for i = 0 to climaxBars - 1
         rng = high[i] - low[i]
-        if rng > 0 and volReady and not na(structAtr)
+        if rng > 0 and volReady and not na(structAtr[i])
             against  = isLong ? close[i] < open[i] : close[i] > open[i]
             farThird = isLong ? close[i] <= low[i] + rng / 3 : close[i] >= high[i] - rng / 3
-            bigRange = rng >= climaxRangeMult * structAtr
-            bigVol   = volume[i] >= climaxVolMult * volAvg
+            bigRange = rng >= climaxRangeMult * structAtr[i]
+            bigVol   = volume[i] >= climaxVolMult * volAvg[i]
             if against and farThird and bigRange and bigVol
                 found := true
     found
@@ -692,7 +697,9 @@ scoreTally(bool isLong) =>
 // At five enabled points this reproduces the old rule exactly (5=A, 4=B, 3=C), which is what
 // makes the change safe; the two only diverge once the denominator moves. C is the fallback
 // branch rather than a threshold — minScore is what stops a weak setup reaching the chart at
-// all. At seven points with minScore 5, the lowest grade that can appear is 5/7.
+// all. At seven points with minScore 5, the lowest grade that can appear is 5/7. Below four
+// enabled points the two thresholds round to the same score (e.g. at 3, both A and B need
+// score 3), so only A and C are reachable; B needs a denominator of at least 4 to exist.
 gradeFor(int score, int ofPoints) =>
     score * 100 >= 90 * ofPoints ? "A" : score * 100 >= 75 * ofPoints ? "B" : "C"
 

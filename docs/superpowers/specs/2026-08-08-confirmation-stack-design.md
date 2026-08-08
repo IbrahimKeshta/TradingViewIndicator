@@ -182,6 +182,9 @@ chart and 8/10 on another, and both graded C.
 At five points that table is identical to the current rule. The rules only diverge once the denominator
 moves, which is the entire purpose.
 
+Below four enabled points, B is unreachable: at 3, `A` and `B` both round up to a score of 3 (2.7 and
+2.25 each ceil to 3), so only `A` and `C` can appear. B needs a denominator of at least 4 to exist.
+
 C is the fallback branch, not a threshold — `minScore` is what stops a weak setup appearing at all. At
 seven points with `minScore` 5, the lowest grade that can reach the chart is 5/7.
 
