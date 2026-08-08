@@ -343,6 +343,13 @@ closes differently. Wait for the close.
 chart a major lookback of 20 finds very few swings; on a 1-minute chart it finds too many. If the
 chart looks wrong, this is almost always why.
 
+**Drawings only reach so far back.** Pine anchors a drawing by counting bars back from the current
+one, and that count is capped by the script's declared history buffer — 5000 bars for the confluence
+indicator, 500 for Gann Angles. Beyond that limit the confluence indicator drops a swing tag rather
+than move it to a bar that never made the high, and starts a ray, break line or trade box at the edge
+of the buffer instead of at its true origin. The price levels themselves are unaffected. You will
+only meet this on a very long intraday chart.
+
 **These are decision-support tools, not a strategy.** Neither script backtests, sizes a position, or
 places an order. The trade engine computes levels and records what would have happened; it does not
 size a position and it has no idea what your account can absorb. No indicator knows the future, and
