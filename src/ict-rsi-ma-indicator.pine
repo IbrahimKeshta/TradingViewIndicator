@@ -1106,10 +1106,18 @@ if barstate.islast
         trendText    = na(majorState.trend) ? "—" : str.upper(majorState.trend)
         trendCol     = majorState.trend == "up" ? color.lime : majorState.trend == "down" ? color.red : color.gray
         internalText = na(majorState.trend) or na(intState.trend) ? "—" : intState.trend == majorState.trend ? "aligned" : "pullback"
+        // Reads the current bar for the internal trend's direction — the same tier the gate
+        // reads. Undefined trend falls back to the long side so the row is never blank.
+        confirmLong = intState.trend != "down"
+        momMark     = not momOn ? "–" : (confirmLong ? momLongOk : momShortOk) ? "✓" : "✗"
+        partMark    = not partOn ? "–" : (confirmLong ? partLongOk : partShortOk) ? "✓" : "✗"
+        ichiMark    = not ichiOn ? "–" : (confirmLong ? ichiBullConfirm : ichiBearConfirm) ? "✓" : "✗"
+        confirmText = "Mom " + momMark + " · Part " + partMark + " · Ichi " + ichiMark
+        confirmRows = showConfirmPanel ? 1 : 0
         tradeRows = 0
         if showTradePanel and tradeIsLive()
             tradeRows := 6
-        structPanel := table.new(panelPos, 2, 5 + tradeRows, bgcolor = color.new(color.black, 80), border_width = 1)
+        structPanel := table.new(panelPos, 2, 5 + confirmRows + tradeRows, bgcolor = color.new(color.black, 80), border_width = 1)
         table.cell(structPanel, 0, 0, "STRUCTURE", text_color = color.white, bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 1, 0, "", bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 0, 1, "Major trend", text_color = color.silver)
@@ -1120,22 +1128,26 @@ if barstate.islast
         table.cell(structPanel, 1, 3, evtText, text_color = color.white)
         table.cell(structPanel, 0, 4, "Internal", text_color = color.silver)
         table.cell(structPanel, 1, 4, internalText, text_color = color.aqua)
+        if confirmRows > 0
+            table.cell(structPanel, 0, 5, "Confirm", text_color = color.silver)
+            table.cell(structPanel, 1, 5, confirmText, text_color = color.white)
+        tradeBase = 5 + confirmRows
         if tradeRows > 0
             isLongT = activeTrade.side == "long"
             rT      = math.abs(activeTrade.entry - activeTrade.initialStop)
             rTxt    = rT > 0 ? str.tostring(tradeOpenR, "0.00") + "R" : "—"
-            table.cell(structPanel, 0, 5, "TRADE", text_color = color.white, bgcolor = color.new(color.gray, 50))
-            table.cell(structPanel, 1, 5, (isLongT ? "LONG" : "SHORT") + " · " + activeTrade.grade + " · " + str.tostring(activeTrade.score) + "/" + str.tostring(activeTrade.scoreOf), text_color = isLongT ? tradeLongColor : tradeShortColor, bgcolor = color.new(color.gray, 50))
-            table.cell(structPanel, 0, 6, "Entry", text_color = color.silver)
-            table.cell(structPanel, 1, 6, str.tostring(activeTrade.entry, format.mintick), text_color = color.white)
-            table.cell(structPanel, 0, 7, "Stop", text_color = color.silver)
-            table.cell(structPanel, 1, 7, str.tostring(activeTrade.stop, format.mintick) + (activeTrade.tpHit >= 1 ? " · BE+" : "") + " · " + str.tostring(rT > 0 ? math.abs(activeTrade.entry - activeTrade.stop) / rT : 0.0, "0.0") + "R", text_color = tradeStopColor)
-            table.cell(structPanel, 0, 8, "TP1 / TP2", text_color = color.silver)
-            table.cell(structPanel, 1, 8, str.tostring(activeTrade.tp1, format.mintick) + (activeTrade.tpHit >= 1 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp1 - activeTrade.entry) / rT : 0.0, "0.0") + "R)" + "  " + str.tostring(activeTrade.tp2, format.mintick) + (activeTrade.tpHit >= 2 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp2 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
-            table.cell(structPanel, 0, 9, "TP3", text_color = color.silver)
-            table.cell(structPanel, 1, 9, str.tostring(activeTrade.tp3, format.mintick) + (activeTrade.tpHit >= 3 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp3 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
-            table.cell(structPanel, 0, 10, "Open R", text_color = color.silver)
-            table.cell(structPanel, 1, 10, rTxt, text_color = tradeOpenR >= 0 ? color.lime : color.red)
+            table.cell(structPanel, 0, tradeBase, "TRADE", text_color = color.white, bgcolor = color.new(color.gray, 50))
+            table.cell(structPanel, 1, tradeBase, (isLongT ? "LONG" : "SHORT") + " · " + activeTrade.grade + " · " + str.tostring(activeTrade.score) + "/" + str.tostring(activeTrade.scoreOf), text_color = isLongT ? tradeLongColor : tradeShortColor, bgcolor = color.new(color.gray, 50))
+            table.cell(structPanel, 0, tradeBase + 1, "Entry", text_color = color.silver)
+            table.cell(structPanel, 1, tradeBase + 1, str.tostring(activeTrade.entry, format.mintick), text_color = color.white)
+            table.cell(structPanel, 0, tradeBase + 2, "Stop", text_color = color.silver)
+            table.cell(structPanel, 1, tradeBase + 2, str.tostring(activeTrade.stop, format.mintick) + (activeTrade.tpHit >= 1 ? " · BE+" : "") + " · " + str.tostring(rT > 0 ? math.abs(activeTrade.entry - activeTrade.stop) / rT : 0.0, "0.0") + "R", text_color = tradeStopColor)
+            table.cell(structPanel, 0, tradeBase + 3, "TP1 / TP2", text_color = color.silver)
+            table.cell(structPanel, 1, tradeBase + 3, str.tostring(activeTrade.tp1, format.mintick) + (activeTrade.tpHit >= 1 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp1 - activeTrade.entry) / rT : 0.0, "0.0") + "R)" + "  " + str.tostring(activeTrade.tp2, format.mintick) + (activeTrade.tpHit >= 2 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp2 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
+            table.cell(structPanel, 0, tradeBase + 4, "TP3", text_color = color.silver)
+            table.cell(structPanel, 1, tradeBase + 4, str.tostring(activeTrade.tp3, format.mintick) + (activeTrade.tpHit >= 3 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp3 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
+            table.cell(structPanel, 0, tradeBase + 5, "Open R", text_color = color.silver)
+            table.cell(structPanel, 1, tradeBase + 5, rTxt, text_color = tradeOpenR >= 0 ? color.lime : color.red)
 
 // ============================================================
 // ALERTS
