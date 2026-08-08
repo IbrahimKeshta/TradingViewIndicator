@@ -66,9 +66,8 @@ chochColor         = input.color(color.fuchsia, "CHoCH", group = "Structure Disp
 rayColor           = input.color(color.gray, "Rays", group = "Structure Display")
 
 // ---------------- Trade Engine ----------------
-minScore           = input.int(4, "Minimum Score", minval = 1, maxval = 15, group = "Trade Engine", tooltip = "How many scored points a setup needs, out of however many are switched on below. The panel shows both numbers — a disabled point is never counted in the denominator, so turning one off does not silently loosen or break the threshold.")
+minScore           = input.int(5, "Minimum Score", minval = 1, maxval = 15, group = "Trade Engine", tooltip = "How many scored points a setup needs, out of however many are switched on below. The panel shows both numbers — a disabled point is never counted in the denominator, so turning one off does not silently loosen or break the threshold.\n\nRaised from 4 to 5 when the confirmation points were added: at seven points, 4 would be a LOOSER gate than the old 4-of-5. TradingView keeps the value saved on an existing chart, so if this still reads 4, it was carried over and should be raised by hand.")
 scoreKillzone      = input.bool(true, "Score: Killzone", group = "Trade Engine", tooltip = "Turn off on single-session markets such as EGX, where a killzone means nothing. If both killzone sessions are disabled for display, this point excludes itself automatically whatever this is set to.")
-scoreRsi           = input.bool(true, "Score: RSI", group = "Trade Engine")
 scoreMa            = input.bool(true, "Score: Moving Average", group = "Trade Engine")
 scoreMajorAgree    = input.bool(true, "Score: Major Trend Agreement", group = "Trade Engine", tooltip = "Whether the major tier agrees with the internal tier. A pullback entry against the major trend is a real setup — just a weaker one — so this scores rather than vetoes.")
 scoreBreakStrength = input.bool(true, "Score: Break Strength", group = "Trade Engine")
@@ -84,6 +83,38 @@ tradeLongColor     = input.color(color.teal, "Long", group = "Trade Engine")
 tradeShortColor    = input.color(color.maroon, "Short", group = "Trade Engine")
 tradeStopColor     = input.color(color.red, "Stop", group = "Trade Engine")
 tradeTargetColor   = input.color(color.green, "Targets", group = "Trade Engine")
+
+// ---------------- Confirmations ----------------
+// Five indicators, three points. RSI, MACD and Stochastic all read momentum off the same price
+// series — counted separately they would cast three votes for one opinion, and a setup could
+// clear minScore on momentum agreeing with itself. Correlated members share a point instead.
+scoreMomentum      = input.bool(true, "Score: Momentum", group = "Confirmations", tooltip = "One point, earned when at least half the enabled members below agree with the trade's direction (2 of 3, 1 of 2, 1 of 1). If every member is switched off, this point removes itself from the denominator whatever this is set to.")
+momRsi             = input.bool(true, "Momentum: RSI", group = "Confirmations", tooltip = "RSI above 50 for a long, below 50 for a short. This was 'Score: RSI' and was a point of its own; it is now a member of the Momentum vote.")
+momMacd            = input.bool(true, "Momentum: MACD", group = "Confirmations", tooltip = "MACD line above its signal line for a long, below for a short.")
+momStoch           = input.bool(true, "Momentum: Stochastic", group = "Confirmations", tooltip = "%K above %D for a long, below for a short. Read as a cross rather than an overbought/oversold level: in a trend the oscillator pins to its extreme and a level test would veto exactly the continuation setups this engine takes.")
+macdFast           = input.int(12, "MACD Fast", minval = 1, group = "Confirmations")
+macdSlow           = input.int(26, "MACD Slow", minval = 2, group = "Confirmations")
+macdSignalLen      = input.int(9, "MACD Signal", minval = 1, group = "Confirmations")
+stochLength        = input.int(14, "Stochastic %K Length", minval = 1, group = "Confirmations")
+stochSmoothK       = input.int(3, "Stochastic %K Smoothing", minval = 1, group = "Confirmations")
+stochDLength       = input.int(3, "Stochastic %D Length", minval = 1, group = "Confirmations")
+scoreParticipation = input.bool(true, "Score: Participation", group = "Confirmations", tooltip = "One point for evidence that someone is actually trading at this level. On a symbol that reports no volume at all — many forex feeds — both members disable themselves and this point leaves the denominator.")
+partVolume         = input.bool(true, "Participation: Volume Surge", group = "Confirmations", tooltip = "Volume on the bar that touched the zone, against its own recent average.")
+partClimax         = input.bool(true, "Participation: Climax Candle", group = "Confirmations", tooltip = "An exhaustion bar AGAINST the trade in the last few bars — for a long, a heavy down bar closing on its low into support. That is the pullback spending itself, which is where the reversal starts. A heavy up bar before you buy a pullback means you are late, and does not earn this.")
+volLen             = input.int(20, "Volume Average Length", minval = 1, group = "Confirmations")
+volMult            = input.float(1.5, "Volume Surge (x average)", minval = 0.1, step = 0.1, group = "Confirmations")
+climaxRangeMult    = input.float(2.0, "Climax Range (x ATR)", minval = 0.1, step = 0.1, group = "Confirmations", tooltip = "Uses the Structure ATR, so climax detection and the stop buffer are scaled by the same measure.")
+climaxVolMult      = input.float(2.0, "Climax Volume (x average)", minval = 0.1, step = 0.1, group = "Confirmations")
+climaxBars         = input.int(3, "Climax Lookback (bars)", minval = 1, maxval = 20, group = "Confirmations", tooltip = "Window ending at the current bar, inclusive. At 3 it covers this bar and the two before it.")
+scoreIchimoku      = input.bool(true, "Score: Ichimoku", group = "Confirmations", tooltip = "One point when price sits clear of the cloud on the trade's side. Inside the cloud earns nothing — that is the region where the regime is undecided. Chikou is deliberately not used: it is displaced 26 bars backwards and would report confirmation that did not exist at the time.")
+tenkanLen          = input.int(9, "Tenkan Length", minval = 1, group = "Confirmations")
+kijunLen           = input.int(26, "Kijun Length", minval = 1, group = "Confirmations")
+senkouBLen         = input.int(52, "Senkou B Length", minval = 1, group = "Confirmations")
+ichiDisp           = input.int(26, "Ichimoku Displacement", minval = 1, maxval = 100, group = "Confirmations", tooltip = "How far forward the cloud is drawn — and how far back the score has to look to read the cloud you actually see at this bar.")
+showKumo           = input.bool(false, "Show Kumo Cloud", group = "Confirmations", tooltip = "Off by default. The chart already carries swing tags, rays, break lines, order blocks, fair value gaps and a full trade box; the cloud is the only part of this block that can be drawn on a price overlay at all.")
+showConfirmPanel   = input.bool(true, "Show Confirmation Panel Row", group = "Confirmations")
+kumoBullColor      = input.color(color.new(color.green, 85), "Kumo Bullish", group = "Confirmations")
+kumoBearColor      = input.color(color.new(color.red, 85), "Kumo Bearish", group = "Confirmations")
 
 // ============================================================
 // RSI + MA
@@ -299,8 +330,8 @@ type Touch
     bool   hit
     float  top
     float  bottom
-    // Captured for future use — e.g. scoring "the zone was a major-tier order block" in the
-    // confirmation block still to come. Not read anywhere yet.
+    // Set by mitigateZones from the touched zone's tier, but not currently read anywhere —
+    // no confirmation or scoring logic consumes it yet.
     string tier
 
 var array<Zone> bullishFvgZones = array.new<Zone>()
@@ -487,6 +518,128 @@ bullishWatchZone = intState.trend == "up" and killzoneActive and not inBullishZo
 bearishWatchZone = intState.trend == "down" and killzoneActive and not inBearishZone and not na(closestBearishDist) and closestBearishDist <= atrValue * watchZoneAtrMult
 
 // ============================================================
+// CONFIRMATIONS
+// ============================================================
+// Placed here because the climax test scales by structAtr and the momentum test reuses the
+// RSI confirms — both defined above — and everything here is read by scoreTally below.
+
+// ---- momentum ----
+[macdLine, macdSignalLine, _macdHist] = ta.macd(close, macdFast, macdSlow, macdSignalLen)
+macdBullConfirm = macdLine > macdSignalLine
+macdBearConfirm = macdLine < macdSignalLine
+
+// %K/%D cross, not an overbought/oversold level: in a trend the oscillator pins to its
+// extreme and a level test would veto the continuation setups this engine is built to take.
+stochK = ta.sma(ta.stoch(close, high, low, stochLength), stochSmoothK)
+stochD = ta.sma(stochK, stochDLength)
+stochBullConfirm = stochK > stochD
+stochBearConfirm = stochK < stochD
+
+// ---- participation ----
+// A latch, not a per-bar na test. A single legitimately-zero bar in a thin session must not
+// disable the point for that bar alone: the denominator would flicker between /6 and /7 and
+// change the grade for a reason that has nothing to do with the setup.
+// ta.sma propagates na across its whole window, so one na-volume bar would blank volAvg — and
+// with it volReady — for the next volLen bars, not just the bar itself. Averaging nz(volume)
+// instead treats a missing print as zero, which only depresses the average briefly instead of
+// disabling the point; the volumeSeen latch and the volAvg > 0 guard below still do the real
+// job of dropping Participation on a symbol that reports no volume at all.
+var bool volumeSeen = false
+if not na(volume) and volume > 0
+    volumeSeen := true
+
+volAvg   = ta.sma(nz(volume), volLen)
+volReady = volumeSeen and not na(volAvg) and volAvg > 0
+volSurge = volReady and volume >= volMult * volAvg
+
+// Exhaustion, not displacement. For a long this looks for a heavy DOWN bar closing on its
+// low — the pullback spending itself into support, which is where the reversal starts.
+// The window ends at the current bar and includes it.
+climaxFound(bool isLong) =>
+    found = false
+    for i = 0 to climaxBars - 1
+        rng = high[i] - low[i]
+        if rng > 0 and volReady and not na(structAtr[i])
+            against  = isLong ? close[i] < open[i] : close[i] > open[i]
+            farThird = isLong ? close[i] <= low[i] + rng / 3 : close[i] >= high[i] - rng / 3
+            bigRange = rng >= climaxRangeMult * structAtr[i]
+            bigVol   = volume[i] >= climaxVolMult * volAvg[i]
+            if against and farThird and bigRange and bigVol
+                found := true
+    found
+
+climaxLong  = climaxFound(true)
+climaxShort = climaxFound(false)
+
+// ---- ichimoku ----
+ichiTenkan = math.avg(ta.highest(high, tenkanLen), ta.lowest(low, tenkanLen))
+ichiKijun  = math.avg(ta.highest(high, kijunLen), ta.lowest(low, kijunLen))
+ichiSpanA  = math.avg(ichiTenkan, ichiKijun)
+ichiSpanB  = math.avg(ta.highest(high, senkouBLen), ta.lowest(low, senkouBLen))
+
+// The cloud drawn AT this bar was computed ichiDisp bars ago, so the score reads the delayed
+// series. Comparing close to the undisplaced span would compare price against a cloud that
+// will not be drawn for another 26 bars. Chikou is not computed at all: displaced backwards,
+// it reports confirmation that did not exist at the time.
+ichiCloudTop    = math.max(ichiSpanA[ichiDisp], ichiSpanB[ichiDisp])
+ichiCloudBottom = math.min(ichiSpanA[ichiDisp], ichiSpanB[ichiDisp])
+ichiReady       = not na(ichiCloudTop) and not na(ichiCloudBottom)
+ichiBullConfirm = ichiReady and close > ichiCloudTop
+ichiBearConfirm = ichiReady and close < ichiCloudBottom
+
+// Data Window readouts — the verification surface for this block.
+plot(macdBullConfirm ? 1 : macdBearConfirm ? -1 : 0, "DBG MACD (1/-1/0)", display = display.data_window)
+plot(stochBullConfirm ? 1 : stochBearConfirm ? -1 : 0, "DBG Stoch (1/-1/0)", display = display.data_window)
+plot(volumeSeen ? 1 : 0, "DBG Volume Available (1/0)", display = display.data_window)
+plot(volSurge ? 1 : 0, "DBG Volume Surge (1/0)", display = display.data_window)
+plot(climaxLong ? 1 : 0, "DBG Climax Long (1/0)", display = display.data_window)
+plot(climaxShort ? 1 : 0, "DBG Climax Short (1/0)", display = display.data_window)
+plot(ichiBullConfirm ? 1 : ichiBearConfirm ? -1 : 0, "DBG Ichimoku (1/-1/0)", display = display.data_window)
+
+// ---- group votes ----
+// At least half the enabled members, rounded up: 2 of 3, 1 of 2, 1 of 1. Never a strict
+// majority — that needs 2 of 2 but only 2 of 3, so switching a member OFF would make the
+// point EASIER to earn, which is the same class of bug the proportional denominator exists
+// to prevent. math.ceil takes a float and returns an int; int/int division is not relied on.
+momEnabledCount = (momRsi ? 1 : 0) + (momMacd ? 1 : 0) + (momStoch ? 1 : 0)
+momNeed         = math.ceil(momEnabledCount / 2.0)
+momLongHits     = (momRsi and rsiBullishConfirm ? 1 : 0) + (momMacd and macdBullConfirm ? 1 : 0) + (momStoch and stochBullConfirm ? 1 : 0)
+momShortHits    = (momRsi and rsiBearishConfirm ? 1 : 0) + (momMacd and macdBearConfirm ? 1 : 0) + (momStoch and stochBearConfirm ? 1 : 0)
+momOn           = scoreMomentum and momEnabledCount > 0
+momLongOk       = momLongHits >= momNeed
+momShortOk      = momShortHits >= momNeed
+
+// Both participation members need real volume data, so both disable themselves on a symbol
+// that has never reported any — and the point then leaves the denominator entirely.
+partVolOn        = partVolume and volReady
+partClimaxOn     = partClimax and volReady
+partEnabledCount = (partVolOn ? 1 : 0) + (partClimaxOn ? 1 : 0)
+partNeed         = math.ceil(partEnabledCount / 2.0)
+partLongHits     = (partVolOn and volSurge ? 1 : 0) + (partClimaxOn and climaxLong ? 1 : 0)
+partShortHits    = (partVolOn and volSurge ? 1 : 0) + (partClimaxOn and climaxShort ? 1 : 0)
+partOn           = scoreParticipation and partEnabledCount > 0
+partLongOk       = partLongHits >= partNeed
+partShortOk      = partShortHits >= partNeed
+
+// Excluded until the cloud exists at all — senkouB needs senkouBLen + ichiDisp bars of
+// history, and a permanently-dark point in the denominator would grade early setups
+// harshly for a reason that says nothing about them.
+ichiOn = scoreIchimoku and ichiReady
+
+plot(momOn ? 1 : 0, "DBG Momentum Point Enabled (1/0)", display = display.data_window)
+plot(partOn ? 1 : 0, "DBG Participation Point Enabled (1/0)", display = display.data_window)
+plot(ichiOn ? 1 : 0, "DBG Ichimoku Point Enabled (1/0)", display = display.data_window)
+
+// ---- the cloud ----
+// plot() cannot live inside an `if`, so the toggle plots na instead: nothing is drawn and the
+// fill has nothing to fill between. `offset` draws the spans forward, which is what makes the
+// cloud visible at this bar the one computed ichiDisp bars ago — the same series the score
+// reads back through [ichiDisp].
+kumoPlotA = plot(showKumo ? ichiSpanA : na, "Senkou A", color = color.new(color.green, 60), offset = ichiDisp)
+kumoPlotB = plot(showKumo ? ichiSpanB : na, "Senkou B", color = color.new(color.red, 60), offset = ichiDisp)
+fill(kumoPlotA, kumoPlotB, color = ichiSpanA > ichiSpanB ? kumoBullColor : kumoBearColor, title = "Kumo")
+
+// ============================================================
 // TRADE GATE
 // ============================================================
 // Hard requirements are absolute: without a direction and a zone there is no side, no stop
@@ -502,8 +655,8 @@ bearishWatchZone = intState.trend == "down" and killzoneActive and not inBearish
 killzonePointOn = scoreKillzone and (showLondonKZ or showNewYorkKZ)
 
 // One pass counts the enabled points and the achieved points together. Declaring a point in
-// only one of two parallel lists was the failure this prevents — and the confirmation block
-// still to come adds five more points to this function.
+// only one of two parallel lists was the failure this prevents. Seven points now: the
+// confirmation block added three, not five, because RSI/MACD/Stochastic share one vote.
 scoreTally(bool isLong) =>
     ofPts = 0
     got   = 0
@@ -511,9 +664,9 @@ scoreTally(bool isLong) =>
         ofPts += 1
         if killzoneActive
             got += 1
-    if scoreRsi
+    if momOn
         ofPts += 1
-        if isLong ? rsiBullishConfirm : rsiBearishConfirm
+        if isLong ? momLongOk : momShortOk
             got += 1
     if scoreMa
         ofPts += 1
@@ -527,13 +680,28 @@ scoreTally(bool isLong) =>
         ofPts += 1
         if not na(intState.lastStrength) and intState.lastStrength >= strongBreakMult
             got += 1
+    if partOn
+        ofPts += 1
+        if isLong ? partLongOk : partShortOk
+            got += 1
+    if ichiOn
+        ofPts += 1
+        if isLong ? ichiBullConfirm : ichiBearConfirm
+            got += 1
     [ofPts, got]
 
-// All enabled points = A, one short = B, two short = C. Which grades can actually appear
-// depends on minScore: at the defaults (5 enabled, minScore 4) a C scores 3 and is rejected,
-// so only A and B ever show. Lowering minScore to 3 is what opens C up.
+// Grades are a fraction of the enabled points: A at 90%, B at 75%, C otherwise. Absolute
+// shortfall did not scale — "two short" is 3/5 on one chart and 8/10 on another, and both
+// graded C. Integer arithmetic, so no float rounding sits between a setup and its grade.
+//
+// At five enabled points this reproduces the old rule exactly (5=A, 4=B, 3=C), which is what
+// makes the change safe; the two only diverge once the denominator moves. C is the fallback
+// branch rather than a threshold — minScore is what stops a weak setup reaching the chart at
+// all. At seven points with minScore 5, the lowest grade that can appear is 5/7. Below four
+// enabled points the two thresholds round to the same score (e.g. at 3, both A and B need
+// score 3), so only A and C are reachable; B needs a denominator of at least 4 to exist.
 gradeFor(int score, int ofPoints) =>
-    score >= ofPoints ? "A" : score >= ofPoints - 1 ? "B" : "C"
+    score * 100 >= 90 * ofPoints ? "A" : score * 100 >= 75 * ofPoints ? "B" : "C"
 
 bullHardOk = intState.trend == "up" and bullTouch.hit and not inRange and barstate.isconfirmed
 bearHardOk = intState.trend == "down" and bearTouch.hit and not inRange and barstate.isconfirmed
@@ -945,10 +1113,18 @@ if barstate.islast
         trendText    = na(majorState.trend) ? "—" : str.upper(majorState.trend)
         trendCol     = majorState.trend == "up" ? color.lime : majorState.trend == "down" ? color.red : color.gray
         internalText = na(majorState.trend) or na(intState.trend) ? "—" : intState.trend == majorState.trend ? "aligned" : "pullback"
+        // Reads the current bar for the internal trend's direction — the same tier the gate
+        // reads. Undefined trend falls back to the long side so the row is never blank.
+        confirmLong = intState.trend != "down"
+        momMark     = not momOn ? "–" : (confirmLong ? momLongOk : momShortOk) ? "✓" : "✗"
+        partMark    = not partOn ? "–" : (confirmLong ? partLongOk : partShortOk) ? "✓" : "✗"
+        ichiMark    = not ichiOn ? "–" : (confirmLong ? ichiBullConfirm : ichiBearConfirm) ? "✓" : "✗"
+        confirmText = "Mom " + momMark + " · Part " + partMark + " · Ichi " + ichiMark
+        confirmRows = showConfirmPanel ? 1 : 0
         tradeRows = 0
         if showTradePanel and tradeIsLive()
             tradeRows := 6
-        structPanel := table.new(panelPos, 2, 5 + tradeRows, bgcolor = color.new(color.black, 80), border_width = 1)
+        structPanel := table.new(panelPos, 2, 5 + confirmRows + tradeRows, bgcolor = color.new(color.black, 80), border_width = 1)
         table.cell(structPanel, 0, 0, "STRUCTURE", text_color = color.white, bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 1, 0, "", bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 0, 1, "Major trend", text_color = color.silver)
@@ -959,22 +1135,26 @@ if barstate.islast
         table.cell(structPanel, 1, 3, evtText, text_color = color.white)
         table.cell(structPanel, 0, 4, "Internal", text_color = color.silver)
         table.cell(structPanel, 1, 4, internalText, text_color = color.aqua)
+        if confirmRows > 0
+            table.cell(structPanel, 0, 5, "Confirm", text_color = color.silver)
+            table.cell(structPanel, 1, 5, confirmText, text_color = color.white)
+        tradeBase = 5 + confirmRows
         if tradeRows > 0
             isLongT = activeTrade.side == "long"
             rT      = math.abs(activeTrade.entry - activeTrade.initialStop)
             rTxt    = rT > 0 ? str.tostring(tradeOpenR, "0.00") + "R" : "—"
-            table.cell(structPanel, 0, 5, "TRADE", text_color = color.white, bgcolor = color.new(color.gray, 50))
-            table.cell(structPanel, 1, 5, (isLongT ? "LONG" : "SHORT") + " · " + activeTrade.grade + " · " + str.tostring(activeTrade.score) + "/" + str.tostring(activeTrade.scoreOf), text_color = isLongT ? tradeLongColor : tradeShortColor, bgcolor = color.new(color.gray, 50))
-            table.cell(structPanel, 0, 6, "Entry", text_color = color.silver)
-            table.cell(structPanel, 1, 6, str.tostring(activeTrade.entry, format.mintick), text_color = color.white)
-            table.cell(structPanel, 0, 7, "Stop", text_color = color.silver)
-            table.cell(structPanel, 1, 7, str.tostring(activeTrade.stop, format.mintick) + (activeTrade.tpHit >= 1 ? " · BE+" : "") + " · " + str.tostring(rT > 0 ? math.abs(activeTrade.entry - activeTrade.stop) / rT : 0.0, "0.0") + "R", text_color = tradeStopColor)
-            table.cell(structPanel, 0, 8, "TP1 / TP2", text_color = color.silver)
-            table.cell(structPanel, 1, 8, str.tostring(activeTrade.tp1, format.mintick) + (activeTrade.tpHit >= 1 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp1 - activeTrade.entry) / rT : 0.0, "0.0") + "R)" + "  " + str.tostring(activeTrade.tp2, format.mintick) + (activeTrade.tpHit >= 2 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp2 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
-            table.cell(structPanel, 0, 9, "TP3", text_color = color.silver)
-            table.cell(structPanel, 1, 9, str.tostring(activeTrade.tp3, format.mintick) + (activeTrade.tpHit >= 3 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp3 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
-            table.cell(structPanel, 0, 10, "Open R", text_color = color.silver)
-            table.cell(structPanel, 1, 10, rTxt, text_color = tradeOpenR >= 0 ? color.lime : color.red)
+            table.cell(structPanel, 0, tradeBase, "TRADE", text_color = color.white, bgcolor = color.new(color.gray, 50))
+            table.cell(structPanel, 1, tradeBase, (isLongT ? "LONG" : "SHORT") + " · " + activeTrade.grade + " · " + str.tostring(activeTrade.score) + "/" + str.tostring(activeTrade.scoreOf), text_color = isLongT ? tradeLongColor : tradeShortColor, bgcolor = color.new(color.gray, 50))
+            table.cell(structPanel, 0, tradeBase + 1, "Entry", text_color = color.silver)
+            table.cell(structPanel, 1, tradeBase + 1, str.tostring(activeTrade.entry, format.mintick), text_color = color.white)
+            table.cell(structPanel, 0, tradeBase + 2, "Stop", text_color = color.silver)
+            table.cell(structPanel, 1, tradeBase + 2, str.tostring(activeTrade.stop, format.mintick) + (activeTrade.tpHit >= 1 ? " · BE+" : "") + " · " + str.tostring(rT > 0 ? math.abs(activeTrade.entry - activeTrade.stop) / rT : 0.0, "0.0") + "R", text_color = tradeStopColor)
+            table.cell(structPanel, 0, tradeBase + 3, "TP1 / TP2", text_color = color.silver)
+            table.cell(structPanel, 1, tradeBase + 3, str.tostring(activeTrade.tp1, format.mintick) + (activeTrade.tpHit >= 1 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp1 - activeTrade.entry) / rT : 0.0, "0.0") + "R)" + "  " + str.tostring(activeTrade.tp2, format.mintick) + (activeTrade.tpHit >= 2 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp2 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
+            table.cell(structPanel, 0, tradeBase + 4, "TP3", text_color = color.silver)
+            table.cell(structPanel, 1, tradeBase + 4, str.tostring(activeTrade.tp3, format.mintick) + (activeTrade.tpHit >= 3 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp3 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
+            table.cell(structPanel, 0, tradeBase + 5, "Open R", text_color = color.silver)
+            table.cell(structPanel, 1, tradeBase + 5, rTxt, text_color = tradeOpenR >= 0 ? color.lime : color.red)
 
 // ============================================================
 // ALERTS

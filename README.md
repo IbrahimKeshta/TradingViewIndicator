@@ -34,8 +34,8 @@ Price tends to reverse at levels it left in a hurry, and those reversals are wor
 several independent things agree at once**. This indicator finds those levels, tracks which direction
 the market is structurally moving, and marks the bars where everything lines up.
 
-It never tells you to buy. It marks a bar where five separate conditions happened to agree, and
-leaves the decision to you.
+It never tells you to buy. It marks a bar where several independent conditions happened to agree,
+grades how many, and leaves the decision to you.
 
 ## Reading the chart
 
@@ -145,10 +145,12 @@ flowchart LR
     end
     subgraph S["SCORED — one point each"]
         S1["Killzone active"]
-        S2["RSI on side"]
+        S2["<b>Momentum</b><br/>RSI · MACD · Stochastic<br/><i>majority of those enabled</i>"]
         S3["Price on side of MA"]
         S4["Major trend agrees"]
         S5["Break was strong"]
+        S6["<b>Participation</b><br/>volume surge · climax<br/><i>at least half of those enabled</i>"]
+        S7["<b>Ichimoku</b><br/>price clear of the cloud"]
     end
     H --> G{"hard all met<br/>AND score &ge; minimum?"}
     S --> G
@@ -159,13 +161,27 @@ flowchart LR
 The hard four are absolute because without them there is nothing to compute — no direction means no
 side, and no zone means no entry price and no stop.
 
-**The score is out of however many points you switch on, not a fixed five.** That is deliberate.
+**The score is out of however many points you switch on, not a fixed seven.** That is deliberate.
 Killzones mean nothing on a single-session market like EGX, so if killzone were a mandatory veto the
-indicator would go permanently silent there. Switch the killzone point off and the panel reads `4/4`
-instead of `4/5` — the threshold adjusts rather than quietly loosening. If you turn off *both*
-killzone sessions but forget the score toggle, the point removes itself anyway.
+indicator would go permanently silent there. Switch the killzone point off and the panel reads `5/6`
+instead of `5/7` — the threshold adjusts rather than quietly loosening. The same happens
+automatically for points that cannot apply: turn off both killzone sessions and the killzone point
+removes itself, and on a symbol that reports no volume at all the participation point removes itself.
+
+**Three of the five confirmations share votes, on purpose.** RSI, MACD and Stochastic all measure
+momentum from the same price series — counted separately they would cast three of ten votes for
+what is really one opinion, and a setup could clear the threshold on momentum agreeing with itself.
+They share the Momentum point, earned when at least half the enabled ones agree. Volume and the
+climax candle share Participation the same way.
+
+**Grades are a fraction of the enabled points** — A at 90%, B at 75%, C below that. So a grade means
+the same thing whether you run four points or seven.
 
 Set `Minimum Score` equal to the number of enabled points to get the strictest possible behaviour.
+
+> **Upgrading from an earlier version?** `Minimum Score` now defaults to 5, because 4 out of seven
+> points is a *looser* gate than the 4 out of five it used to mean. TradingView keeps the value saved
+> on your chart, so if yours still reads 4, raise it by hand.
 
 ### Entry, stop and targets
 
@@ -193,6 +209,11 @@ assumes the unfavourable one); and if a bar *gaps* through the stop, the exit is
 not at the stop price.
 
 ### Reading the trade panel
+
+The panel carries a `Confirm` row showing the three confirmation points for the current bar —
+`Mom ✓ · Part — · Ichi ✓`. A dash means the point is switched off or cannot apply; a cross means it
+applies and is not met. `5/7` tells you a setup was adequate, but the row tells you *which* points
+carried it, which is the part you can act on.
 
 The structure panel grows extra rows while a trade is live: the setup and its grade with the score
 fraction, entry, the current stop with its R distance, all three targets with R multiples and tick
@@ -239,9 +260,9 @@ claiming to quote a price or an R figure.
 
 | Setting | Default | What it does |
 |---|---|---|
-| Minimum Score | 4 | Points needed, out of however many are enabled below |
+| Minimum Score | 5 | Points needed, out of however many are enabled below |
 | Score: Killzone | on | **Turn off on single-session markets like EGX** |
-| Score: RSI / Moving Average | on | Whether each confirms the trade's direction |
+| Score: Moving Average | on | Whether price is on the trade's side of the MA |
 | Score: Major Trend Agreement | on | Whether the major tier agrees with the internal one |
 | Score: Break Strength | on | Whether the break that set up the trade was a big candle |
 | Strong Break (× ATR) | 1.0 | How big that candle's body must be to earn the point |
@@ -249,6 +270,29 @@ claiming to quote a price or an R figure.
 | Minimum Target Distance (R) | 1.0 | Structural levels closer than this are skipped |
 | Trailing Tier | Internal | Which tier's swings the stop trails behind |
 | Long Trades Only | off | For markets where you can't short |
+
+**Confirmations** — three more scored points, five indicators.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Score: Momentum | on | One point for RSI, MACD and Stochastic together — earned when at least half the enabled ones agree (2 of 3, 1 of 2) |
+| Momentum: RSI / MACD / Stochastic | on | Which indicators are members of that vote. Turn all three off and the point leaves the denominator |
+| MACD Fast / Slow / Signal | 12 / 26 / 9 | Standard settings |
+| Stochastic %K / Smoothing / %D | 14 / 3 / 3 | Read as a %K/%D cross, not an overbought level — in a trend the oscillator pins to its extreme and a level test would veto every continuation |
+| Score: Participation | on | One point for evidence someone is actually trading here |
+| Participation: Volume Surge | on | Volume on the bar that touched the zone, against its own average |
+| Participation: Climax Candle | on | An exhaustion bar **against** the trade — for a long, a heavy down bar closing on its low into support. That is the pullback spending itself |
+| Volume Average Length | 20 | Bars in the volume average that surge and climax both measure against |
+| Volume Surge (× average) | 1.5 | How far above average counts as a surge |
+| Climax Range (× ATR) / Volume (× average) / Lookback | 2.0 / 2.0 / 3 | How big an exhaustion bar has to be, and how recently it can have printed |
+| Score: Ichimoku | on | One point when price is clear of the cloud on the trade's side. Inside the cloud earns nothing |
+| Tenkan / Kijun / Senkou B / Displacement | 9 / 26 / 52 / 26 | Standard settings |
+| Show Kumo Cloud | **off** | The only thing this section draws |
+| Show Confirmation Panel Row | on | Adds `Mom ✓ · Part — · Ichi ✓` to the panel, so you can see which points carried a setup |
+
+Chikou is deliberately absent: it is the close displaced 26 bars *backwards*, so scoring on it would
+report confirmation that was not available at the time. MACD and Stochastic are never plotted —
+this script draws on the price chart, and an oscillator has no pane to live in here.
 
 **Structure Display** — what gets drawn. Internal rays and internal break lines are **off** by
 default; on a fast timeframe they are near-continuous. Leave internal break lines off if you want a
@@ -259,9 +303,10 @@ labels.
 side *and* per tier). `Include Internal-Tier Order Blocks` is on by default; turning it off leaves
 only order blocks born from major structural breaks — far fewer, each more significant.
 
-**Killzones** — session windows and their timezone. **RSI / Moving Average** — the confirmation
-indicators. **Alerts / Display** — signal markers, the RSI readout, and how close price must get to a
-zone to count as a watch-zone.
+**Killzones** — session windows and their timezone. **RSI / Moving Average** — the periods behind the
+RSI readout and the MA plot; RSI is also a member of the Momentum vote in **Confirmations**, above.
+**Alerts / Display** — signal markers, the RSI readout, and how close price must get to a zone to
+count as a watch-zone.
 
 ---
 
