@@ -79,7 +79,7 @@ longOnly           = input.bool(false, "Long Trades Only", group = "Trade Engine
 showTradeLevels    = input.bool(true, "Show Trade Levels", group = "Trade Engine")
 showTradeHistory   = input.bool(true, "Show Trade History", group = "Trade Engine", tooltip = "Leaves a result label in R at each closed trade's exit bar — the cheapest possible track record.")
 showTradePanel     = input.bool(true, "Show Trade Panel Rows", group = "Trade Engine")
-showStatsPanel     = input.bool(true, "Show Performance Rows", group = "Trade Engine", tooltip = "Win rate, average R, total R and a per-grade breakdown over every trade in the loaded history.\n\nResults assume one third of the position leaves at each target reached — the engine itself manages one unit, so this is an accounting convention. The live trade's Open R row is single-unit and will not match.\n\nThe counters run whether or not this is on; hiding the rows never resets them. The sample is whatever history TradingView loaded, so read n before trusting a percentage.")
+showStatsPanel     = input.bool(true, "Show Performance Rows", group = "Trade Engine", tooltip = "Win rate, average R, total R and a per-grade breakdown over every trade in the loaded history.\n\nResults assume one third of the position leaves at each target reached — the engine itself manages one unit, so this is an accounting convention. The live trade's Open R row is single-unit and will not match.\n\nThe counters run whether or not this is on; hiding the rows never resets them. The sample is whatever history TradingView loaded, so read n before trusting a percentage.\n\nA trade that closes at exactly 0.0R counts as neither a win nor a loss, so W + L can come to one less than n.")
 tradeLongColor     = input.color(color.teal, "Long", group = "Trade Engine")
 tradeShortColor    = input.color(color.maroon, "Short", group = "Trade Engine")
 tradeStopColor     = input.color(color.red, "Stop", group = "Trade Engine")
@@ -889,8 +889,8 @@ trailAnchor(bool isLong) =>
 
 // Signed R of one price. `rr` is the initial risk; a zero or negative rr yields 0.0 rather than
 // dividing, which keeps the guard in one place instead of at every call site.
-legR(float price, float entry, float rr, bool isLong) =>
-    rr > 0 ? (isLong ? price - entry : entry - price) / rr : 0.0
+legR(float price, float entryPrice, float rr, bool isLong) =>
+    rr > 0 ? (isLong ? price - entryPrice : entryPrice - price) / rr : 0.0
 
 // Blended R under the scale-out convention: one third of the position leaves at each target
 // reached, and the remaining thirds leave at closePrice.

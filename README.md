@@ -227,23 +227,25 @@ results added up.
 PERFORMANCE    n = 24
 Win rate       58%  (14W / 10L)
 Avg R          +0.34R
-Total R        +8.2R
-A grade        +0.81R  (6)
-B grade        +0.30R  (11)
-C grade        −0.22R  (7)
+Total R        +8.17R
+A grade        +0.70R  (6)
+B grade        +0.45R  (11)
+C grade        −0.14R  (7)
 ```
 
 The grade split is the row worth staring at. If C-grade setups lose money and A-grade ones don't,
 `Minimum Score` is set too low — that is the feedback loop the score never had.
 
 **Results assume you scale out in thirds**: one third of the position leaves at each target
-reached, and whatever is left exits at the stop or the final target. The indicator itself manages
-one unit and draws no partial exits, so this is an accounting convention, not something you can see
-on the chart. It is there because under single-unit accounting a trade that reaches TP2 and then
-trails back to breakeven scores 0R — which makes TP1 and TP2 nearly decorative and understates the
-engine badly enough to mislead any tuning you do against these numbers. One consequence: the live
-trade's `Open R` row is single-unit and **will not** match the blended figure the same trade reports
-once it closes.
+reached, and whatever is left exits at the stop, the final target, or the bar close on a CHoCH
+invalidation. The indicator itself manages one unit and draws no partial exits, so this is an
+accounting convention, not something you can see on the chart. It is there because under
+single-unit accounting a trade that reaches TP2 and then trails back to breakeven scores 0R — which
+makes TP1 and TP2 nearly decorative and understates the engine badly enough to mislead any tuning
+you do against these numbers. One consequence: the live trade's `Open R` row is single-unit and
+**will not** match the blended figure the same trade reports once it closes — and the same applies
+to the exit labels, so a trade that runs to TP3 labels the average of the three targets' R, not
+TP3's.
 
 Read `n` before you trust a percentage. The sample is whatever history TradingView loaded, capped at
 5000 bars — on a 15-minute chart that is under two months, and a 58% win rate over twelve trades is
