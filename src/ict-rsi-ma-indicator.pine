@@ -79,6 +79,7 @@ longOnly           = input.bool(false, "Long Trades Only", group = "Trade Engine
 showTradeLevels    = input.bool(true, "Show Trade Levels", group = "Trade Engine")
 showTradeHistory   = input.bool(true, "Show Trade History", group = "Trade Engine", tooltip = "Leaves a result label in R at each closed trade's exit bar — the cheapest possible track record.")
 showTradePanel     = input.bool(true, "Show Trade Panel Rows", group = "Trade Engine")
+showStatsPanel     = input.bool(true, "Show Performance Rows", group = "Trade Engine", tooltip = "Win rate, average R, total R and a per-grade breakdown over every trade in the loaded history.\n\nResults assume one third of the position leaves at each target reached — the engine itself manages one unit, so this is an accounting convention. The live trade's Open R row is single-unit and will not match.\n\nThe counters run whether or not this is on; hiding the rows never resets them. The sample is whatever history TradingView loaded, so read n before trusting a percentage.\n\nA trade that closes at exactly 0.0R counts as neither a win nor a loss, so W + L can come to one less than n.")
 tradeLongColor     = input.color(color.teal, "Long", group = "Trade Engine")
 tradeShortColor    = input.color(color.maroon, "Short", group = "Trade Engine")
 tradeStopColor     = input.color(color.red, "Stop", group = "Trade Engine")
@@ -848,6 +849,7 @@ var Trade activeTrade = na
 tradeOpened   = false
 tradeClosed   = false
 targetJustHit = false
+closedR       = 0.0   // blended R of the trade that closed on this bar; 0.0 on every other bar
 
 var string openedSide = na
 openedSide := na
@@ -884,6 +886,52 @@ trailAnchor(bool isLong) =>
     else
         result := useMajor ? newestUnbroken(majorHighs) : newestUnbroken(intHighs)
     result
+
+// Signed R of one price. `rr` is the initial risk; a zero or negative rr yields 0.0 rather than
+// dividing, which keeps the guard in one place instead of at every call site.
+legR(float price, float entryPrice, float rr, bool isLong) =>
+    rr > 0 ? (isLong ? price - entryPrice : entryPrice - price) / rr : 0.0
+
+// Blended R under the scale-out convention: one third of the position leaves at each target
+// reached, and the remaining thirds leave at closePrice.
+//
+// This is a MEASUREMENT CONVENTION, not a change in behaviour. The engine still manages one
+// unit with one exit and draws no partial-exit markers — see the spec. It exists because under
+// single-unit accounting a trade that reaches TP2 and trails back to breakeven records 0R,
+// which makes the three targets nearly decorative and understates the engine badly enough to
+// mislead any tuning done against these numbers.
+//
+// `rr` uses initialStop, never the trailed stop, for the same reason tradeOpenR does: a trailed
+// stop shrinks the denominator and would flatter every result.
+//
+// Targets are NOT evenly spaced in R — selectTargets() picks liquidity levels, so TP1 is
+// wherever the nearest qualifying level sits, not 1R by definition. Each leg is therefore
+// priced from its own target, never assumed.
+blendedResultR(Trade t) =>
+    rr     = math.abs(t.entry - t.initialStop)
+    isLong = t.side == "long"
+    total  = (3 - t.tpHit) * legR(t.closePrice, t.entry, rr, isLong)
+    if t.tpHit >= 1
+        total += legR(t.tp1, t.entry, rr, isLong)
+    if t.tpHit >= 2
+        total += legR(t.tp2, t.entry, rr, isLong)
+    if t.tpHit >= 3
+        total += legR(t.tp3, t.entry, rr, isLong)
+    total / 3.0
+
+// A=0, B=1, C=2. Anything unrecognised lands in C rather than erroring — an out-of-range index
+// on a 3-slot array would be a runtime failure on a chart, which is a bad trade for strictness.
+gradeIndex(string g) =>
+    g == "A" ? 0 : g == "B" ? 1 : 2
+
+// Result memory. Nothing is stored per trade, so there is no cap and no memory growth — only
+// running totals. `var` commits at bar close, which is what makes live-tick recalculation safe.
+var int   statTrades = 0
+var int   statWins   = 0
+var int   statLosses = 0
+var float statSumR   = 0.0
+var array<int>   statGradeCount = array.new<int>(3, 0)
+var array<float> statGradeSumR  = array.new<float>(3, 0.0)
 
 // ---- exits, on confirmed bars only, stop first ----
 if barstate.isconfirmed and tradeIsLive()
@@ -923,12 +971,37 @@ if barstate.isconfirmed and tradeIsLive()
                     if isLong ? candidate > activeTrade.stop : candidate < activeTrade.stop
                         activeTrade.stop := candidate
 
+// ---- record the result, never gated by a display input ----
+// Placement is deliberate: on the closing bar tradeClosed is true and activeTrade is still
+// valid, and on the next bar tradeClosed is false and the block below frees the slot. So this
+// runs exactly once per trade. tradeClosed is a plain per-bar variable, not a var, so it cannot
+// leak into a later bar.
+//
+// No show* flag guards this. If it did, switching the history labels off would silently zero
+// the track record, and the panel would disagree with the chart for reasons nobody could see.
+if tradeClosed and not na(activeTrade)
+    closedR := blendedResultR(activeTrade)
+    gi      = gradeIndex(activeTrade.grade)
+    statTrades += 1
+    statSumR   += closedR
+    if closedR > 0
+        statWins += 1
+    else if closedR < 0
+        statLosses += 1
+    array.set(statGradeCount, gi, array.get(statGradeCount, gi) + 1)
+    array.set(statGradeSumR,  gi, array.get(statGradeSumR,  gi) + closedR)
+
 // ---- free the slot, never on the closing bar itself ----
 // Nested rather than `and`-chained, for the same reason tradeIsLive() is.
 if not na(activeTrade)
     if not na(activeTrade.closeReason)
         if not tradeClosed
             activeTrade := na
+
+// Verification surface for the deferred TradingView pass — engine state as numbers, bar by bar.
+plot(closedR, "DBG Closed Trade R", display = display.data_window)
+plot(statTrades, "DBG Closed Trades", display = display.data_window)
+plot(statTrades > 0 ? statSumR / statTrades : 0.0, "DBG Avg R", display = display.data_window)
 
 // ---- open ----
 canOpen = na(activeTrade)
@@ -1088,12 +1161,16 @@ if barstate.islast
         tradeLevelLine(activeTrade.openBar, activeTrade.tp3, tradeTargetColor, targetLabelText(3, activeTrade.tp3, activeTrade.liq3, isLong, activeTrade.entry, r, activeTrade.tpHit), activeTrade.tpHit >= 3)
 
 // Persistent — deliberately not tracked in tradeLines/tradeLabels, so the redraw above never
-// deletes it. One label per closed trade is the whole track record.
+// deletes it. These labels are the per-trade record; the panel's PERFORMANCE rows are the
+// aggregate, and both now read the same blended R so they can never disagree.
 if tradeClosed and showTradeHistory and not na(activeTrade)
-    rr = math.abs(activeTrade.entry - activeTrade.initialStop)
-    realisedR = rr > 0 ? (activeTrade.side == "long" ? activeTrade.closePrice - activeTrade.entry : activeTrade.entry - activeTrade.closePrice) / rr : 0.0
-    resCol = realisedR >= 0 ? color.new(color.green, 20) : color.new(color.red, 20)
-    label.new(bar_index, activeTrade.closePrice, (realisedR >= 0 ? "+" : "") + str.tostring(realisedR, "0.0") + "R · " + activeTrade.closeReason, style = activeTrade.side == "long" ? label.style_label_up : label.style_label_down, color = resCol, textcolor = color.white, size = size.tiny)
+    resCol = closedR >= 0 ? color.new(color.green, 20) : color.new(color.red, 20)
+    label.new(bar_index, activeTrade.closePrice, (closedR >= 0 ? "+" : "") + str.tostring(closedR, "0.0") + "R · " + activeTrade.closeReason, style = activeTrade.side == "long" ? label.style_label_up : label.style_label_down, color = resCol, textcolor = color.white, size = size.tiny)
+
+// "+0.34R" / "-1.20R". Two decimals, where the per-trade result labels use one — an average over
+// a small sample moves in the second decimal and rounding it away hides the movement.
+rText(float v) =>
+    (v >= 0 ? "+" : "") + str.tostring(v, "0.00") + "R"
 
 var table structPanel = na
 
@@ -1124,7 +1201,13 @@ if barstate.islast
         tradeRows = 0
         if showTradePanel and tradeIsLive()
             tradeRows := 6
-        structPanel := table.new(panelPos, 2, 5 + confirmRows + tradeRows, bgcolor = color.new(color.black, 80), border_width = 1)
+        // 7 rows once there is anything to report — header, three overall rows, three grades.
+        // 2 before the first trade closes: a header with an empty-state row under it, rather
+        // than six rows of 0% and +0.00R that read like a result.
+        statsRows = 0
+        if showStatsPanel
+            statsRows := statTrades > 0 ? 7 : 2
+        structPanel := table.new(panelPos, 2, 5 + confirmRows + tradeRows + statsRows, bgcolor = color.new(color.black, 80), border_width = 1)
         table.cell(structPanel, 0, 0, "STRUCTURE", text_color = color.white, bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 1, 0, "", bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 0, 1, "Major trend", text_color = color.silver)
@@ -1155,6 +1238,33 @@ if barstate.islast
             table.cell(structPanel, 1, tradeBase + 4, str.tostring(activeTrade.tp3, format.mintick) + (activeTrade.tpHit >= 3 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp3 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
             table.cell(structPanel, 0, tradeBase + 5, "Open R", text_color = color.silver)
             table.cell(structPanel, 1, tradeBase + 5, rTxt, text_color = tradeOpenR >= 0 ? color.lime : color.red)
+        // Derived from the same expression as the row count above. Never hardcode this: it
+        // shifts by 6 whenever a trade opens or closes.
+        statsBase = 5 + confirmRows + tradeRows
+        if statsRows > 0
+            table.cell(structPanel, 0, statsBase, "PERFORMANCE", text_color = color.white, bgcolor = color.new(color.gray, 50))
+            table.cell(structPanel, 1, statsBase, "n = " + str.tostring(statTrades), text_color = color.silver, bgcolor = color.new(color.gray, 50))
+            if statTrades == 0
+                table.cell(structPanel, 0, statsBase + 1, "No closed trades", text_color = color.silver)
+                table.cell(structPanel, 1, statsBase + 1, "—", text_color = color.gray)
+            else
+                avgR   = statSumR / statTrades
+                winPct = 100.0 * statWins / statTrades
+                table.cell(structPanel, 0, statsBase + 1, "Win rate", text_color = color.silver)
+                table.cell(structPanel, 1, statsBase + 1, str.tostring(winPct, "0") + "%  (" + str.tostring(statWins) + "W / " + str.tostring(statLosses) + "L)", text_color = color.white)
+                table.cell(structPanel, 0, statsBase + 2, "Avg R", text_color = color.silver)
+                table.cell(structPanel, 1, statsBase + 2, rText(avgR), text_color = avgR >= 0 ? color.lime : color.red)
+                table.cell(structPanel, 0, statsBase + 3, "Total R", text_color = color.silver)
+                table.cell(structPanel, 1, statsBase + 3, rText(statSumR), text_color = statSumR >= 0 ? color.lime : color.red)
+                for gi = 0 to 2
+                    gCount = array.get(statGradeCount, gi)
+                    gSum   = array.get(statGradeSumR, gi)
+                    gName  = gi == 0 ? "A" : gi == 1 ? "B" : "C"
+                    gAvg   = gCount > 0 ? gSum / gCount : 0.0
+                    gTxt   = gCount > 0 ? rText(gAvg) + "  (" + str.tostring(gCount) + ")" : "—  (0)"
+                    gCol   = gCount == 0 ? color.gray : gAvg >= 0 ? color.lime : color.red
+                    table.cell(structPanel, 0, statsBase + 4 + gi, gName + " grade", text_color = color.silver)
+                    table.cell(structPanel, 1, statsBase + 4 + gi, gTxt, text_color = gCol)
 
 // ============================================================
 // ALERTS
