@@ -220,7 +220,37 @@ fraction, entry, the current stop with its R distance, all three targets with R 
 marks as they are reached, and the trade's open R.
 
 When a trade closes it leaves a single label at the exit bar — `+2.5R · Target`, `−1.0R · Stopped`.
-Scroll back and those labels are your track record.
+Scroll back and those labels are your per-trade record; the `PERFORMANCE` rows are the same
+results added up.
+
+```
+PERFORMANCE    n = 24
+Win rate       58%  (14W / 10L)
+Avg R          +0.34R
+Total R        +8.2R
+A grade        +0.81R  (6)
+B grade        +0.30R  (11)
+C grade        −0.22R  (7)
+```
+
+The grade split is the row worth staring at. If C-grade setups lose money and A-grade ones don't,
+`Minimum Score` is set too low — that is the feedback loop the score never had.
+
+**Results assume you scale out in thirds**: one third of the position leaves at each target
+reached, and whatever is left exits at the stop or the final target. The indicator itself manages
+one unit and draws no partial exits, so this is an accounting convention, not something you can see
+on the chart. It is there because under single-unit accounting a trade that reaches TP2 and then
+trails back to breakeven scores 0R — which makes TP1 and TP2 nearly decorative and understates the
+engine badly enough to mislead any tuning you do against these numbers. One consequence: the live
+trade's `Open R` row is single-unit and **will not** match the blended figure the same trade reports
+once it closes.
+
+Read `n` before you trust a percentage. The sample is whatever history TradingView loaded, capped at
+5000 bars — on a 15-minute chart that is under two months, and a 58% win rate over twelve trades is
+noise. These are also the results of the indicator *as configured*, not of the underlying pattern:
+only one trade runs at a time, so every setup that appeared while a trade was open is missing from
+the count. Change any setting and the whole history recomputes, which is the point — it makes the
+panel a way to compare settings, not a fixed track record.
 
 > **On cash-equity markets where you can't short**, set `Long Trades Only`. Bearish setups still mark
 > and still alert, so you keep the information — they just don't open a trade.
@@ -270,6 +300,7 @@ claiming to quote a price or an R figure.
 | Minimum Target Distance (R) | 1.0 | Structural levels closer than this are skipped |
 | Trailing Tier | Internal | Which tier's swings the stop trails behind |
 | Long Trades Only | off | For markets where you can't short |
+| Show Performance Rows | on | Win rate, average R and a per-grade split over the loaded history. The counters run whether or not this is on |
 
 **Confirmations** — three more scored points, five indicators.
 
