@@ -79,6 +79,7 @@ longOnly           = input.bool(false, "Long Trades Only", group = "Trade Engine
 showTradeLevels    = input.bool(true, "Show Trade Levels", group = "Trade Engine")
 showTradeHistory   = input.bool(true, "Show Trade History", group = "Trade Engine", tooltip = "Leaves a result label in R at each closed trade's exit bar — the cheapest possible track record.")
 showTradePanel     = input.bool(true, "Show Trade Panel Rows", group = "Trade Engine")
+showStatsPanel     = input.bool(true, "Show Performance Rows", group = "Trade Engine", tooltip = "Win rate, average R, total R and a per-grade breakdown over every trade in the loaded history.\n\nResults assume one third of the position leaves at each target reached — the engine itself manages one unit, so this is an accounting convention. The live trade's Open R row is single-unit and will not match.\n\nThe counters run whether or not this is on; hiding the rows never resets them. The sample is whatever history TradingView loaded, so read n before trusting a percentage.")
 tradeLongColor     = input.color(color.teal, "Long", group = "Trade Engine")
 tradeShortColor    = input.color(color.maroon, "Short", group = "Trade Engine")
 tradeStopColor     = input.color(color.red, "Stop", group = "Trade Engine")
@@ -1166,6 +1167,11 @@ if tradeClosed and showTradeHistory and not na(activeTrade)
     resCol = closedR >= 0 ? color.new(color.green, 20) : color.new(color.red, 20)
     label.new(bar_index, activeTrade.closePrice, (closedR >= 0 ? "+" : "") + str.tostring(closedR, "0.0") + "R · " + activeTrade.closeReason, style = activeTrade.side == "long" ? label.style_label_up : label.style_label_down, color = resCol, textcolor = color.white, size = size.tiny)
 
+// "+0.34R" / "-1.20R". Two decimals, where the per-trade result labels use one — an average over
+// a small sample moves in the second decimal and rounding it away hides the movement.
+rText(float v) =>
+    (v >= 0 ? "+" : "") + str.tostring(v, "0.00") + "R"
+
 var table structPanel = na
 
 if barstate.islast
@@ -1195,7 +1201,13 @@ if barstate.islast
         tradeRows = 0
         if showTradePanel and tradeIsLive()
             tradeRows := 6
-        structPanel := table.new(panelPos, 2, 5 + confirmRows + tradeRows, bgcolor = color.new(color.black, 80), border_width = 1)
+        // 7 rows once there is anything to report — header, three overall rows, three grades.
+        // 2 before the first trade closes: a header with an empty-state row under it, rather
+        // than six rows of 0% and +0.00R that read like a result.
+        statsRows = 0
+        if showStatsPanel
+            statsRows := statTrades > 0 ? 7 : 2
+        structPanel := table.new(panelPos, 2, 5 + confirmRows + tradeRows + statsRows, bgcolor = color.new(color.black, 80), border_width = 1)
         table.cell(structPanel, 0, 0, "STRUCTURE", text_color = color.white, bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 1, 0, "", bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 0, 1, "Major trend", text_color = color.silver)
@@ -1226,6 +1238,33 @@ if barstate.islast
             table.cell(structPanel, 1, tradeBase + 4, str.tostring(activeTrade.tp3, format.mintick) + (activeTrade.tpHit >= 3 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp3 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
             table.cell(structPanel, 0, tradeBase + 5, "Open R", text_color = color.silver)
             table.cell(structPanel, 1, tradeBase + 5, rTxt, text_color = tradeOpenR >= 0 ? color.lime : color.red)
+        // Derived from the same expression as the row count above. Never hardcode this: it
+        // shifts by 6 whenever a trade opens or closes.
+        statsBase = 5 + confirmRows + tradeRows
+        if statsRows > 0
+            table.cell(structPanel, 0, statsBase, "PERFORMANCE", text_color = color.white, bgcolor = color.new(color.gray, 50))
+            table.cell(structPanel, 1, statsBase, "n = " + str.tostring(statTrades), text_color = color.silver, bgcolor = color.new(color.gray, 50))
+            if statTrades == 0
+                table.cell(structPanel, 0, statsBase + 1, "No closed trades", text_color = color.silver)
+                table.cell(structPanel, 1, statsBase + 1, "—", text_color = color.gray)
+            else
+                avgR   = statSumR / statTrades
+                winPct = 100.0 * statWins / statTrades
+                table.cell(structPanel, 0, statsBase + 1, "Win rate", text_color = color.silver)
+                table.cell(structPanel, 1, statsBase + 1, str.tostring(winPct, "0") + "%  (" + str.tostring(statWins) + "W / " + str.tostring(statLosses) + "L)", text_color = color.white)
+                table.cell(structPanel, 0, statsBase + 2, "Avg R", text_color = color.silver)
+                table.cell(structPanel, 1, statsBase + 2, rText(avgR), text_color = avgR >= 0 ? color.lime : color.red)
+                table.cell(structPanel, 0, statsBase + 3, "Total R", text_color = color.silver)
+                table.cell(structPanel, 1, statsBase + 3, rText(statSumR), text_color = statSumR >= 0 ? color.lime : color.red)
+                for gi = 0 to 2
+                    gCount = array.get(statGradeCount, gi)
+                    gSum   = array.get(statGradeSumR, gi)
+                    gName  = gi == 0 ? "A" : gi == 1 ? "B" : "C"
+                    gAvg   = gCount > 0 ? gSum / gCount : 0.0
+                    gTxt   = gCount > 0 ? rText(gAvg) + "  (" + str.tostring(gCount) + ")" : "—  (0)"
+                    gCol   = gCount == 0 ? color.gray : gAvg >= 0 ? color.lime : color.red
+                    table.cell(structPanel, 0, statsBase + 4 + gi, gName + " grade", text_color = color.silver)
+                    table.cell(structPanel, 1, statsBase + 4 + gi, gTxt, text_color = gCol)
 
 // ============================================================
 // ALERTS
