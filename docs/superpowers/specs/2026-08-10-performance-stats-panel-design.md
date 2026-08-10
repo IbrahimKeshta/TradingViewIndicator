@@ -1,7 +1,7 @@
 # Performance Stats Panel — Design
 
 **Date:** 2026-08-10
-**Status:** Approved for planning
+**Status:** Implemented on `feat/performance-stats` (`403f29c`..`4e45d64`, merged at `044dd6f`) — TradingView verification pending
 **File:** `src/ict-rsi-ma-indicator.pine`
 **Depends on:** `2026-08-07-trade-engine-design.md` (D+E, implemented and running in TradingView)
 
