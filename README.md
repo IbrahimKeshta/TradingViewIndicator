@@ -208,6 +208,30 @@ target, the trade is recorded as **stopped** (a bar-by-bar script cannot know wh
 assumes the unfavourable one); and if a bar *gaps* through the stop, the exit is recorded at the open,
 not at the stop price.
 
+### Three exit modes worth testing
+
+All three are off by default, so nothing above changes until you turn one on. They exist because the
+default exit profile — wick-triggered stop, breakeven at TP1, hard close at TP3 — is tuned for clean
+instruments, and gives back most of a trend on a thin one.
+
+| | What it changes | When it helps |
+|---|---|---|
+| **Stop on Close Only** | The stop asks whether price *held* beyond it at the close, not whether a wick *reached* it. The exit is then recorded at that bar's close | Thin or wicky instruments — EGX dailies especially — where an intrabar touch hands back trades the close never confirmed |
+| **Runner (no exit at TP3)** | TP3 becomes a waypoint. The last third keeps running behind the trailing stop until the stop or a CHoCH takes it out | Trending instruments, where one trade needs to pay for several stopped ones. A trade that runs to TP3 and closes there is a capped winner by construction |
+| **Trail From Entry** | The structural trail runs from the open, and the jump to breakeven at TP1 is skipped | Strong continuations, where breakeven-at-TP1 hands the trade back at 0R on the first ordinary pullback |
+
+Read the trade-offs before switching them on. **Stop on Close Only** takes a worse fill by design —
+you are paying the distance between the stop and the close in exchange for surviving wicks. **Trail
+From Entry** means a trade can still lose a full R *after* reaching TP1, which the default cannot;
+the `BE+` mark on the panel tests the stop against entry rather than assuming, so it tells you
+whether the trade is actually protected. **Runner** holds the single trade slot open longer, and
+every setup that appears while it runs is skipped.
+
+Runner changes the scale-out accounting to match: a third leaves at TP1 and a third at TP2, and the
+final third is priced at wherever the trade actually closed rather than at TP3. Without that, a
+runner would book a gain at TP3 it never took and stay capped at TP3's R — the exact understatement
+the mode exists to remove.
+
 ### Reading the trade panel
 
 The panel carries a `Confirm` row showing the three confirmation points for the current bar —
@@ -215,9 +239,34 @@ The panel carries a `Confirm` row showing the three confirmation points for the 
 applies and is not met. `5/7` tells you a setup was adequate, but the row tells you *which* points
 carried it, which is the part you can act on.
 
+Under it, the `Gate` row says what is stopping a trade **right now**:
+
+```
+Gate    L · no zone touch · 5/6
+```
+
+Side, the first unmet requirement, and the live score over the points currently enabled. The reason
+is the one thing to act on, in the order the gate applies its checks:
+
+| | Meaning |
+|---|---|
+| `no trend` | The internal tier has no direction yet |
+| `in range` | Price is inside a major range — the engine stands down |
+| `no zone touch` | **The common one.** Price has not traded back into an FVG or order block. This is a hard requirement, not a scored point: no amount of score tuning produces a trade while it reads this |
+| `score short` | Everything structural is met and the score is below `Minimum Score` |
+| `bar not closed` | Everything is met and the bar is still live. On a daily chart this is what you see while waiting for the close |
+| `READY` | A trade fires on this bar |
+
+The score fraction is the reason this row exists. Everywhere else the score only renders inside a
+live trade's rows, so on a bar where nothing fires there is no surface that reflects a scoring input
+you just changed — switch `Score: Killzone` off and the panel would look identical, with the change
+real but invisible. The same numbers publish to the Data Window every bar as `DBG Live Score`,
+`DBG Live Points Enabled`, and one plot per hard-gate condition.
+
 The structure panel grows extra rows while a trade is live: the setup and its grade with the score
 fraction, entry, the current stop with its R distance, all three targets with R multiples and tick
-marks as they are reached, and the trade's open R.
+marks as they are reached, and the trade's open R. A runner is tagged `RUN` on the first of those
+rows, because a trade with no exit at TP3 is a different trade from one that closes there.
 
 When a trade closes it leaves a single label at the exit bar — `+2.5R · Target`, `−1.0R · Stopped`.
 Scroll back and those labels are your per-trade record; the `PERFORMANCE` rows are the same
@@ -301,7 +350,11 @@ claiming to quote a price or an R figure.
 | Stop Buffer (× ATR) | 0.25 | How far beyond the zone edge the stop sits |
 | Minimum Target Distance (R) | 1.0 | Structural levels closer than this are skipped |
 | Trailing Tier | Internal | Which tier's swings the stop trails behind |
+| Stop on Close Only | off | Exit only when a bar **closes** beyond the stop, instead of the moment its wick touches |
+| Runner (no exit at TP3) | off | Treat TP3 as a waypoint; the last third rides the trailing stop instead |
+| Trail From Entry | off | Trail structurally from the open, and skip the jump to breakeven at TP1 |
 | Long Trades Only | off | For markets where you can't short |
+| Show Gate Panel Row | on | One row naming what is currently stopping a trade, with the live score |
 | Show Performance Rows | on | Win rate, average R and a per-grade split over the loaded history. The counters run whether or not this is on |
 
 **Confirmations** — three more scored points, five indicators.
