@@ -232,6 +232,57 @@ final third is priced at wherever the trade actually closed rather than at TP3. 
 runner would book a gain at TP3 it never took and stay capped at TP3's R — the exact understatement
 the mode exists to remove.
 
+## The second entry model
+
+The pullback engine above has a structural blind spot, and it is not a tuning problem. Order blocks
+are created **by** a break and anchored behind it, and a zone is never tested against its own
+creation bar — so on an impulsive one-way move the zone is born below price and is never touched.
+The engine cannot participate in a trend that does not retrace, however the touch rule is relaxed.
+
+The `Trailing Stop Model` is a second entry model that references no zone at all. A Chandelier-style
+trail hangs a fixed ATR multiple below the running high (above the running low when short),
+ratcheting only in the trade's favour, and the side flips when price closes through it. **Entry is
+the flip bar** — a discrete event, so entries never become a continuous "we are in a trend" state
+that re-enters every bar.
+
+The point of the flip entry is *where* it lands. A break-of-structure entry buys the close of the
+breakout candle with the stop back at the base, which is the worst of both: maximum entry price and
+maximum risk. A trail flip fires inside the base, before the move, so risk is roughly
+`Trail ATR Multiple × ATR` rather than the full distance back down to the range low.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Enable Trailing Stop Model | **off** | Nothing about the pullback model changes while this is off |
+| Trail ATR Length | 14 | ATR used for the trail distance |
+| Trail ATR Multiple | 2.0 | How far the trail sits from the running extreme — **this is the model's risk per trade** |
+| Trail Extreme Lookback | 22 | Bars in the running high/low the trail hangs from |
+| Trail Minimum Target Distance (R) | 1.0 | This model's own target floor, separate from the pullback model's |
+| Require Trend Agreement | on | Only take flips agreeing with internal structure, and stand down in a range. Off makes this a standalone trend system |
+| Apply Minimum Score | **off** | See below |
+| Show Trail Line | off | Draws the trail on the price chart |
+
+`Apply Minimum Score` is off by default on purpose. On the record so far the score is
+**anti-predictive** — the highest-graded setups lose the most — so gating a new model on it would
+import that problem into the one thing built to test it independently. The grade is still *recorded*
+for every trail trade, so its grade split is readable; it just does not filter entries unless you
+turn this on.
+
+### The two models never compete
+
+Each model holds **its own trade slot** and **its own performance record**. A trail trade cannot
+block a pullback trade or vice versa, and neither model's `n`, win rate, average R or grade split
+includes the other's trades. That separation is the entire reason for the design: averaged together,
+a model that works and one that does not read as a single mediocre number and neither can be judged.
+
+With the trail model enabled the panel grows a second `PERFORMANCE · TRAIL` block beside
+`PERFORMANCE · PULLBACK`, and a live trail trade gets its own `TRAIL TRADE` rows. Its exit labels
+carry a `· T ·` marker so the two models' records stay legible when you scroll back. With it
+disabled the panel is row-for-row what it was.
+
+**Before enabling it, write down the pullback model's current `n` and `Total R`.** With the model
+off those two numbers must not move. If they do, something shared was touched and it is a bug —
+that check is worth more than any reading you take with the model on.
+
 ### Reading the trade panel
 
 The panel carries a `Confirm` row showing the three confirmation points for the current bar —

@@ -89,6 +89,25 @@ tradeShortColor    = input.color(color.maroon, "Short", group = "Trade Engine")
 tradeStopColor     = input.color(color.red, "Stop", group = "Trade Engine")
 tradeTargetColor   = input.color(color.green, "Targets", group = "Trade Engine")
 
+// ---------------- Trailing Stop Model ----------------
+// A second entry model with its own trade slot and its own performance record. It exists because
+// the ICT pullback model structurally cannot participate in a move that never retraces: order
+// blocks are created BY a break, anchored behind it, and are first testable one bar later — so on
+// an impulsive leg the zone is born below price and is never touched. That is not a tuning
+// problem, and no relaxation of the touch rule reaches it.
+//
+// This model references no zone at all. It flips with a Chandelier-style ATR trail and enters on
+// the flip bar, which puts the entry inside the base rather than at the top of the breakout
+// candle, and sizes risk from ATR rather than from zone height.
+useTrailModel   = input.bool(false, "Enable Trailing Stop Model", group = "Trailing Stop Model", tooltip = "Off by default. With this off the model never opens a trade, never accumulates and never draws — the pullback model's record is unchanged, which is the check to run first: its n and Total R must not move.")
+trailAtrLength  = input.int(14, "Trail ATR Length", minval = 1, group = "Trailing Stop Model")
+trailAtrMult    = input.float(2.0, "Trail ATR Multiple", minval = 0.1, step = 0.1, group = "Trailing Stop Model", tooltip = "How far the trail sits from the running extreme. This IS the model's risk: entry to trail at the flip bar, so 2.0 means roughly two ATR of risk per trade — typically far wider than a zone-height stop, and correspondingly fewer, larger positions in R terms.")
+trailLookback   = input.int(22, "Trail Extreme Lookback", minval = 1, group = "Trailing Stop Model", tooltip = "Bars in the running high/low the trail hangs from. Longer gives the trend more room and flips later.")
+trailMinTargetR = input.float(1.0, "Trail Minimum Target Distance (R)", minval = 0.1, step = 0.1, group = "Trailing Stop Model", tooltip = "This model's own target floor, separate from the pullback model's. Its R is an ATR multiple rather than a zone height, so a floor tuned for tight zone stops would push the first target somewhere price never goes.")
+trailRequireTrend = input.bool(true, "Require Trend Agreement", group = "Trailing Stop Model", tooltip = "Only take a flip that agrees with the internal structure trend. Off makes this a standalone trend system that ignores the structure engine entirely.")
+trailUseScore   = input.bool(false, "Apply Minimum Score", group = "Trailing Stop Model", tooltip = "Gate this model on the same score the pullback model uses. OFF by default and deliberately so: on the record to date the score is anti-predictive — the highest-graded setups lose the most — so applying it here would import that problem into a model built to be measured independently. Turn it on only to test whether that finding holds for this model too.")
+showTrailStop   = input.bool(false, "Show Trail Line", group = "Trailing Stop Model")
+
 // ---------------- Confirmations ----------------
 // Five indicators, three points. RSI, MACD and Stochastic all read momentum off the same price
 // series — counted separately they would cast three votes for one opinion, and a setup could
@@ -645,6 +664,47 @@ kumoPlotB = plot(showKumo ? ichiSpanB : na, "Senkou B", color = color.new(color.
 fill(kumoPlotA, kumoPlotB, color = ichiSpanA > ichiSpanB ? kumoBullColor : kumoBearColor, title = "Kumo")
 
 // ============================================================
+// TRAILING STOP MODEL
+// ============================================================
+// A Chandelier-style trail: a stop hung a fixed ATR multiple below the running high while long,
+// above the running low while short, ratcheting only in the trade's favour, with the side
+// flipping when price closes through it. Entry is the FLIP BAR — a discrete event, like a zone
+// touch or a break, never a continuous state that would re-enter on every bar of a trend.
+//
+// This lives at global scope, not inside a function, because the ratchet and the direction latch
+// are `var` state. A `var` inside a function is instantiated per call site, which is exactly the
+// footgun to avoid in a file that now calls shared functions from two slots.
+trailAtr      = ta.atr(trailAtrLength)
+trailLongRaw  = ta.highest(close, trailLookback) - trailAtrMult * trailAtr
+trailShortRaw = ta.lowest(close, trailLookback)  + trailAtrMult * trailAtr
+
+var float trailLongStop  = na
+var float trailShortStop = na
+var int   trailDir       = 1
+
+// Read before assignment, so these are the PREVIOUS bar's levels — what price had to close
+// through to count as a flip. Seeded from the raw level on the first bar rather than left na.
+trailLongPrev  = nz(trailLongStop,  trailLongRaw)
+trailShortPrev = nz(trailShortStop, trailShortRaw)
+
+trailLongStop  := close[1] > trailLongPrev  ? math.max(trailLongRaw,  trailLongPrev)  : trailLongRaw
+trailShortStop := close[1] < trailShortPrev ? math.min(trailShortRaw, trailShortPrev) : trailShortRaw
+
+trailDirPrev = trailDir
+trailDir := trailDirPrev == -1 and close > trailShortPrev ? 1 : trailDirPrev == 1 and close < trailLongPrev ? -1 : trailDirPrev
+
+// Both start at 1, so the first bars can never register a flip and invent an entry at the left
+// edge of the chart.
+trailFlipLong  = trailDir ==  1 and trailDirPrev == -1
+trailFlipShort = trailDir == -1 and trailDirPrev ==  1
+
+plot(showTrailStop and trailDir ==  1 ? trailLongStop  : na, "Trail Stop (long)",  color = color.new(color.green, 0), style = plot.style_linebr)
+plot(showTrailStop and trailDir == -1 ? trailShortStop : na, "Trail Stop (short)", color = color.new(color.red, 0),   style = plot.style_linebr)
+
+plot(trailDir, "DBG Trail Direction (1/-1)", display = display.data_window)
+plot(trailFlipLong ? 1 : trailFlipShort ? -1 : 0, "DBG Trail Flip (1/-1/0)", display = display.data_window)
+
+// ============================================================
 // TRADE GATE
 // ============================================================
 // Hard requirements are absolute: without a direction and a zone there is no side, no stop
@@ -837,10 +897,14 @@ bestBeyond(bool isLong, float floorPrice) =>
 //
 // Any target the structure cannot supply is filled at one further R beyond the last one, so a
 // trade always has three places to go and they are always in ascending order.
-selectTargets(bool isLong, float entryPrice, float risk) =>
+// floorR is a PARAMETER, not the input read directly, because the two entry models need different
+// floors and share this function. A trailing-stop entry risks a whole ATR multiple, so a 1R floor
+// pushes its first target out to a price the instrument may never reach; the pullback model's
+// call site passes minTargetR unchanged, which is what keeps its targets byte-identical.
+selectTargets(bool isLong, float entryPrice, float risk, float floorR) =>
     prices = array.new<float>()
     liqs   = array.new<bool>()
-    floorP = isLong ? entryPrice + minTargetR * risk : entryPrice - minTargetR * risk
+    floorP = isLong ? entryPrice + floorR * risk : entryPrice - floorR * risk
     for n = 1 to 3
         [bp, bl] = bestBeyond(isLong, floorP)
         if not na(bp)
@@ -849,7 +913,7 @@ selectTargets(bool isLong, float entryPrice, float risk) =>
             floorP := isLong ? bp + eqTolMult * structAtr : bp - eqTolMult * structAtr
     // Seeded one R below the minimum-distance floor so the first fill increment lands exactly
     // on it: with no structural targets at all the fills are minTargetR, +1R, +2R from entry.
-    lastP = array.size(prices) > 0 ? array.get(prices, array.size(prices) - 1) : (isLong ? entryPrice + (minTargetR - 1) * risk : entryPrice - (minTargetR - 1) * risk)
+    lastP = array.size(prices) > 0 ? array.get(prices, array.size(prices) - 1) : (isLong ? entryPrice + (floorR - 1) * risk : entryPrice - (floorR - 1) * risk)
     for n = 1 to 3
         if array.size(prices) < 3
             lastP := isLong ? lastP + risk : lastP - risk
@@ -886,25 +950,38 @@ type Trade
     // exit labels already drawn on the chart.
     bool   runner
 
-var Trade activeTrade = na
+// Two independent slots, one per entry model, deliberately stored as two named vars rather than
+// an array: assigning one slot's object into the other would ALIAS them — Pine UDTs are
+// references — and both would then mutate together as a single trade wearing two labels. With
+// named vars that mistake has nowhere to happen.
+//
+// activeTrade keeps its original name so every existing DBG plot, drawing block and panel
+// reference to the pullback model stays exactly where it was.
+var Trade activeTrade = na   // ICT pullback model
+var Trade trailTrade  = na   // trailing-stop trend model
 
 tradeOpened   = false
 tradeClosed   = false
 targetJustHit = false
-closedR       = 0.0   // blended R of the trade that closed on this bar; 0.0 on every other bar
+// Blended R of a trade that closed on this bar, per slot; 0.0 on every other bar.
+closedR       = 0.0
+trailClosedR  = 0.0
 
 var string openedSide = na
 openedSide := na
 
-// Whether there is a trade that has not closed. Written as nested `if`s, never as
-// `not na(activeTrade) and na(activeTrade.closeReason)`: Pine does not guarantee short-circuit
-// evaluation, and reading a field of a `na` object is a runtime error.
-tradeIsLive() =>
+// Whether a slot holds a trade that has not closed. Written as nested `if`s, never as
+// `not na(t) and na(t.closeReason)`: Pine does not guarantee short-circuit evaluation, and
+// reading a field of a `na` object is a runtime error.
+tradeLiveOf(Trade t) =>
     live = false
-    if not na(activeTrade)
-        if na(activeTrade.closeReason)
+    if not na(t)
+        if na(t.closeReason)
             live := true
     live
+
+// The pullback slot's answer, kept under its original name so no existing call site moves.
+tradeIsLive() => tradeLiveOf(activeTrade)
 
 // Newest unbroken swing price in one array, or na.
 newestUnbroken(array<SwingPoint> pts) =>
@@ -975,99 +1052,160 @@ blendedResultR(Trade t) =>
 gradeIndex(string g) =>
     g == "A" ? 0 : g == "B" ? 1 : 2
 
-// Result memory. Nothing is stored per trade, so there is no cap and no memory growth — only
-// running totals. `var` commits at bar close, which is what makes live-tick recalculation safe.
-var int   statTrades = 0
-var int   statWins   = 0
-var int   statLosses = 0
-var float statSumR   = 0.0
-var array<int>   statGradeCount = array.new<int>(3, 0)
-var array<float> statGradeSumR  = array.new<float>(3, 0.0)
+// Model indices. Named rather than literal because they index six different arrays and a bare 0
+// or 1 at those call sites says nothing about which model is being credited.
+MODEL_PULLBACK = 0
+MODEL_TRAIL    = 1
 
-// ---- exits, on confirmed bars only, stop first ----
-if barstate.isconfirmed and tradeIsLive()
-    isLong = activeTrade.side == "long"
-    // Wick mode asks whether price REACHED the stop; close mode asks whether it HELD there.
-    // The distinction only matters on the bars that wick through and close back — which on a
-    // thin daily is most of them, and is the whole reason the toggle exists.
-    stopHit = stopOnCloseOnly ? (isLong ? close <= activeTrade.stop : close >= activeTrade.stop) : (isLong ? low <= activeTrade.stop : high >= activeTrade.stop)
-    if stopHit
-        // Close mode fills at the close: that is the bar the decision was taken on, and it is
-        // already at or beyond the stop, so it is never the flattering price.
-        //
-        // Wick mode fills at the stop, except on a bar that OPENS beyond it — that bar was never
-        // fillable at the stop, and recording it there would flatter every gapped exit, which is
-        // routine on auction opens and weekends.
-        activeTrade.closePrice  := stopOnCloseOnly ? close : (isLong ? math.min(activeTrade.stop, open) : math.max(activeTrade.stop, open))
-        activeTrade.closeReason := "Stopped"
-        tradeClosed := true
-    else
-        if activeTrade.tpHit < 1 and (isLong ? high >= activeTrade.tp1 : low <= activeTrade.tp1)
-            activeTrade.tpHit := 1
-            // The breakeven jump is precisely what trail-from-entry replaces, so the two must
-            // not both fire: jamming to entry here and then trailing would leave the stop at
-            // the tighter of the two, which is the behaviour the mode exists to avoid.
-            if not trailFromEntry
-                activeTrade.stop := activeTrade.entry
-            targetJustHit := true
-        if activeTrade.tpHit < 2 and (isLong ? high >= activeTrade.tp2 : low <= activeTrade.tp2)
-            activeTrade.tpHit := 2
-            targetJustHit := true
-        if activeTrade.tpHit < 3 and (isLong ? high >= activeTrade.tp3 : low <= activeTrade.tp3)
-            activeTrade.tpHit := 3
-            targetJustHit := true
-        // Reads the trade's own snapshot, not the input, so a trade opened as a runner stays
-        // one for its whole life even if the toggle moves under it mid-trade.
-        if activeTrade.tpHit >= 3 and not activeTrade.runner
-            activeTrade.closePrice  := activeTrade.tp3
-            activeTrade.closeReason := "Target"
-            tradeClosed := true
-        else
-            chochAgainst = isLong ? (intState.bearBreak and intState.lastType == "CHoCH") : (intState.bullBreak and intState.lastType == "CHoCH")
-            if chochAgainst
-                activeTrade.closePrice  := close
-                activeTrade.closeReason := "Invalidated"
-                tradeClosed := true
-            else if trailFromEntry or activeTrade.tpHit >= 1
-                anchor = trailAnchor(isLong)
-                if not na(anchor)
-                    candidate = isLong ? anchor - stopBufferMult * structAtr : anchor + stopBufferMult * structAtr
-                    if isLong ? candidate > activeTrade.stop : candidate < activeTrade.stop
-                        activeTrade.stop := candidate
+// Result memory, per model: index 0 is the pullback slot, index 1 the trailing-stop slot. Nothing
+// is stored per trade, so there is no cap and no memory growth — only running totals. `var`
+// commits at bar close, which is what makes live-tick recalculation safe.
+//
+// Separate counters are the entire point of running two slots: averaged together, a model that
+// works and one that does not read as one mediocre number and neither can be judged.
+var array<int>   statTrades = array.new<int>(2, 0)
+var array<int>   statWins   = array.new<int>(2, 0)
+var array<int>   statLosses = array.new<int>(2, 0)
+var array<float> statSumR   = array.new<float>(2, 0.0)
+// Six slots, indexed model * 3 + gradeIndex.
+var array<int>   statGradeCount = array.new<int>(6, 0)
+var array<float> statGradeSumR  = array.new<float>(6, 0.0)
+
+// ---- one bar of exit processing for one slot ----
+// The whole exit block, lifted verbatim from the single-slot version with `activeTrade` renamed
+// to `t`. Pine UDTs are reference types, so every field written here is visible to the caller —
+// the same mechanism mitigateZones() already relies on to report a touch back through `Touch t`.
+//
+// Called once per slot, unconditionally. It holds no `var` and calls no `ta.*`, so it carries no
+// per-call-site series state and two call sites cannot interfere with each other. `barstate` and
+// liveness are checked INSIDE for the same reason: a conditional call would be conditional
+// execution, which is what gives a function inconsistent history.
+//
+// Returns [closed, hitTarget] rather than writing the globals directly, because `tradeClosed` and
+// `targetJustHit` are per-bar alert flags shared across both slots.
+advanceTrade(Trade t) =>
+    closed    = false
+    hitTarget = false
+    if barstate.isconfirmed
+        if tradeLiveOf(t)
+            isLong = t.side == "long"
+            // Wick mode asks whether price REACHED the stop; close mode asks whether it HELD
+            // there. The distinction only matters on the bars that wick through and close back —
+            // which on a thin daily is most of them, and is the whole reason the toggle exists.
+            stopHit = stopOnCloseOnly ? (isLong ? close <= t.stop : close >= t.stop) : (isLong ? low <= t.stop : high >= t.stop)
+            if stopHit
+                // Close mode fills at the close: that is the bar the decision was taken on, and
+                // it is already at or beyond the stop, so it is never the flattering price.
+                //
+                // Wick mode fills at the stop, except on a bar that OPENS beyond it — that bar
+                // was never fillable at the stop, and recording it there would flatter every
+                // gapped exit, which is routine on auction opens and weekends.
+                t.closePrice  := stopOnCloseOnly ? close : (isLong ? math.min(t.stop, open) : math.max(t.stop, open))
+                t.closeReason := "Stopped"
+                closed := true
+            else
+                if t.tpHit < 1 and (isLong ? high >= t.tp1 : low <= t.tp1)
+                    t.tpHit := 1
+                    // The breakeven jump is precisely what trail-from-entry replaces, so the two
+                    // must not both fire: jamming to entry here and then trailing would leave the
+                    // stop at the tighter of the two, which the mode exists to avoid.
+                    if not trailFromEntry
+                        t.stop := t.entry
+                    hitTarget := true
+                if t.tpHit < 2 and (isLong ? high >= t.tp2 : low <= t.tp2)
+                    t.tpHit := 2
+                    hitTarget := true
+                if t.tpHit < 3 and (isLong ? high >= t.tp3 : low <= t.tp3)
+                    t.tpHit := 3
+                    hitTarget := true
+                // Reads the trade's own snapshot, not the input, so a trade opened as a runner
+                // stays one for its whole life even if the toggle moves under it mid-trade.
+                if t.tpHit >= 3 and not t.runner
+                    t.closePrice  := t.tp3
+                    t.closeReason := "Target"
+                    closed := true
+                else
+                    chochAgainst = isLong ? (intState.bearBreak and intState.lastType == "CHoCH") : (intState.bullBreak and intState.lastType == "CHoCH")
+                    if chochAgainst
+                        t.closePrice  := close
+                        t.closeReason := "Invalidated"
+                        closed := true
+                    else if trailFromEntry or t.tpHit >= 1
+                        anchor = trailAnchor(isLong)
+                        if not na(anchor)
+                            candidate = isLong ? anchor - stopBufferMult * structAtr : anchor + stopBufferMult * structAtr
+                            if isLong ? candidate > t.stop : candidate < t.stop
+                                t.stop := candidate
+    [closed, hitTarget]
+
+// ---- exits, one call per slot ----
+[pbClosed, pbHitTarget] = advanceTrade(activeTrade)
+[trClosed, trHitTarget] = advanceTrade(trailTrade)
+
+tradeClosed   := pbClosed or trClosed
+targetJustHit := pbHitTarget or trHitTarget
 
 // ---- record the result, never gated by a display input ----
-// Placement is deliberate: on the closing bar tradeClosed is true and activeTrade is still
-// valid, and on the next bar tradeClosed is false and the block below frees the slot. So this
-// runs exactly once per trade. tradeClosed is a plain per-bar variable, not a var, so it cannot
-// leak into a later bar.
+// Accumulates one closed trade into its OWN model's counters and returns its blended R.
 //
-// No show* flag guards this. If it did, switching the history labels off would silently zero
-// the track record, and the panel would disagree with the chart for reasons nobody could see.
-if tradeClosed and not na(activeTrade)
-    closedR := blendedResultR(activeTrade)
-    gi      = gradeIndex(activeTrade.grade)
-    statTrades += 1
-    statSumR   += closedR
-    if closedR > 0
-        statWins += 1
-    else if closedR < 0
-        statLosses += 1
+// No show* flag guards the call sites. If one did, switching the history labels off would
+// silently zero the track record, and the panel would disagree with the chart for reasons
+// nobody could see.
+recordResult(Trade t, int model) =>
+    r  = blendedResultR(t)
+    gi = model * 3 + gradeIndex(t.grade)
+    array.set(statTrades, model, array.get(statTrades, model) + 1)
+    array.set(statSumR,   model, array.get(statSumR,   model) + r)
+    if r > 0
+        array.set(statWins,   model, array.get(statWins,   model) + 1)
+    else if r < 0
+        array.set(statLosses, model, array.get(statLosses, model) + 1)
     array.set(statGradeCount, gi, array.get(statGradeCount, gi) + 1)
-    array.set(statGradeSumR,  gi, array.get(statGradeSumR,  gi) + closedR)
+    array.set(statGradeSumR,  gi, array.get(statGradeSumR,  gi) + r)
+    r
 
-// ---- free the slot, never on the closing bar itself ----
-// Nested rather than `and`-chained, for the same reason tradeIsLive() is.
+// Keyed on the PER-SLOT close flag, never the shared tradeClosed. With one slot the two were the
+// same thing; with two they are not, and the shared flag would be actively wrong in both
+// directions — a trail-slot close would satisfy `tradeClosed and not na(activeTrade)` and book a
+// still-live pullback trade as a result, and either slot closing would hold the other slot's
+// freeing back a bar. Cross-slot coupling is the one thing separated records must not have.
+//
+// Placement is deliberate: on the closing bar the flag is true and the trade is still valid, and
+// on the next bar it is false and the block below frees the slot. So this runs exactly once per
+// trade. These are plain per-bar variables, not vars, so they cannot leak into a later bar.
+if pbClosed
+    closedR := recordResult(activeTrade, MODEL_PULLBACK)
+if trClosed
+    trailClosedR := recordResult(trailTrade, MODEL_TRAIL)
+
+// ---- free each slot, never on its own closing bar ----
+// Nested rather than `and`-chained, for the same reason tradeLiveOf() is.
 if not na(activeTrade)
     if not na(activeTrade.closeReason)
-        if not tradeClosed
+        if not pbClosed
             activeTrade := na
+if not na(trailTrade)
+    if not na(trailTrade.closeReason)
+        if not trClosed
+            trailTrade := na
 
 // Verification surface for the deferred TradingView pass — engine state as numbers, bar by bar.
+// These keep reporting the PULLBACK model, so their meaning is unchanged from the single-slot
+// version; the trail model gets its own pair rather than being folded into these.
+pbTrades = array.get(statTrades, MODEL_PULLBACK)
+pbSumR   = array.get(statSumR,   MODEL_PULLBACK)
+trTrades = array.get(statTrades, MODEL_TRAIL)
+trSumR   = array.get(statSumR,   MODEL_TRAIL)
 plot(closedR, "DBG Closed Trade R", display = display.data_window)
-plot(statTrades, "DBG Closed Trades", display = display.data_window)
-plot(statTrades > 0 ? statSumR / statTrades : 0.0, "DBG Avg R", display = display.data_window)
+plot(pbTrades, "DBG Closed Trades", display = display.data_window)
+plot(pbTrades > 0 ? pbSumR / pbTrades : 0.0, "DBG Avg R", display = display.data_window)
+plot(trailClosedR, "DBG Trail Closed Trade R", display = display.data_window)
+plot(trTrades, "DBG Trail Closed Trades", display = display.data_window)
+plot(trTrades > 0 ? trSumR / trTrades : 0.0, "DBG Trail Avg R", display = display.data_window)
 
-// ---- open ----
+// ---- open: pullback model ----
+// Unchanged, including passing minTargetR explicitly now that selectTargets takes the floor as a
+// parameter. This slot is never touched by the trailing model, so the two never compete for it.
 canOpen = na(activeTrade)
 if canOpen and longSetup
     zTop = bullTouch.top
@@ -1075,7 +1213,7 @@ if canOpen and longSetup
     st   = zBot - stopBufferMult * structAtr
     if close > st
         risk = close - st
-        tg   = selectTargets(true, close, risk)
+        tg   = selectTargets(true, close, risk, minTargetR)
         activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode)
         tradeOpened := true
         openedSide  := "long"
@@ -1085,18 +1223,65 @@ if na(activeTrade) and shortSetup and not longOnly
     st   = zTop + stopBufferMult * structAtr
     if close < st
         risk = st - close
-        tg   = selectTargets(false, close, risk)
+        tg   = selectTargets(false, close, risk, minTargetR)
         activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode)
         tradeOpened := true
         openedSide  := "short"
 
+// ---- open: trailing stop model ----
+// Reads scoreLong/scoreShort, the RAW tally, never bullScore/bearScore — those are zeroed unless
+// the pullback model's hard gate passed, which requires a zone touch. Gating this model on that
+// would make it a duplicate of the pullback model rather than an independent one.
+//
+// The structure filter is all-or-nothing under one toggle: with it on the model defers to the
+// engine's trend and range reads, with it off it is a standalone trend system that shares only
+// the exit machinery and the panel.
+trailStructOk(bool isLong) =>
+    ok = true
+    if trailRequireTrend
+        ok := not inRange and intState.trend == (isLong ? "up" : "down")
+    ok
+
+trailLongEntry  = useTrailModel and barstate.isconfirmed and trailFlipLong  and trailStructOk(true)  and (not trailUseScore or scoreLong  >= minScore)
+trailShortEntry = useTrailModel and barstate.isconfirmed and trailFlipShort and trailStructOk(false) and (not trailUseScore or scoreShort >= minScore) and not longOnly
+
+if na(trailTrade) and trailLongEntry
+    st = trailLongStop
+    if close > st
+        risk = close - st
+        tg   = selectTargets(true, close, risk, trailMinTargetR)
+        // The grade is recorded even when the score does not gate entry, so this model's grade
+        // split stays readable — that split is how the anti-predictive-score finding gets tested
+        // against a second, independent population of trades.
+        //
+        // zoneTop/zoneBottom carry entry and stop: this model has no zone, and those two fields
+        // are what the trade box is drawn from.
+        trailTrade := Trade.new("long", gradeFor(scoreLong, ofPtsLong), scoreLong, ofPtsLong, close, st, st, close, st, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode)
+        tradeOpened := true
+        if na(openedSide)
+            openedSide := "long"
+if na(trailTrade) and trailShortEntry
+    st = trailShortStop
+    if close < st
+        risk = st - close
+        tg   = selectTargets(false, close, risk, trailMinTargetR)
+        trailTrade := Trade.new("short", gradeFor(scoreShort, ofPtsShort), scoreShort, ofPtsShort, close, st, st, st, close, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode)
+        tradeOpened := true
+        if na(openedSide)
+            openedSide := "short"
+
 // Open R, using initialStop always — the trailed stop would shrink the denominator and
 // overstate every result.
-tradeOpenR = float(na)
-if not na(activeTrade)
-    r = math.abs(activeTrade.entry - activeTrade.initialStop)
-    if r > 0
-        tradeOpenR := (activeTrade.side == "long" ? close - activeTrade.entry : activeTrade.entry - close) / r
+openRof(Trade t) =>
+    v = float(na)
+    if not na(t)
+        r = math.abs(t.entry - t.initialStop)
+        if r > 0
+            v := (t.side == "long" ? close - t.entry : t.entry - close) / r
+    v
+
+tradeOpenR = openRof(activeTrade)
+trailOpenR = openRof(trailTrade)
 
 // ---- confluence signal markers (CONFLUENCE SIGNALS, continued) ----
 // The triangles now mark a trade opening, not "five conditions agreed". The old fired-latch
@@ -1187,7 +1372,10 @@ if barstate.islast
 // happened at a bar and stays.
 var line[]  tradeLines  = array.new<line>()
 var label[] tradeLabels = array.new<label>()
+// One box handle per slot. Sharing a single handle would leak the first slot's box on every
+// redraw, because box.delete works by handle and the second assignment would overwrite it.
 var box     tradeBox    = na
+var box     trailBox    = na
 
 tradeLevelLine(int openBar, float price, color col, string txt, bool dotted) =>
     array.push(tradeLines, line.new(anchorBar(openBar), price, bar_index, price, extend = extend.right, color = col, style = dotted ? line.style_dotted : line.style_solid, width = 1))
@@ -1202,6 +1390,27 @@ targetLabelText(int n, float price, bool isLiq, bool isLong, float entryPrice, f
     hitTxt = tpHit >= n ? " ✓" : ""
     "TP" + str.tostring(n) + " " + str.tostring(price, format.mintick) + " · " + rTxt + "R" + liqTxt + hitTxt
 
+// Draws one slot's box, header and five level lines. Returns the box so the caller can store it
+// in that slot's own `var` — a box is deleted by handle on the next redraw, and sharing one
+// handle between two slots would leak the first box every bar.
+//
+// `tag` distinguishes the models on the chart: a trailing-model trade has no zone, so its "box"
+// is entry-to-stop and would otherwise read as a zone that never existed.
+drawTradeLevels(Trade t, string tag) =>
+    isLong  = t.side == "long"
+    sideCol = isLong ? tradeLongColor : tradeShortColor
+    r       = math.abs(t.entry - t.initialStop)
+    // Both clamped through the same anchor so the header label stays on the box's corner.
+    boxBar  = anchorBar(t.openBar)
+    b       = box.new(boxBar, t.zoneTop, bar_index, t.zoneBottom, border_color = sideCol, bgcolor = color.new(sideCol, 88))
+    array.push(tradeLabels, label.new(boxBar, t.zoneTop, (isLong ? "LONG · " : "SHORT · ") + tag + t.grade + " · " + str.tostring(t.score) + "/" + str.tostring(t.scoreOf), style = label.style_label_down, color = sideCol, textcolor = color.white, size = size.tiny))
+    tradeLevelLine(t.openBar, t.entry, sideCol, "Entry " + str.tostring(t.entry, format.mintick), false)
+    tradeLevelLine(t.openBar, t.stop, tradeStopColor, "SL " + str.tostring(t.stop, format.mintick), false)
+    tradeLevelLine(t.openBar, t.tp1, tradeTargetColor, targetLabelText(1, t.tp1, t.liq1, isLong, t.entry, r, t.tpHit), t.tpHit >= 1)
+    tradeLevelLine(t.openBar, t.tp2, tradeTargetColor, targetLabelText(2, t.tp2, t.liq2, isLong, t.entry, r, t.tpHit), t.tpHit >= 2)
+    tradeLevelLine(t.openBar, t.tp3, tradeTargetColor, targetLabelText(3, t.tp3, t.liq3, isLong, t.entry, r, t.tpHit), t.tpHit >= 3)
+    b
+
 if barstate.islast
     for ln in tradeLines
         line.delete(ln)
@@ -1210,26 +1419,24 @@ if barstate.islast
         label.delete(lb)
     array.clear(tradeLabels)
     box.delete(tradeBox)
+    box.delete(trailBox)
     if showTradeLevels and tradeIsLive()
-        isLong  = activeTrade.side == "long"
-        sideCol = isLong ? tradeLongColor : tradeShortColor
-        r       = math.abs(activeTrade.entry - activeTrade.initialStop)
-        // Both clamped through the same anchor so the header label stays on the box's corner.
-        boxBar  = anchorBar(activeTrade.openBar)
-        tradeBox := box.new(boxBar, activeTrade.zoneTop, bar_index, activeTrade.zoneBottom, border_color = sideCol, bgcolor = color.new(sideCol, 88))
-        array.push(tradeLabels, label.new(boxBar, activeTrade.zoneTop, (isLong ? "LONG · " : "SHORT · ") + activeTrade.grade + " · " + str.tostring(activeTrade.score) + "/" + str.tostring(activeTrade.scoreOf), style = label.style_label_down, color = sideCol, textcolor = color.white, size = size.tiny))
-        tradeLevelLine(activeTrade.openBar, activeTrade.entry, sideCol, "Entry " + str.tostring(activeTrade.entry, format.mintick), false)
-        tradeLevelLine(activeTrade.openBar, activeTrade.stop, tradeStopColor, "SL " + str.tostring(activeTrade.stop, format.mintick), false)
-        tradeLevelLine(activeTrade.openBar, activeTrade.tp1, tradeTargetColor, targetLabelText(1, activeTrade.tp1, activeTrade.liq1, isLong, activeTrade.entry, r, activeTrade.tpHit), activeTrade.tpHit >= 1)
-        tradeLevelLine(activeTrade.openBar, activeTrade.tp2, tradeTargetColor, targetLabelText(2, activeTrade.tp2, activeTrade.liq2, isLong, activeTrade.entry, r, activeTrade.tpHit), activeTrade.tpHit >= 2)
-        tradeLevelLine(activeTrade.openBar, activeTrade.tp3, tradeTargetColor, targetLabelText(3, activeTrade.tp3, activeTrade.liq3, isLong, activeTrade.entry, r, activeTrade.tpHit), activeTrade.tpHit >= 3)
+        tradeBox := drawTradeLevels(activeTrade, "")
+    if showTradeLevels and tradeLiveOf(trailTrade)
+        trailBox := drawTradeLevels(trailTrade, "TRAIL · ")
 
 // Persistent — deliberately not tracked in tradeLines/tradeLabels, so the redraw above never
 // deletes it. These labels are the per-trade record; the panel's PERFORMANCE rows are the
 // aggregate, and both now read the same blended R so they can never disagree.
-if tradeClosed and showTradeHistory and not na(activeTrade)
+//
+// Keyed per slot, like the recording blocks: with a shared flag a trail-model close would stamp
+// its R onto a still-live pullback trade's bar.
+if pbClosed and showTradeHistory
     resCol = closedR >= 0 ? color.new(color.green, 20) : color.new(color.red, 20)
     label.new(bar_index, activeTrade.closePrice, (closedR >= 0 ? "+" : "") + str.tostring(closedR, "0.0") + "R · " + activeTrade.closeReason, style = activeTrade.side == "long" ? label.style_label_up : label.style_label_down, color = resCol, textcolor = color.white, size = size.tiny)
+if trClosed and showTradeHistory
+    resCol = trailClosedR >= 0 ? color.new(color.green, 20) : color.new(color.red, 20)
+    label.new(bar_index, trailTrade.closePrice, (trailClosedR >= 0 ? "+" : "") + str.tostring(trailClosedR, "0.0") + "R · T · " + trailTrade.closeReason, style = trailTrade.side == "long" ? label.style_label_up : label.style_label_down, color = resCol, textcolor = color.white, size = size.tiny)
 
 // "+0.34R" / "-1.20R". Two decimals, where the per-trade result labels use one — an average over
 // a small sample moves in the second decimal and rounding it away hides the movement.
@@ -1237,6 +1444,68 @@ rText(float v) =>
     (v >= 0 ? "+" : "") + str.tostring(v, "0.00") + "R"
 
 var table structPanel = na
+
+// Six rows describing one live trade, written from `base` downwards. Takes the slot's Trade and
+// its own open R so it serves either model; `tag` names the model on the header row, because two
+// TRADE blocks with identical headers is worse than none.
+tradePanelBlock(Trade t, float openR, string tag, int base) =>
+    isLongT = t.side == "long"
+    rT      = math.abs(t.entry - t.initialStop)
+    rTxt    = rT > 0 ? str.tostring(openR, "0.00") + "R" : "—"
+    // Tests the stop against entry instead of inferring breakeven from tpHit. Under
+    // trail-from-entry there is no jump to entry at TP1, so the stop can sit below it well after
+    // the target is ticked, and a BE+ mark there would claim protection the trade does not have.
+    beMark  = (isLongT ? t.stop >= t.entry : t.stop <= t.entry) ? " · BE+" : ""
+    // A runner has no exit at TP3, so labelling it the final target would misread the trade —
+    // the last third leaves at the trail.
+    sideTxt = (isLongT ? "LONG" : "SHORT") + (t.runner ? " · RUN" : "")
+    table.cell(structPanel, 0, base, tag + "TRADE", text_color = color.white, bgcolor = color.new(color.gray, 50))
+    table.cell(structPanel, 1, base, sideTxt + " · " + t.grade + " · " + str.tostring(t.score) + "/" + str.tostring(t.scoreOf), text_color = isLongT ? tradeLongColor : tradeShortColor, bgcolor = color.new(color.gray, 50))
+    table.cell(structPanel, 0, base + 1, "Entry", text_color = color.silver)
+    table.cell(structPanel, 1, base + 1, str.tostring(t.entry, format.mintick), text_color = color.white)
+    table.cell(structPanel, 0, base + 2, "Stop", text_color = color.silver)
+    table.cell(structPanel, 1, base + 2, str.tostring(t.stop, format.mintick) + beMark + " · " + str.tostring(rT > 0 ? math.abs(t.entry - t.stop) / rT : 0.0, "0.0") + "R", text_color = tradeStopColor)
+    table.cell(structPanel, 0, base + 3, "TP1 / TP2", text_color = color.silver)
+    table.cell(structPanel, 1, base + 3, str.tostring(t.tp1, format.mintick) + (t.tpHit >= 1 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(t.tp1 - t.entry) / rT : 0.0, "0.0") + "R)" + "  " + str.tostring(t.tp2, format.mintick) + (t.tpHit >= 2 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(t.tp2 - t.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
+    table.cell(structPanel, 0, base + 4, "TP3", text_color = color.silver)
+    table.cell(structPanel, 1, base + 4, str.tostring(t.tp3, format.mintick) + (t.tpHit >= 3 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(t.tp3 - t.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
+    table.cell(structPanel, 0, base + 5, "Open R", text_color = color.silver)
+    table.cell(structPanel, 1, base + 5, rTxt, text_color = openR >= 0 ? color.lime : color.red)
+    base
+
+// One model's performance block: 7 rows once it has a closed trade, 2 before that. Reads only its
+// own model's counters, which is what keeps the two records from averaging into one number that
+// describes neither.
+statsPanelBlock(int model, string title, int base) =>
+    n     = array.get(statTrades, model)
+    sumR  = array.get(statSumR,   model)
+    wins  = array.get(statWins,   model)
+    loss  = array.get(statLosses, model)
+    table.cell(structPanel, 0, base, title, text_color = color.white, bgcolor = color.new(color.gray, 50))
+    table.cell(structPanel, 1, base, "n = " + str.tostring(n), text_color = color.silver, bgcolor = color.new(color.gray, 50))
+    if n == 0
+        table.cell(structPanel, 0, base + 1, "No closed trades", text_color = color.silver)
+        table.cell(structPanel, 1, base + 1, "—", text_color = color.gray)
+    else
+        avgR   = sumR / n
+        winPct = 100.0 * wins / n
+        table.cell(structPanel, 0, base + 1, "Win rate", text_color = color.silver)
+        table.cell(structPanel, 1, base + 1, str.tostring(winPct, "0") + "%  (" + str.tostring(wins) + "W / " + str.tostring(loss) + "L)", text_color = color.white)
+        table.cell(structPanel, 0, base + 2, "Avg R", text_color = color.silver)
+        table.cell(structPanel, 1, base + 2, rText(avgR), text_color = avgR >= 0 ? color.lime : color.red)
+        table.cell(structPanel, 0, base + 3, "Total R", text_color = color.silver)
+        table.cell(structPanel, 1, base + 3, rText(sumR), text_color = sumR >= 0 ? color.lime : color.red)
+        for gi = 0 to 2
+            // model * 3 + gi — the two models' grade counts share one flat array.
+            gCount = array.get(statGradeCount, model * 3 + gi)
+            gSum   = array.get(statGradeSumR,  model * 3 + gi)
+            gName  = gi == 0 ? "A" : gi == 1 ? "B" : "C"
+            gAvg   = gCount > 0 ? gSum / gCount : 0.0
+            gTxt   = gCount > 0 ? rText(gAvg) + "  (" + str.tostring(gCount) + ")" : "—  (0)"
+            gCol   = gCount == 0 ? color.gray : gAvg >= 0 ? color.lime : color.red
+            table.cell(structPanel, 0, base + 4 + gi, gName + " grade", text_color = color.silver)
+            table.cell(structPanel, 1, base + 4 + gi, gTxt, text_color = gCol)
+    base
 
 if barstate.islast
     table.delete(structPanel)
@@ -1263,19 +1532,30 @@ if barstate.islast
         confirmRows = showConfirmPanel ? 1 : 0
         // Side · blocking reason · live score. The fraction is the half that makes a scoring
         // input observable at all; the reason is the half that says what to do about it.
-        gateText    = (gateLong ? "L" : "S") + " · " + gateReason + " · " + str.tostring(gateScore) + "/" + str.tostring(gateOf)
+        // The trail model has no gate to report — it waits for a flip, which is not a condition
+        // that can be "nearly met" — so it contributes only its current side, and only when it
+        // is enabled. With it off this row is character-for-character what it was.
+        trailMark   = useTrailModel ? " · T:" + (trailDir == 1 ? "L" : "S") : ""
+        gateText    = (gateLong ? "L" : "S") + " · " + gateReason + " · " + str.tostring(gateScore) + "/" + str.tostring(gateOf) + trailMark
         gateCol     = gateReady ? color.lime : gateReason == "score short" ? color.orange : color.gray
         gateRows    = showGatePanel ? 1 : 0
-        tradeRows = 0
-        if showTradePanel and tradeIsLive()
-            tradeRows := 6
-        // 7 rows once there is anything to report — header, three overall rows, three grades.
-        // 2 before the first trade closes: a header with an empty-state row under it, rather
-        // than six rows of 0% and +0.00R that read like a result.
-        statsRows = 0
-        if showStatsPanel
-            statsRows := statTrades > 0 ? 7 : 2
-        structPanel := table.new(panelPos, 2, 5 + confirmRows + gateRows + tradeRows + statsRows, bgcolor = color.new(color.black, 80), border_width = 1)
+        // ---- row budget ----
+        // Six rows per LIVE slot and a stats block per ENABLED model, so the table height is a
+        // function of state, not a constant. Every base below derives from these same three
+        // variables in the same order they are rendered. Do not count rows by hand: table.cell
+        // overwrites silently, so a base that skips an optional block above it does not error —
+        // it just eats that block's last row, which is exactly how the gate row disappeared once
+        // already.
+        pbRows = showTradePanel and tradeIsLive() ? 6 : 0
+        trRows = showTradePanel and tradeLiveOf(trailTrade) ? 6 : 0
+        // 7 rows once a model has anything to report — header, three overall rows, three grades.
+        // 2 before its first trade closes: a header with an empty-state row under it, rather than
+        // six rows of 0% and +0.00R that read like a result.
+        pbStatsRows = showStatsPanel ? (pbTrades > 0 ? 7 : 2) : 0
+        // The trailing model's block appears only when the model is enabled. With it off the
+        // panel is row-for-row identical to the single-model version.
+        trStatsRows = showStatsPanel and useTrailModel ? (trTrades > 0 ? 7 : 2) : 0
+        structPanel := table.new(panelPos, 2, 5 + confirmRows + gateRows + pbRows + trRows + pbStatsRows + trStatsRows, bgcolor = color.new(color.black, 80), border_width = 1)
         table.cell(structPanel, 0, 0, "STRUCTURE", text_color = color.white, bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 1, 0, "", bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 0, 1, "Major trend", text_color = color.silver)
@@ -1292,67 +1572,30 @@ if barstate.islast
         if gateRows > 0
             table.cell(structPanel, 0, 5 + confirmRows, "Gate", text_color = color.silver)
             table.cell(structPanel, 1, 5 + confirmRows, gateText, text_color = gateCol)
-        tradeBase = 5 + confirmRows + gateRows
-        if tradeRows > 0
-            isLongT = activeTrade.side == "long"
-            rT      = math.abs(activeTrade.entry - activeTrade.initialStop)
-            rTxt    = rT > 0 ? str.tostring(tradeOpenR, "0.00") + "R" : "—"
-            // Tests the stop against entry instead of inferring breakeven from tpHit. Under
-            // trail-from-entry there is no jump to entry at TP1, so the stop can sit below it
-            // well after the target is ticked, and a BE+ mark there would claim protection the
-            // trade does not have.
-            beMark  = (isLongT ? activeTrade.stop >= activeTrade.entry : activeTrade.stop <= activeTrade.entry) ? " · BE+" : ""
-            // A runner has no exit at TP3, so labelling it the final target would misread the
-            // trade — the last third leaves at the trail.
-            sideTxt = (isLongT ? "LONG" : "SHORT") + (activeTrade.runner ? " · RUN" : "")
-            table.cell(structPanel, 0, tradeBase, "TRADE", text_color = color.white, bgcolor = color.new(color.gray, 50))
-            table.cell(structPanel, 1, tradeBase, sideTxt + " · " + activeTrade.grade + " · " + str.tostring(activeTrade.score) + "/" + str.tostring(activeTrade.scoreOf), text_color = isLongT ? tradeLongColor : tradeShortColor, bgcolor = color.new(color.gray, 50))
-            table.cell(structPanel, 0, tradeBase + 1, "Entry", text_color = color.silver)
-            table.cell(structPanel, 1, tradeBase + 1, str.tostring(activeTrade.entry, format.mintick), text_color = color.white)
-            table.cell(structPanel, 0, tradeBase + 2, "Stop", text_color = color.silver)
-            table.cell(structPanel, 1, tradeBase + 2, str.tostring(activeTrade.stop, format.mintick) + beMark + " · " + str.tostring(rT > 0 ? math.abs(activeTrade.entry - activeTrade.stop) / rT : 0.0, "0.0") + "R", text_color = tradeStopColor)
-            table.cell(structPanel, 0, tradeBase + 3, "TP1 / TP2", text_color = color.silver)
-            table.cell(structPanel, 1, tradeBase + 3, str.tostring(activeTrade.tp1, format.mintick) + (activeTrade.tpHit >= 1 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp1 - activeTrade.entry) / rT : 0.0, "0.0") + "R)" + "  " + str.tostring(activeTrade.tp2, format.mintick) + (activeTrade.tpHit >= 2 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp2 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
-            table.cell(structPanel, 0, tradeBase + 4, "TP3", text_color = color.silver)
-            table.cell(structPanel, 1, tradeBase + 4, str.tostring(activeTrade.tp3, format.mintick) + (activeTrade.tpHit >= 3 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp3 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
-            table.cell(structPanel, 0, tradeBase + 5, "Open R", text_color = color.silver)
-            table.cell(structPanel, 1, tradeBase + 5, rTxt, text_color = tradeOpenR >= 0 ? color.lime : color.red)
-        // Every optional block above this one has to appear here, in the same order, or this
-        // block silently writes over the last row of whichever one was left out — table.cell
-        // overwrites without complaint, so the row simply vanishes with no error to chase.
-        // Derived from the same expression as the row count above. Never hardcode this: it
-        // shifts by 6 whenever a trade opens or closes.
-        statsBase = 5 + confirmRows + gateRows + tradeRows
-        if statsRows > 0
-            table.cell(structPanel, 0, statsBase, "PERFORMANCE", text_color = color.white, bgcolor = color.new(color.gray, 50))
-            table.cell(structPanel, 1, statsBase, "n = " + str.tostring(statTrades), text_color = color.silver, bgcolor = color.new(color.gray, 50))
-            if statTrades == 0
-                table.cell(structPanel, 0, statsBase + 1, "No closed trades", text_color = color.silver)
-                table.cell(structPanel, 1, statsBase + 1, "—", text_color = color.gray)
-            else
-                avgR   = statSumR / statTrades
-                winPct = 100.0 * statWins / statTrades
-                table.cell(structPanel, 0, statsBase + 1, "Win rate", text_color = color.silver)
-                table.cell(structPanel, 1, statsBase + 1, str.tostring(winPct, "0") + "%  (" + str.tostring(statWins) + "W / " + str.tostring(statLosses) + "L)", text_color = color.white)
-                table.cell(structPanel, 0, statsBase + 2, "Avg R", text_color = color.silver)
-                table.cell(structPanel, 1, statsBase + 2, rText(avgR), text_color = avgR >= 0 ? color.lime : color.red)
-                table.cell(structPanel, 0, statsBase + 3, "Total R", text_color = color.silver)
-                table.cell(structPanel, 1, statsBase + 3, rText(statSumR), text_color = statSumR >= 0 ? color.lime : color.red)
-                for gi = 0 to 2
-                    gCount = array.get(statGradeCount, gi)
-                    gSum   = array.get(statGradeSumR, gi)
-                    gName  = gi == 0 ? "A" : gi == 1 ? "B" : "C"
-                    gAvg   = gCount > 0 ? gSum / gCount : 0.0
-                    gTxt   = gCount > 0 ? rText(gAvg) + "  (" + str.tostring(gCount) + ")" : "—  (0)"
-                    gCol   = gCount == 0 ? color.gray : gAvg >= 0 ? color.lime : color.red
-                    table.cell(structPanel, 0, statsBase + 4 + gi, gName + " grade", text_color = color.silver)
-                    table.cell(structPanel, 1, statsBase + 4 + gi, gTxt, text_color = gCol)
+        // Bases, in render order. Each one adds every block above it — see the row-budget note.
+        pbBase      = 5 + confirmRows + gateRows
+        trBase      = pbBase + pbRows
+        pbStatsBase = trBase + trRows
+        trStatsBase = pbStatsBase + pbStatsRows
+        if pbRows > 0
+            tradePanelBlock(activeTrade, tradeOpenR, "", pbBase)
+        if trRows > 0
+            tradePanelBlock(trailTrade, trailOpenR, "TRAIL ", trBase)
+        if pbStatsRows > 0
+            statsPanelBlock(MODEL_PULLBACK, useTrailModel ? "PERFORMANCE · PULLBACK" : "PERFORMANCE", pbStatsBase)
+        if trStatsRows > 0
+            statsPanelBlock(MODEL_TRAIL, "PERFORMANCE · TRAIL", trStatsBase)
 
 // ============================================================
 // ALERTS
 // ============================================================
 alertcondition(bullishSignal, title = "Bullish Trade Entry", message = "Long trade opened on {{ticker}} {{interval}} — see the chart for entry zone, stop and targets.")
 alertcondition(bearishSignal, title = "Bearish Trade Entry", message = "Bearish setup on {{ticker}} {{interval}} — short trade opened, or suppressed by Long Trades Only. See the chart.")
+// Added alongside the existing conditions, never replacing them: `tradeOpened` still means "any
+// slot opened", so an alert already configured against it keeps firing exactly as before, and
+// only starts including trail-model entries once that model is switched on.
+alertcondition(trailLongEntry, title = "Trail Model Long Entry", message = "Trailing-stop model flipped long on {{ticker}} {{interval}} — see the TRAIL rows for stop and targets.")
+alertcondition(trailShortEntry, title = "Trail Model Short Entry", message = "Trailing-stop model flipped short on {{ticker}} {{interval}} — see the TRAIL rows for stop and targets.")
 alertcondition(bullishWatchZone, title = "Bullish Watch-Zone", message = "Watch: price approaching an unmitigated bullish FVG/OB during a killzone on {{ticker}} {{interval}}.")
 alertcondition(bearishWatchZone, title = "Bearish Watch-Zone", message = "Watch: price approaching an unmitigated bearish FVG/OB during a killzone on {{ticker}} {{interval}}.")
 
