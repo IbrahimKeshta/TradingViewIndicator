@@ -1317,9 +1317,12 @@ if barstate.islast
             table.cell(structPanel, 1, tradeBase + 4, str.tostring(activeTrade.tp3, format.mintick) + (activeTrade.tpHit >= 3 ? " ✓" : "") + " (" + str.tostring(rT > 0 ? math.abs(activeTrade.tp3 - activeTrade.entry) / rT : 0.0, "0.0") + "R)", text_color = tradeTargetColor)
             table.cell(structPanel, 0, tradeBase + 5, "Open R", text_color = color.silver)
             table.cell(structPanel, 1, tradeBase + 5, rTxt, text_color = tradeOpenR >= 0 ? color.lime : color.red)
+        // Every optional block above this one has to appear here, in the same order, or this
+        // block silently writes over the last row of whichever one was left out — table.cell
+        // overwrites without complaint, so the row simply vanishes with no error to chase.
         // Derived from the same expression as the row count above. Never hardcode this: it
         // shifts by 6 whenever a trade opens or closes.
-        statsBase = 5 + confirmRows + tradeRows
+        statsBase = 5 + confirmRows + gateRows + tradeRows
         if statsRows > 0
             table.cell(structPanel, 0, statsBase, "PERFORMANCE", text_color = color.white, bgcolor = color.new(color.gray, 50))
             table.cell(structPanel, 1, statsBase, "n = " + str.tostring(statTrades), text_color = color.silver, bgcolor = color.new(color.gray, 50))
