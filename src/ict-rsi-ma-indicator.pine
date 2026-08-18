@@ -1431,12 +1431,29 @@ if barstate.islast
 //
 // Keyed per slot, like the recording blocks: with a shared flag a trail-model close would stamp
 // its R onto a still-live pullback trade's bar.
+// Both slots can close on the SAME bar, and before the second model existed that was impossible.
+// Two labels anchored at the same (bar, price) stack exactly on top of each other and the lower
+// one is not merely hard to read, it is completely invisible — the trade looks like it never
+// happened. Only the trail label moves, and only when there is an actual clash, so the pullback
+// label keeps the exact exit price it has always been drawn at.
+//
+// It is pushed along the axis its body ALREADY extends, so it moves away from the collision
+// rather than across it: style_label_up hangs the body below its anchor (longs), style_label_down
+// puts it above (shorts) — the same convention the swing tags use. Scaled by the structure ATR
+// because a fixed price offset would be invisible on one instrument and absurd on another.
+LABEL_CLEAR_MULT = 1.5
+
 if pbClosed and showTradeHistory
     resCol = closedR >= 0 ? color.new(color.green, 20) : color.new(color.red, 20)
     label.new(bar_index, activeTrade.closePrice, (closedR >= 0 ? "+" : "") + str.tostring(closedR, "0.0") + "R · " + activeTrade.closeReason, style = activeTrade.side == "long" ? label.style_label_up : label.style_label_down, color = resCol, textcolor = color.white, size = size.tiny)
 if trClosed and showTradeHistory
     resCol = trailClosedR >= 0 ? color.new(color.green, 20) : color.new(color.red, 20)
-    label.new(bar_index, trailTrade.closePrice, (trailClosedR >= 0 ? "+" : "") + str.tostring(trailClosedR, "0.0") + "R · T · " + trailTrade.closeReason, style = trailTrade.side == "long" ? label.style_label_up : label.style_label_down, color = resCol, textcolor = color.white, size = size.tiny)
+    // Computed INSIDE the guard. trClosed is the proof that trailTrade is not na; hoisting this
+    // to global scope would dereference a na object on every bar the trail slot is empty, which
+    // is a runtime error rather than a silent na — Pine does not short-circuit.
+    clearBy = pbClosed ? LABEL_CLEAR_MULT * structAtr : 0.0
+    trailLabelY = trailTrade.closePrice + (trailTrade.side == "long" ? -clearBy : clearBy)
+    label.new(bar_index, trailLabelY, (trailClosedR >= 0 ? "+" : "") + str.tostring(trailClosedR, "0.0") + "R · T · " + trailTrade.closeReason, style = trailTrade.side == "long" ? label.style_label_up : label.style_label_down, color = resCol, textcolor = color.white, size = size.tiny)
 
 // "+0.34R" / "-1.20R". Two decimals, where the per-trade result labels use one — an average over
 // a small sample moves in the second decimal and rounding it away hides the movement.

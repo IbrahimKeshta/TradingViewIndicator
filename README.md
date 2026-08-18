@@ -276,7 +276,10 @@ a model that works and one that does not read as a single mediocre number and ne
 
 With the trail model enabled the panel grows a second `PERFORMANCE · TRAIL` block beside
 `PERFORMANCE · PULLBACK`, and a live trail trade gets its own `TRAIL TRADE` rows. Its exit labels
-carry a `· T ·` marker so the two models' records stay legible when you scroll back. With it
+carry a `· T ·` marker so the two models' records stay legible when you scroll back. When both
+models close on the same bar, the trail label is pushed clear of the pullback one rather than
+stacking on top of it — two labels at the same point hide one completely, which reads as a trade
+that never happened. With it
 disabled the panel is row-for-row what it was.
 
 **Before enabling it, write down the pullback model's current `n` and `Total R`.** With the model
