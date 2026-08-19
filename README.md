@@ -257,6 +257,7 @@ maximum risk. A trail flip fires inside the base, before the move, so risk is ro
 | Trail ATR Multiple | 2.0 | How far the trail sits from the running extreme — **this is the model's risk per trade** |
 | Trail Extreme Lookback | 22 | Bars in the running high/low the trail hangs from |
 | Trail Minimum Target Distance (R) | 1.0 | This model's own target floor, separate from the pullback model's |
+| Trail Minimum Risk (× ATR) | 1.0 | Rejects a flip whose entry sits closer to its own trail than this — see below |
 | Require Trend Agreement | on | Only take flips agreeing with internal structure, and stand down in a range. Off makes this a standalone trend system |
 | Apply Minimum Score | **off** | See below |
 | Trade Follows the Trail Line | **on** | The open trade's stop ratchets along this model's own Chandelier line, from entry |
@@ -267,6 +268,25 @@ maximum risk. A trail flip fires inside the base, before the move, so risk is ro
 import that problem into the one thing built to test it independently. The grade is still *recorded*
 for every trail trade, so its grade split is readable; it just does not filter entries unless you
 turn this on.
+
+### Why the minimum risk floor exists
+
+A flip can fire with the close sitting almost exactly on its own trail line, and nothing else in
+the model bounds that distance — it is simply wherever the flip bar closed relative to the line.
+That produces a stop **inside a single bar's range**, which an ordinary bar takes out for a
+near-full R regardless of whether the read was right.
+
+This was invisible while the trade's stop stayed frozen at its entry value: a tiny R just inflated
+the R multiple on every winner and made the model look far better than it was. Once the stop
+started tracking the line, the same trades began dying at close to a full stop each, and the
+model's record inverted. Both readings were measuring the missing floor, not the model.
+
+Set it against reality rather than guessing: `DBG Trail Flip Risk (ATR)` in the Data Window reports
+the entry-to-trail distance at every flip, in ATR. Read it across a handful of flips and the right
+floor is obvious. Setting it to 0 disables the floor and takes every flip.
+
+The live trade's `Entry` row now also carries its risk in ATR terms — `22.98 · 0.7x ATR`. Anything
+much under 1.0 is a stop the instrument's own noise will reach, on either model.
 
 ### The trade follows the line that opened it
 

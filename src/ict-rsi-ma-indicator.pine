@@ -106,6 +106,7 @@ trailLookback   = input.int(22, "Trail Extreme Lookback", minval = 1, group = "T
 trailMinTargetR = input.float(1.0, "Trail Minimum Target Distance (R)", minval = 0.1, step = 0.1, group = "Trailing Stop Model", tooltip = "This model's own target floor, separate from the pullback model's. Its R is an ATR multiple rather than a zone height, so a floor tuned for tight zone stops would push the first target somewhere price never goes.")
 trailRequireTrend = input.bool(true, "Require Trend Agreement", group = "Trailing Stop Model", tooltip = "Only take a flip that agrees with the internal structure trend. Off makes this a standalone trend system that ignores the structure engine entirely.")
 trailUseScore   = input.bool(false, "Apply Minimum Score", group = "Trailing Stop Model", tooltip = "Gate this model on the same score the pullback model uses. OFF by default and deliberately so: on the record to date the score is anti-predictive — the highest-graded setups lose the most — so applying it here would import that problem into a model built to be measured independently. Turn it on only to test whether that finding holds for this model too.")
+trailMinRiskAtr = input.float(1.0, "Trail Minimum Risk (x ATR)", minval = 0.0, step = 0.1, group = "Trailing Stop Model", tooltip = "Reject a flip whose entry-to-trail distance is below this multiple of the model's ATR.\n\nA flip that fires with price almost on top of its own trail produces a stop inside a single bar's range, so an ordinary bar takes it out for a near-full R. Nothing else in the model bounds that distance — it is whatever the flip bar's close happens to be above the line.\n\nSet to 0 to disable the floor and take every flip, which is what produced the earlier record.")
 trailUsesOwnStop = input.bool(true, "Trade Follows the Trail Line", group = "Trailing Stop Model", tooltip = "The trade's stop ratchets along this model's own Chandelier line, from the moment it opens.\n\nOff reverts to the shared structural swing trail, which is what the pullback model uses. On this model that leaves the stop parked near entry while the very line that opened the trade flips against it — so Off exists only to reproduce the earlier record for comparison, not as a sensible way to run it.")
 showTrailStop   = input.bool(false, "Show Trail Line", group = "Trailing Stop Model")
 
@@ -704,6 +705,9 @@ plot(showTrailStop and trailDir == -1 ? trailShortStop : na, "Trail Stop (short)
 
 plot(trailDir, "DBG Trail Direction (1/-1)", display = display.data_window)
 plot(trailFlipLong ? 1 : trailFlipShort ? -1 : 0, "DBG Trail Flip (1/-1/0)", display = display.data_window)
+// Entry-to-trail distance at each flip, in ATR. This is the distribution the minimum-risk floor
+// is set against: read it across a few flips and the right floor is obvious, instead of guessed.
+plot(trailFlipLong ? (close - trailLongStop) / trailAtr : trailFlipShort ? (trailShortStop - close) / trailAtr : na, "DBG Trail Flip Risk (ATR)", display = display.data_window)
 
 // ============================================================
 // TRADE GATE
@@ -1265,10 +1269,25 @@ trailStructOk(bool isLong) =>
 trailLongEntry  = useTrailModel and barstate.isconfirmed and trailFlipLong  and trailStructOk(true)  and (not trailUseScore or scoreLong  >= minScore)
 trailShortEntry = useTrailModel and barstate.isconfirmed and trailFlipShort and trailStructOk(false) and (not trailUseScore or scoreShort >= minScore) and not longOnly
 
+// A flip can fire with the close sitting almost exactly on its own trail, and nothing in the
+// model bounds that distance. While the stop stayed frozen at its entry value that only inflated
+// the R multiple on winners; now that the stop tracks the line, the same trade hands back a
+// near-full R on the next ordinary bar. The floor rejects the setup outright rather than sizing a
+// stop the instrument cannot be expected to respect.
+//
+// Measured against the model's OWN ATR, the same one the trail distance uses, so the floor and
+// the trail are denominated in the same thing.
+trailRiskOk(float risk) =>
+    ok = false
+    if risk > 0
+        if not na(trailAtr)
+            ok := risk >= trailMinRiskAtr * trailAtr
+    ok
+
 if na(trailTrade) and trailLongEntry
-    st = trailLongStop
-    if close > st
-        risk = close - st
+    st   = trailLongStop
+    risk = close - st
+    if trailRiskOk(risk)
         tg   = selectTargets(true, close, risk, trailMinTargetR)
         // The grade is recorded even when the score does not gate entry, so this model's grade
         // split stays readable — that split is how the anti-predictive-score finding gets tested
@@ -1281,9 +1300,9 @@ if na(trailTrade) and trailLongEntry
         if na(openedSide)
             openedSide := "long"
 if na(trailTrade) and trailShortEntry
-    st = trailShortStop
-    if close < st
-        risk = st - close
+    st   = trailShortStop
+    risk = st - close
+    if trailRiskOk(risk)
         tg   = selectTargets(false, close, risk, trailMinTargetR)
         trailTrade := Trade.new("short", gradeFor(scoreShort, ofPtsShort), scoreShort, ofPtsShort, close, st, st, st, close, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop)
         tradeOpened := true
@@ -1498,8 +1517,12 @@ tradePanelBlock(Trade t, float openR, string tag, int base) =>
     sideTxt = (isLongT ? "LONG" : "SHORT") + (t.runner ? " · RUN" : "")
     table.cell(structPanel, 0, base, tag + "TRADE", text_color = color.white, bgcolor = color.new(color.gray, 50))
     table.cell(structPanel, 1, base, sideTxt + " · " + t.grade + " · " + str.tostring(t.score) + "/" + str.tostring(t.scoreOf), text_color = isLongT ? tradeLongColor : tradeShortColor, bgcolor = color.new(color.gray, 50))
+    // Initial risk in ATR terms. A stop worth less than about one ATR sits inside a single bar's
+    // range, so it is taken out by noise regardless of whether the idea was right — and nothing
+    // else on this panel says whether that is happening.
+    atrTxt  = not na(structAtr) and structAtr > 0 ? "  ·  " + str.tostring(rT / structAtr, "0.0") + "x ATR" : ""
     table.cell(structPanel, 0, base + 1, "Entry", text_color = color.silver)
-    table.cell(structPanel, 1, base + 1, str.tostring(t.entry, format.mintick), text_color = color.white)
+    table.cell(structPanel, 1, base + 1, str.tostring(t.entry, format.mintick) + atrTxt, text_color = color.white)
     table.cell(structPanel, 0, base + 2, "Stop", text_color = color.silver)
     table.cell(structPanel, 1, base + 2, str.tostring(t.stop, format.mintick) + beMark + " · " + str.tostring(rT > 0 ? math.abs(t.entry - t.stop) / rT : 0.0, "0.0") + "R", text_color = tradeStopColor)
     table.cell(structPanel, 0, base + 3, "TP1 / TP2", text_color = color.silver)
