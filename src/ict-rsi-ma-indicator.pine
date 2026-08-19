@@ -106,6 +106,7 @@ trailLookback   = input.int(22, "Trail Extreme Lookback", minval = 1, group = "T
 trailMinTargetR = input.float(1.0, "Trail Minimum Target Distance (R)", minval = 0.1, step = 0.1, group = "Trailing Stop Model", tooltip = "This model's own target floor, separate from the pullback model's. Its R is an ATR multiple rather than a zone height, so a floor tuned for tight zone stops would push the first target somewhere price never goes.")
 trailRequireTrend = input.bool(true, "Require Trend Agreement", group = "Trailing Stop Model", tooltip = "Only take a flip that agrees with the internal structure trend. Off makes this a standalone trend system that ignores the structure engine entirely.")
 trailUseScore   = input.bool(false, "Apply Minimum Score", group = "Trailing Stop Model", tooltip = "Gate this model on the same score the pullback model uses. OFF by default and deliberately so: on the record to date the score is anti-predictive — the highest-graded setups lose the most — so applying it here would import that problem into a model built to be measured independently. Turn it on only to test whether that finding holds for this model too.")
+trailUsesOwnStop = input.bool(true, "Trade Follows the Trail Line", group = "Trailing Stop Model", tooltip = "The trade's stop ratchets along this model's own Chandelier line, from the moment it opens.\n\nOff reverts to the shared structural swing trail, which is what the pullback model uses. On this model that leaves the stop parked near entry while the very line that opened the trade flips against it — so Off exists only to reproduce the earlier record for comparison, not as a sensible way to run it.")
 showTrailStop   = input.bool(false, "Show Trail Line", group = "Trailing Stop Model")
 
 // ---------------- Confirmations ----------------
@@ -949,6 +950,10 @@ type Trade
     // history the moment the toggle moved, and the PERFORMANCE rows would disagree with the
     // exit labels already drawn on the chart.
     bool   runner
+    // Which trailing mechanism this trade belongs to. Snapshotted at open like `runner`, because
+    // advanceTrade() is shared by both models and must never hand one model's trade to the
+    // other's trail. False = the structural swing anchor; true = this model's Chandelier line.
+    bool   chandelier
 
 // Two independent slots, one per entry model, deliberately stored as two named vars rather than
 // an array: assigning one slot's object into the other would ALIAS them — Pine UDTs are
@@ -1130,10 +1135,25 @@ advanceTrade(Trade t) =>
                         t.closePrice  := close
                         t.closeReason := "Invalidated"
                         closed := true
-                    else if trailFromEntry or t.tpHit >= 1
-                        anchor = trailAnchor(isLong)
-                        if not na(anchor)
-                            candidate = isLong ? anchor - stopBufferMult * structAtr : anchor + stopBufferMult * structAtr
+                    // A chandelier trade trails from the moment it opens and never waits for
+                    // TP1: continuously following its own line IS the model. Waiting left the
+                    // stop parked at its entry value while the very signal that opened the trade
+                    // flipped against it, which is not a trailing stop by any reading.
+                    else if t.chandelier or trailFromEntry or t.tpHit >= 1
+                        candidate = float(na)
+                        if t.chandelier
+                            // The line already sits its own ATR multiple below the running
+                            // extreme, so it takes no stopBufferMult on top — that buffer exists
+                            // to clear a zone edge, and this model has no zone.
+                            candidate := isLong ? trailLongStop : trailShortStop
+                        else
+                            anchor = trailAnchor(isLong)
+                            if not na(anchor)
+                                candidate := isLong ? anchor - stopBufferMult * structAtr : anchor + stopBufferMult * structAtr
+                        if not na(candidate)
+                            // One way only. The chandelier resets lower once price closes through
+                            // it, and without this guard that reset would LOOSEN a stop that had
+                            // already ratcheted up, handing back locked-in profit.
                             if isLong ? candidate > t.stop : candidate < t.stop
                                 t.stop := candidate
     [closed, hitTarget]
@@ -1214,7 +1234,7 @@ if canOpen and longSetup
     if close > st
         risk = close - st
         tg   = selectTargets(true, close, risk, minTargetR)
-        activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode)
+        activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false)
         tradeOpened := true
         openedSide  := "long"
 if na(activeTrade) and shortSetup and not longOnly
@@ -1224,7 +1244,7 @@ if na(activeTrade) and shortSetup and not longOnly
     if close < st
         risk = st - close
         tg   = selectTargets(false, close, risk, minTargetR)
-        activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode)
+        activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false)
         tradeOpened := true
         openedSide  := "short"
 
@@ -1256,7 +1276,7 @@ if na(trailTrade) and trailLongEntry
         //
         // zoneTop/zoneBottom carry entry and stop: this model has no zone, and those two fields
         // are what the trade box is drawn from.
-        trailTrade := Trade.new("long", gradeFor(scoreLong, ofPtsLong), scoreLong, ofPtsLong, close, st, st, close, st, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode)
+        trailTrade := Trade.new("long", gradeFor(scoreLong, ofPtsLong), scoreLong, ofPtsLong, close, st, st, close, st, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop)
         tradeOpened := true
         if na(openedSide)
             openedSide := "long"
@@ -1265,7 +1285,7 @@ if na(trailTrade) and trailShortEntry
     if close < st
         risk = st - close
         tg   = selectTargets(false, close, risk, trailMinTargetR)
-        trailTrade := Trade.new("short", gradeFor(scoreShort, ofPtsShort), scoreShort, ofPtsShort, close, st, st, st, close, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode)
+        trailTrade := Trade.new("short", gradeFor(scoreShort, ofPtsShort), scoreShort, ofPtsShort, close, st, st, st, close, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop)
         tradeOpened := true
         if na(openedSide)
             openedSide := "short"

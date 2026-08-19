@@ -259,6 +259,7 @@ maximum risk. A trail flip fires inside the base, before the move, so risk is ro
 | Trail Minimum Target Distance (R) | 1.0 | This model's own target floor, separate from the pullback model's |
 | Require Trend Agreement | on | Only take flips agreeing with internal structure, and stand down in a range. Off makes this a standalone trend system |
 | Apply Minimum Score | **off** | See below |
+| Trade Follows the Trail Line | **on** | The open trade's stop ratchets along this model's own Chandelier line, from entry |
 | Show Trail Line | off | Draws the trail on the price chart |
 
 `Apply Minimum Score` is off by default on purpose. On the record so far the score is
@@ -266,6 +267,23 @@ maximum risk. A trail flip fires inside the base, before the move, so risk is ro
 import that problem into the one thing built to test it independently. The grade is still *recorded*
 for every trail trade, so its grade split is readable; it just does not filter entries unless you
 turn this on.
+
+### The trade follows the line that opened it
+
+`Trade Follows the Trail Line` is on by default, and the reason is worth stating because the
+alternative looked reasonable and was not. The two models share one exit engine, and that engine
+trails on **structural swing lows** — correct for the pullback model, wrong here. With it, a trail
+trade took its entry stop from the Chandelier and then ignored that line for the rest of its life,
+so the stop sat near entry, moving only when a swing low happened to confirm. A trade could be
+several R in profit with its own signal already flipped against it and nothing protecting the gain.
+
+With this on, the stop ratchets along the Chandelier line itself, from the moment the trade opens.
+Because a flip fires when price closes through that same line, the trade now exits at or before the
+flip rather than outliving it. The stop still only moves one way — the line resets lower once price
+closes through it, and a stop that has already ratcheted up must never follow it back down.
+
+Turning it **off** restores the old behaviour. That exists to reproduce an earlier record for
+comparison, not as a sensible way to run the model.
 
 ### The two models never compete
 
