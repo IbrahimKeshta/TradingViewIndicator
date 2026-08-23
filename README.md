@@ -208,6 +208,122 @@ target, the trade is recorded as **stopped** (a bar-by-bar script cannot know wh
 assumes the unfavourable one); and if a bar *gaps* through the stop, the exit is recorded at the open,
 not at the stop price.
 
+### Three exit modes worth testing
+
+All three are off by default, so nothing above changes until you turn one on. They exist because the
+default exit profile — wick-triggered stop, breakeven at TP1, hard close at TP3 — is tuned for clean
+instruments, and gives back most of a trend on a thin one.
+
+| | What it changes | When it helps |
+|---|---|---|
+| **Stop on Close Only** | The stop asks whether price *held* beyond it at the close, not whether a wick *reached* it. The exit is then recorded at that bar's close | Thin or wicky instruments — EGX dailies especially — where an intrabar touch hands back trades the close never confirmed |
+| **Runner (no exit at TP3)** | TP3 becomes a waypoint. The last third keeps running behind the trailing stop until the stop or a CHoCH takes it out | Trending instruments, where one trade needs to pay for several stopped ones. A trade that runs to TP3 and closes there is a capped winner by construction |
+| **Trail From Entry** | The structural trail runs from the open, and the jump to breakeven at TP1 is skipped | Strong continuations, where breakeven-at-TP1 hands the trade back at 0R on the first ordinary pullback |
+
+Read the trade-offs before switching them on. **Stop on Close Only** takes a worse fill by design —
+you are paying the distance between the stop and the close in exchange for surviving wicks. **Trail
+From Entry** means a trade can still lose a full R *after* reaching TP1, which the default cannot;
+the `BE+` mark on the panel tests the stop against entry rather than assuming, so it tells you
+whether the trade is actually protected. **Runner** holds the single trade slot open longer, and
+every setup that appears while it runs is skipped.
+
+Runner changes the scale-out accounting to match: a third leaves at TP1 and a third at TP2, and the
+final third is priced at wherever the trade actually closed rather than at TP3. Without that, a
+runner would book a gain at TP3 it never took and stay capped at TP3's R — the exact understatement
+the mode exists to remove.
+
+## The second entry model
+
+The pullback engine above has a structural blind spot, and it is not a tuning problem. Order blocks
+are created **by** a break and anchored behind it, and a zone is never tested against its own
+creation bar — so on an impulsive one-way move the zone is born below price and is never touched.
+The engine cannot participate in a trend that does not retrace, however the touch rule is relaxed.
+
+The `Trailing Stop Model` is a second entry model that references no zone at all. A Chandelier-style
+trail hangs a fixed ATR multiple below the running high (above the running low when short),
+ratcheting only in the trade's favour, and the side flips when price closes through it. **Entry is
+the flip bar** — a discrete event, so entries never become a continuous "we are in a trend" state
+that re-enters every bar.
+
+The point of the flip entry is *where* it lands. A break-of-structure entry buys the close of the
+breakout candle with the stop back at the base, which is the worst of both: maximum entry price and
+maximum risk. A trail flip fires inside the base, before the move, so risk is roughly
+`Trail ATR Multiple × ATR` rather than the full distance back down to the range low.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Enable Trailing Stop Model | **off** | Nothing about the pullback model changes while this is off |
+| Trail ATR Length | 14 | ATR used for the trail distance |
+| Trail ATR Multiple | 2.0 | How far the trail sits from the running extreme — **this is the model's risk per trade** |
+| Trail Extreme Lookback | 22 | Bars in the running high/low the trail hangs from |
+| Trail Minimum Target Distance (R) | 1.0 | This model's own target floor, separate from the pullback model's |
+| Trail Minimum Risk (× ATR) | 1.0 | Rejects a flip whose entry sits closer to its own trail than this — see below |
+| Require Trend Agreement | on | Only take flips agreeing with internal structure, and stand down in a range. Off makes this a standalone trend system |
+| Apply Minimum Score | **off** | See below |
+| Trade Follows the Trail Line | **on** | The open trade's stop ratchets along this model's own Chandelier line, from entry |
+| Show Trail Line | off | Draws the trail on the price chart |
+
+`Apply Minimum Score` is off by default on purpose. On the record so far the score is
+**anti-predictive** — the highest-graded setups lose the most — so gating a new model on it would
+import that problem into the one thing built to test it independently. The grade is still *recorded*
+for every trail trade, so its grade split is readable; it just does not filter entries unless you
+turn this on.
+
+### Why the minimum risk floor exists
+
+A flip can fire with the close sitting almost exactly on its own trail line, and nothing else in
+the model bounds that distance — it is simply wherever the flip bar closed relative to the line.
+That produces a stop **inside a single bar's range**, which an ordinary bar takes out for a
+near-full R regardless of whether the read was right.
+
+This was invisible while the trade's stop stayed frozen at its entry value: a tiny R just inflated
+the R multiple on every winner and made the model look far better than it was. Once the stop
+started tracking the line, the same trades began dying at close to a full stop each, and the
+model's record inverted. Both readings were measuring the missing floor, not the model.
+
+Set it against reality rather than guessing: `DBG Trail Flip Risk (ATR)` in the Data Window reports
+the entry-to-trail distance at every flip, in ATR. Read it across a handful of flips and the right
+floor is obvious. Setting it to 0 disables the floor and takes every flip.
+
+The live trade's `Entry` row now also carries its risk in ATR terms — `22.98 · 0.7x ATR`. Anything
+much under 1.0 is a stop the instrument's own noise will reach, on either model.
+
+### The trade follows the line that opened it
+
+`Trade Follows the Trail Line` is on by default, and the reason is worth stating because the
+alternative looked reasonable and was not. The two models share one exit engine, and that engine
+trails on **structural swing lows** — correct for the pullback model, wrong here. With it, a trail
+trade took its entry stop from the Chandelier and then ignored that line for the rest of its life,
+so the stop sat near entry, moving only when a swing low happened to confirm. A trade could be
+several R in profit with its own signal already flipped against it and nothing protecting the gain.
+
+With this on, the stop ratchets along the Chandelier line itself, from the moment the trade opens.
+Because a flip fires when price closes through that same line, the trade now exits at or before the
+flip rather than outliving it. The stop still only moves one way — the line resets lower once price
+closes through it, and a stop that has already ratcheted up must never follow it back down.
+
+Turning it **off** restores the old behaviour. That exists to reproduce an earlier record for
+comparison, not as a sensible way to run the model.
+
+### The two models never compete
+
+Each model holds **its own trade slot** and **its own performance record**. A trail trade cannot
+block a pullback trade or vice versa, and neither model's `n`, win rate, average R or grade split
+includes the other's trades. That separation is the entire reason for the design: averaged together,
+a model that works and one that does not read as a single mediocre number and neither can be judged.
+
+With the trail model enabled the panel grows a second `PERFORMANCE · TRAIL` block beside
+`PERFORMANCE · PULLBACK`, and a live trail trade gets its own `TRAIL TRADE` rows. Its exit labels
+carry a `· T ·` marker so the two models' records stay legible when you scroll back. When both
+models close on the same bar, the trail label is pushed clear of the pullback one rather than
+stacking on top of it — two labels at the same point hide one completely, which reads as a trade
+that never happened. With it
+disabled the panel is row-for-row what it was.
+
+**Before enabling it, write down the pullback model's current `n` and `Total R`.** With the model
+off those two numbers must not move. If they do, something shared was touched and it is a bug —
+that check is worth more than any reading you take with the model on.
+
 ### Reading the trade panel
 
 The panel carries a `Confirm` row showing the three confirmation points for the current bar —
@@ -215,9 +331,34 @@ The panel carries a `Confirm` row showing the three confirmation points for the 
 applies and is not met. `5/7` tells you a setup was adequate, but the row tells you *which* points
 carried it, which is the part you can act on.
 
+Under it, the `Gate` row says what is stopping a trade **right now**:
+
+```
+Gate    L · no zone touch · 5/6
+```
+
+Side, the first unmet requirement, and the live score over the points currently enabled. The reason
+is the one thing to act on, in the order the gate applies its checks:
+
+| | Meaning |
+|---|---|
+| `no trend` | The internal tier has no direction yet |
+| `in range` | Price is inside a major range — the engine stands down |
+| `no zone touch` | **The common one.** Price has not traded back into an FVG or order block. This is a hard requirement, not a scored point: no amount of score tuning produces a trade while it reads this |
+| `score short` | Everything structural is met and the score is below `Minimum Score` |
+| `bar not closed` | Everything is met and the bar is still live. On a daily chart this is what you see while waiting for the close |
+| `READY` | A trade fires on this bar |
+
+The score fraction is the reason this row exists. Everywhere else the score only renders inside a
+live trade's rows, so on a bar where nothing fires there is no surface that reflects a scoring input
+you just changed — switch `Score: Killzone` off and the panel would look identical, with the change
+real but invisible. The same numbers publish to the Data Window every bar as `DBG Live Score`,
+`DBG Live Points Enabled`, and one plot per hard-gate condition.
+
 The structure panel grows extra rows while a trade is live: the setup and its grade with the score
 fraction, entry, the current stop with its R distance, all three targets with R multiples and tick
-marks as they are reached, and the trade's open R.
+marks as they are reached, and the trade's open R. A runner is tagged `RUN` on the first of those
+rows, because a trade with no exit at TP3 is a different trade from one that closes there.
 
 When a trade closes it leaves a single label at the exit bar — `+2.5R · Target`, `−1.0R · Stopped`.
 Scroll back and those labels are your per-trade record; the `PERFORMANCE` rows are the same
@@ -301,7 +442,11 @@ claiming to quote a price or an R figure.
 | Stop Buffer (× ATR) | 0.25 | How far beyond the zone edge the stop sits |
 | Minimum Target Distance (R) | 1.0 | Structural levels closer than this are skipped |
 | Trailing Tier | Internal | Which tier's swings the stop trails behind |
+| Stop on Close Only | off | Exit only when a bar **closes** beyond the stop, instead of the moment its wick touches |
+| Runner (no exit at TP3) | off | Treat TP3 as a waypoint; the last third rides the trailing stop instead |
+| Trail From Entry | off | Trail structurally from the open, and skip the jump to breakeven at TP1 |
 | Long Trades Only | off | For markets where you can't short |
+| Show Gate Panel Row | on | One row naming what is currently stopping a trade, with the live score |
 | Show Performance Rows | on | Win rate, average R and a per-grade split over the loaded history. The counters run whether or not this is on |
 
 **Confirmations** — three more scored points, five indicators.
