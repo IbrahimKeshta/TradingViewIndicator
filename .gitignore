@@ -1,3 +1,8 @@
 .worktrees/
 
 .superpowers/
+
+# Claude Code workspace: machine-local settings and live worktree checkouts.
+# Nothing under here is shareable — settings.local.json is per-machine, and
+# worktrees/ holds nested checkouts whose .git files point at absolute paths.
+.claude/
