@@ -89,47 +89,47 @@ git commit -m "docs: record EGX backtest verification setup findings"
 - Consumes: the confirmed `EGX_DLY:ELEC` symbol string and the Profile toggle procedure from Global Constraints.
 - Produces: nothing consumed by later tasks — each symbol task is independent.
 
-- [ ] **Step 1: Load the symbol**
+- [x] **Step 1: Load the symbol**
 
 Set the chart symbol to `EGX_DLY:ELEC`.
 
-- [ ] **Step 2: 1M — Baseline**
+- [x] **Step 2: 1M — Baseline**
 
 Set the timeframe to 1M (monthly). Set inputs to the **Baseline** profile (Global Constraints). Wait for the chart to finish rendering (no loading spinner). Take a full-chart screenshot. Read the `PERFORMANCE`, `Confirm`, and `Gate` panel rows and check them against the spec's "What counts as a finding" list (internal consistency, structural sanity, EGX-specific risk areas, rendering bugs). If a drawing obstructs the view, stop and ask the user to hide it before continuing.
 
-- [ ] **Step 3: 1M — EGX-Tuned**
+- [x] **Step 3: 1M — EGX-Tuned**
 
 Set inputs to the **EGX-Tuned** profile (1M keeps `Stop on Close Only` off). Screenshot and read the same three panel rows.
 
-- [ ] **Step 4: 1W — Baseline**
+- [x] **Step 4: 1W — Baseline**
 
 Set timeframe to 1W. Set inputs to **Baseline**. Screenshot and read.
 
-- [ ] **Step 5: 1W — EGX-Tuned**
+- [x] **Step 5: 1W — EGX-Tuned**
 
 Set inputs to **EGX-Tuned** (still no close-only on weekly). Screenshot and read.
 
-- [ ] **Step 6: 1D — Baseline**
+- [x] **Step 6: 1D — Baseline**
 
 Set timeframe to 1D. Set inputs to **Baseline**. Screenshot and read.
 
-- [ ] **Step 7: 1D — EGX-Tuned-Close**
+- [x] **Step 7: 1D — EGX-Tuned-Close**
 
 Set inputs to the **EGX-Tuned-Close** profile (1D is one of the three close-only timeframes). Screenshot and read.
 
-- [ ] **Step 8: 4H — Baseline**
+- [x] **Step 8: 4H — Baseline**
 
 Set timeframe to 4H. Set inputs to **Baseline**. Screenshot and read.
 
-- [ ] **Step 9: 4H — EGX-Tuned-Close**
+- [x] **Step 9: 4H — EGX-Tuned-Close**
 
 Set inputs to **EGX-Tuned-Close**. Screenshot and read.
 
-- [ ] **Step 10: 1H — Baseline**
+- [x] **Step 10: 1H — Baseline**
 
 Set timeframe to 1H. Set inputs to **Baseline**. Screenshot and read.
 
-- [ ] **Step 11: 1H — EGX-Tuned-Close**
+- [x] **Step 11: 1H — EGX-Tuned-Close**
 
 Set inputs to **EGX-Tuned-Close**. Screenshot and read.
 
@@ -139,7 +139,42 @@ Under `### Findings — Task 1` below, write one entry per anomaly found across 
 
 ### Findings — Task 1
 
-*(filled in during execution)*
+Raw numbers per view (n = closed-trade count, WR = win rate, Avg R):
+
+| TF | Baseline | EGX-Tuned(-Close) |
+|---|---|---|
+| 1M | n=7, 71% WR, +0.88R | n=2, 50% WR, -0.26R |
+| 1W | n=39, 33% WR, +0.26R | n=25, 44% WR, +1.17R |
+| 1D | n=97, 35% WR, +0.08R | n=61, 54% WR, +0.56R |
+| 4H | n=130, 35% WR, -0.02R | n=70, 50% WR, +0.32R |
+| 1H | n=92, 41% WR, +0.06R | n=51, 53% WR, +0.59R |
+
+- **[ENHANCEMENT]** EGX-Tuned(-Close) beats Baseline on every timeframe from 1W down to 1H — win
+  rate and Avg R both improve, consistently, not just on one lucky view. The 1M read (n=2) is too
+  small to trust, but 1W/1D/4H/1H all agree. This is the strongest, most reproducible signal from
+  this symbol: the README's own EGX-tuning advice (Long Only, Killzone off, Stop-on-Close on)
+  visibly earns its keep here, not just in theory.
+- **[BUG-candidate]** The `Last event` break-strength multiplier in the STRUCTURE panel is
+  sometimes **negative** — e.g. `CHoCH · INTERNAL · -0.8x` on ELEC 1D (both Baseline and
+  EGX-Tuned-Close showed this identically) — while other bars show positive values (`BOS · INTERNAL
+  · 1.6x` on 4H, `1.8x` on 1M). The README describes this figure as "the breaking candle's body
+  divided by ATR," which reads as a magnitude, not a signed value. Working hypothesis: the sign
+  tracks break *direction* (down-breaks read negative) rather than being a genuine bug — but that's
+  a guess, not a source read. Flagging for a source-code check; not fixed here (no code changes in
+  scope for this plan).
+- **[OBSERVATION]** Grade split is repeatedly inverted or degenerate on ELEC: A-grade trades often
+  average *negative* R while B/C average positive (1W Baseline: A -0.33R (2) vs C +0.66R (22); 1D
+  Baseline: B -0.14R (20) vs C +0.14R (77); 1H Baseline: A -0.31R (16) vs C +0.14R (76)). A-grade is
+  frequently empty outright. This reproduces the README's own documented "score is anti-predictive"
+  finding — previously called out for the trailing-stop model specifically — on the **pullback**
+  model too, on this symbol, across multiple timeframes.
+- **[OBSERVATION]** `Long Trades Only` collapses the 1M sample from n=7 to n=2 — ELEC's monthly
+  trend is structurally down, so there just aren't many long setups at that granularity. Not a bug;
+  a sample-size caveat worth remembering when reading any 1M EGX-Tuned view.
+- **Clean:** no label overlap, panel clipping, or other rendering bugs across all 10 views. The
+  STRUCTURE/TRADE/PERFORMANCE panel (fixed at Top Right) sometimes visually overlaps the price-scale
+  watermark text and the long indicator-legend list at the top-left, but stayed legible throughout —
+  not logged as a bug, just a pre-existing cosmetic density issue shared by every instrument.
 
 ---
 
