@@ -433,15 +433,15 @@ Same format as Task 1 Step 12. Ask for go-ahead, then commit.
 - Consumes: every `### Findings — Task N` section from Tasks 0–5.
 - Produces: a ranked backlog the user can turn into new dated spec/plan pairs, following this repo's existing pattern (see `docs/superpowers/plans/` and `docs/superpowers/specs/` for the convention used by every prior feature).
 
-- [ ] **Step 1: Collect all findings**
+- [x] **Step 1: Collect all findings**
 
 Read back every `### Findings — Task N` section written during Tasks 0–5. List every `[BUG]` and `[ENHANCEMENT]` entry in one place.
 
-- [ ] **Step 2: Deduplicate and rank**
+- [x] **Step 2: Deduplicate and rank**
 
 Findings that recur across multiple symbols or timeframes are the strongest signal — note the recurrence count next to each. Rank bugs above enhancements; within each group, rank by how many symbol/timeframe views it showed up on.
 
-- [ ] **Step 3: Write the backlog section**
+- [x] **Step 3: Write the backlog section**
 
 Append a `## Enhancement Backlog` section at the end of this document: a table or ordered list, each entry naming the issue, how many views it appeared on, and whether it's a `[BUG]` (contradicts the README) or `[ENHANCEMENT]` (works as designed, EGX suggests improving it).
 
@@ -456,4 +456,67 @@ git commit -m "docs: close out EGX backtest verification with ranked backlog"
 
 ## Enhancement Backlog
 
-*(filled in during Task 6)*
+Ranked highest-impact first. Views = how many of the 50 symbol/timeframe/profile combinations
+directly showed the issue; "universal" means it showed up essentially everywhere the relevant
+condition applied.
+
+### 1. [BUG] AMOC 1H EGX-Tuned-Close: anomalous -2.74R average, -3.84R B-grade average (1 view, high severity)
+Every other reading across all 50 views sits between -0.6R and +1.5R, because a properly stopped
+trade can't lose much more than 1R by construction. A 40-trade bucket averaging -3.84R means its
+sum is around -154R — not explainable by ordinary stop-outs. Two live hypotheses: (a) one or a few
+catastrophic gap-through-stop trades on this thin, volatile stock, recorded at the open per the
+README's own documented gap rule, or (b) a real bug in how `Stop on Close Only` computes exit
+distance on this timeframe. **Not root-caused in this pass.** Next step: scroll the AMOC 1H chart's
+trade history for the specific losing label(s), or read `blendedResultR` / the gap-handling branch
+directly against a few of the largest 4H/1D losers for comparison.
+
+### 2. [BUG] PERFORMANCE panel background box doesn't always fit every row (confirmed on 2 views, likely more)
+On ABUK 1D — both Baseline (n=122) and EGX-Tuned-Close (n=90) — one grade row rendered **outside**
+the panel's grey background, overlapping the price chart and a structure line, instead of sitting
+inside the box with the others. Not explained by trade count alone (4H and 1H views with similar or
+larger counts rendered fine), so it's likely an edge case in the row-count-to-panel-height
+calculation for this specific symbol. Confirmed with Object Tree closed, so not a viewing artifact.
+
+### 3. [FINDING] EGX-Tuned-Close is not a safe default — verify per symbol, not blanket-apply (2 of 5 symbols affected on 3+ timeframes each)
+On ELEC and ABUK, EGX-Tuned(-Close) improved both win rate and Avg R on **every** timeframe tested —
+strong, clean support for the README's own EGX-tuning advice. On ORWE and MASR, win rate rose on
+every timeframe but Avg R got **worse** on 1D/1H (ORWE) and 1M/4H/1H (MASR) — `Stop on Close Only`
+survived more wicks but at fills bad enough to erase the gain, exactly the trade-off the input's own
+tooltip warns about. AMOC mostly improved except for finding #1. **Recommendation:** don't
+recommend EGX-Tuned-Close as a universal EGX default in the README; frame it as the profile to test
+first, and note that `Stop on Close Only` specifically should be verified per instrument.
+
+### 4. [OBSERVATION] The confirmation score's predictive value varies by symbol, not just by model (5 of 5 symbols show a different pattern)
+ELEC shows the score reading backwards on almost every timeframe (A-grade trades lose, C-grade
+trades win) — the same "anti-predictive score" pattern the README already documents for the
+trailing-stop model, now reproduced on the **pullback** model too. ABUK shows the opposite: A-grade
+is often the best-performing bucket. MASR 1W Baseline is the session's only fully clean reading —
+A, B, and C all positive. **Recommendation:** if the score's predictiveness gets investigated
+further, treat it as a per-symbol question, not a single verdict for the whole engine.
+
+### 5. [BUG-candidate] `Last event` break-strength multiplier shows negative, zero, and positive values with no obvious pattern (seen on 3 symbols)
+ELEC 1D showed `CHoCH · INTERNAL · -0.8x` (negative) on both profiles tested; ELEC 4H and 1M showed
+positive values (`1.6x`, `1.8x`); ORWE showed `0.0x` (4H) and `0.1x` (1H, both profiles). The README
+describes this figure as "the breaking candle's body divided by ATR," which reads as a magnitude.
+Working hypothesis — not confirmed against source — is that the sign tracks break *direction*
+(down-breaks read negative) rather than being a bug. **Recommendation:** a source read of the break-
+strength calculation, and if the sign is intentional, a one-line README clarification so it doesn't
+read as broken.
+
+### 6. [MINOR] The `n=` panel header collides with the live ticker price-flag box (near-universal — every symbol tested)
+On every symbol at the panel's default `Top Right` position, the live price/symbol flag TradingView
+renders on the price scale sits directly over the `PERFORMANCE` panel's `n=` row, requiring the
+value to be inferred from the win/loss counts instead of read directly. Purely cosmetic — never
+blocked reading the rest of the panel — but worth a small top margin or an alternate default
+`Panel Position` so the two don't compete for the same pixels.
+
+### 7. [OBSERVATION] 1M readings are frequently too small a sample to trust on their own (4 of 5 symbols)
+1M trade counts ranged from n=5 to n=11 across the session — enough for a directional read but not
+enough to weigh heavily against the 1W/1D/4H/1H readings for the same symbol. Not a bug; a reminder
+for whoever reads this backlog next.
+
+---
+
+**Summary for next steps:** items 1 and 2 are genuine bugs worth their own dated spec/plan pair
+under this repo's existing convention. Item 3 is a documentation/recommendation change, not a code
+change. Items 4–7 are context to carry into any future tuning work, not action items on their own.
