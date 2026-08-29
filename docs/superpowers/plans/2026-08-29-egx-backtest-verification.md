@@ -317,17 +317,17 @@ Same format as Task 1 Step 12. Ask for go-ahead, then commit.
 - Consumes: the confirmed `EGX_DLY:AMOC` symbol string and the Profile toggle procedure from Global Constraints.
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Load the symbol.** Set the chart symbol to `EGX_DLY:AMOC`.
-- [ ] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 3: 1M — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
-- [ ] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 5: 1W — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
-- [ ] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 7: 1D — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
-- [ ] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 9: 4H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
-- [ ] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 11: 1H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
+- [x] **Step 1: Load the symbol.** Set the chart symbol to `EGX_DLY:AMOC`.
+- [x] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 3: 1M — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
+- [x] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 5: 1W — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
+- [x] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 7: 1D — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
+- [x] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 9: 4H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
+- [x] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 11: 1H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
 
 If a drawing obstructs any view, stop and ask the user to hide it before continuing.
 
@@ -337,7 +337,34 @@ Same format as Task 1 Step 12. Ask for go-ahead, then commit.
 
 ### Findings — Task 4
 
-*(filled in during execution)*
+| TF | Baseline | EGX-Tuned(-Close) |
+|---|---|---|
+| 1M | n=9, 33% WR, -0.29R | n=6, 50% WR, +0.07R |
+| 1W | n=31, 26% WR, +0.48R | n=15, 33% WR, +0.04R |
+| 1D | n=92, 37% WR, +1.02R | n=52, 40% WR, +0.87R |
+| 4H | n=139, 35% WR, +0.00R | n=65, 42% WR, +0.14R |
+| 1H | n=93, 29% WR, -0.26R | n=53, 38% WR, **-2.74R** |
+
+- **[BUG — high severity, needs source investigation]** AMOC 1H EGX-Tuned-Close: Avg R is **-2.74R**
+  and the B-grade bucket alone averages **-3.84R across 40 trades**. Every other reading this entire
+  session — 49 other views across 5 symbols — sits in the -0.6R to +1.5R band, because a properly
+  stopped trade should never lose much more than 1R by construction. A B-grade average of -3.84R
+  over 40 trades means the bucket's *sum* is around -154R, which is not explainable by ordinary
+  stop-outs — either one or a few catastrophic outlier trades are dragging the average (most likely:
+  a large weekend/session gap on this thin, volatile stock, recorded at the open per the README's
+  own documented gap-handling rule) or there's a real bug in how `Stop on Close Only` computes the
+  exit distance on this specific timeframe. **Not resolved in this pass** — this needs someone to
+  scroll the 1H AMOC chart's trade history for the specific losing label(s) driving this number, or
+  read the `blendedResultR` / gap-handling code directly. Flagging as the single most important item
+  for the backlog.
+- **[ENHANCEMENT]** Outside that one anomaly, AMOC follows the same pattern as ELEC/ABUK: EGX-Tuned
+  raises win rate on every timeframe. Avg R rises on 1M/4H, dips slightly but stays strong on 1D
+  (+1.02R → +0.87R), dips on 1W (+0.48R → +0.04R), and craters on 1H for the reason above.
+- **[OBSERVATION]** AMOC 1D Baseline is the best single reading of the entire session:
+  n=92, +1.02R Avg R, +93.75R Total R. Worth keeping in mind when writing up the backlog summary —
+  the strategy clearly *can* work well on EGX under the right symbol/timeframe, which argues against
+  any conclusion that the engine is broken generally.
+- **Clean rendering:** no panel clipping or label overlap observed on AMOC.
 
 ---
 
