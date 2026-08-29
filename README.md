@@ -55,7 +55,7 @@ names something simple:
 | **CHoCH** | Change of Character. Price closed past a swing **against** the trend — this is what flips the trend |
 | **Order block** | The last opposite-coloured candle before a structural break. Often revisited before price continues |
 | **FVG** | Fair Value Gap: a three-bar pattern where the middle bar moved so fast it left a price gap. Price frequently returns to fill it |
-| **Killzone** | A time window when a major session is active (London, New York). Volume concentrates here |
+| **Killzone** | A time window when a major session is active (London, New York, and optionally Asia). Volume concentrates here |
 
 ## How the structure engine works
 
@@ -441,6 +441,7 @@ claiming to quote a price or an R figure.
 |---|---|---|
 | Minimum Score | 5 | Points needed, out of however many are enabled below |
 | Score: Killzone | on | **Turn off on single-session markets like EGX** |
+| Show Asia Killzone | off | On for 24-hour markets like crypto — off by default so it doesn't change existing saved charts |
 | Score: Moving Average | on | Whether price is on the trade's side of the MA |
 | Score: Major Trend Agreement | on | Whether the major tier agrees with the internal one |
 | Score: Break Strength | on | Whether the break that set up the trade was a big candle |

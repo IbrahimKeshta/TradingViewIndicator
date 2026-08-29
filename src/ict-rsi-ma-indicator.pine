@@ -44,6 +44,8 @@ showLondonKZ    = input.bool(true, "Show London Killzone", group = "Killzones")
 londonSession   = input.session("0200-0500", "London Killzone Time", group = "Killzones")
 showNewYorkKZ   = input.bool(true, "Show New York Killzone", group = "Killzones")
 newYorkSession  = input.session("0700-1000", "New York Killzone Time", group = "Killzones")
+showAsiaKZ      = input.bool(false, "Show Asia Killzone", group = "Killzones", tooltip = "Off by default — turning this on changes what Score: Killzone means on any existing saved chart, including single-session markets like EGX where a third always-on window would make the point easier to earn without adding signal. Turn on for 24-hour markets such as crypto, where Asian-session volume is not a rounding error.")
+asiaSession     = input.session("2000-0000", "Asia Killzone Time", group = "Killzones")
 
 // ---------------- Alerts / Display ----------------
 showSignalMarkers  = input.bool(true, "Show Signal Markers", group = "Alerts / Display")
@@ -502,10 +504,12 @@ if barstate.isconfirmed and showOB and (majorState.bearBreak or (showInternalOb 
 // ============================================================
 londonActive  = showLondonKZ and not na(time(timeframe.period, londonSession, sessionTimezone))
 newYorkActive = showNewYorkKZ and not na(time(timeframe.period, newYorkSession, sessionTimezone))
-killzoneActive = londonActive or newYorkActive
+asiaActive    = showAsiaKZ and not na(time(timeframe.period, asiaSession, sessionTimezone))
+killzoneActive = londonActive or newYorkActive or asiaActive
 
 bgcolor(londonActive ? color.new(color.blue, 90) : na, title = "London Killzone")
 bgcolor(newYorkActive ? color.new(color.orange, 90) : na, title = "New York Killzone")
+bgcolor(asiaActive ? color.new(color.purple, 90) : na, title = "Asia Killzone")
 
 // ============================================================
 // CONFLUENCE SIGNALS
@@ -723,7 +727,7 @@ plot(trailFlipLong ? (close - trailLongStop) / trailAtr : trailFlipShort ? (trai
 
 // The killzone point disables itself when neither session is drawn: on a single-session
 // market a permanently-false point would make minScore unreachable.
-killzonePointOn = scoreKillzone and (showLondonKZ or showNewYorkKZ)
+killzonePointOn = scoreKillzone and (showLondonKZ or showNewYorkKZ or showAsiaKZ)
 
 // One pass counts the enabled points and the achieved points together. Declaring a point in
 // only one of two parallel lists was the failure this prevents. Seven points now: the
