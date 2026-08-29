@@ -187,20 +187,20 @@ Raw numbers per view (n = closed-trade count, WR = win rate, Avg R):
 - Consumes: the confirmed `EGX_DLY:ABUK` symbol string and the Profile toggle procedure from Global Constraints.
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Load the symbol**
+- [x] **Step 1: Load the symbol**
 
 Set the chart symbol to `EGX_DLY:ABUK`.
 
-- [ ] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 3: 1M — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
-- [ ] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 5: 1W — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
-- [ ] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 7: 1D — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
-- [ ] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 9: 4H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
-- [ ] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 11: 1H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
+- [x] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 3: 1M — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
+- [x] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 5: 1W — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
+- [x] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 7: 1D — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
+- [x] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 9: 4H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
+- [x] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 11: 1H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
 
 If a drawing obstructs any view, stop and ask the user to hide it before continuing.
 
@@ -210,7 +210,40 @@ Same format as Task 1 Step 12, tagging each entry `[BUG]` or `[ENHANCEMENT]`. As
 
 ### Findings — Task 2
 
-*(filled in during execution)*
+| TF | Baseline | EGX-Tuned(-Close) |
+|---|---|---|
+| 1M | n=10, 70% WR, +0.95R | n=5, 100% WR, +1.52R |
+| 1W | n=46, 46% WR, +0.32R | n=29, 45% WR, +0.27R |
+| 1D | n=122, 37% WR, +0.56R | n=90, 48% WR, +0.66R |
+| 4H | n=148, 39% WR, -0.03R | n=78, 53% WR, +0.05R |
+| 1H | n=101, 43% WR, +0.50R | n=57, 47% WR, +0.54R |
+
+- **[ENHANCEMENT]** Same pattern as ELEC: EGX-Tuned(-Close) improves Avg R on every single
+  timeframe, and win rate on every timeframe except 1W (46%→45%, a wash). Two symbols in a row now
+  back the README's EGX-tuning advice with real numbers, not just reasoning.
+- **[BUG — confirmed, reproducible]** The `PERFORMANCE` panel's background box does not always
+  expand to contain every row. On ABUK 1D (both Baseline, n=122, and EGX-Tuned-Close, n=90) one
+  grade row rendered **outside** the grey panel background, overlapping the price chart and a
+  structure line, instead of inside the box with the others. Seen on 4H and 1H at similar or larger
+  trade counts without the same clipping, so it isn't simply "too many trades" — likely an edge case
+  in how the panel's row-count-to-height calculation handles this specific symbol/interval
+  combination. This is a genuine rendering bug, not a viewing artifact (Object Tree dock was closed
+  for all these screenshots).
+- **[OBSERVATION]** Unlike ELEC, ABUK's grade split does **not** consistently invert — A-grade is
+  sometimes the best-performing grade (1M: A implied among 5W/0L; 1D Baseline A grade shows highest
+  count) and sometimes the worst (4H, 1H, 1W EGX-Tuned: A grade negative while B/C positive). The
+  "score is anti-predictive" finding from ELEC does not generalize cleanly to this symbol — worth
+  keeping as a per-symbol caveat rather than a blanket rule when writing this up for the backlog.
+- **[OBSERVATION]** ABUK 1W Baseline had a live trade signal fire mid-session (`Gate: L · READY ·
+  5/7`), confirmed moments later as an open `LONG · C · 5/7` position at Entry 75.76. Confirms the
+  Gate row's `READY` state and the live trade panel populate correctly in sync — no lag or stale
+  state observed between the two.
+- **[OBSERVATION]** The `n=` header row and the live ticker price flag (e.g. "ABUK 75.76") compete
+  for the same screen position on every view where the panel sits at its default Top Right — this is
+  the same recurring cosmetic collision noted on ELEC, now confirmed on a second symbol. Worth a
+  backlog line: either the panel needs a top margin under the price scale's flag, or `Panel Position`
+  should default somewhere the flag doesn't reach.
+- **Clean otherwise:** no other label overlap or obstruction across the 10 views.
 
 ---
 
