@@ -491,7 +491,9 @@ behind them.
 side *and* per tier). `Include Internal-Tier Order Blocks` is on by default; turning it off leaves
 only order blocks born from major structural breaks — far fewer, each more significant.
 
-**Killzones** — session windows and their timezone. **RSI / Moving Average** — the periods behind the
+**Killzones** — session windows and their timezone, which defaults to `America/New_York` (the
+convention the London/New York hour ranges are quoted in — changing the timezone re-interprets the
+same hours against a different clock rather than shifting the sessions). **RSI / Moving Average** — the periods behind the
 RSI readout and the MA plot; RSI is also a member of the Momentum vote in **Confirmations**, above.
 **Alerts / Display** — signal markers, the RSI readout, and how close price must get to a zone to
 count as a watch-zone.

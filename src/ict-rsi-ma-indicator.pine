@@ -39,7 +39,7 @@ obSearchBars   = input.int(50, "Order Block Backward Search (bars)", minval = 5,
 showInternalOb = input.bool(true, "Include Internal-Tier Order Blocks", group = "Order Blocks", tooltip = "Internal-tier breaks are what produced every order block before the two-tier structure engine existed, so this defaults on. Turn it off to keep only order blocks born from major structural breaks.")
 
 // ---------------- Killzones ----------------
-sessionTimezone = input.string("Africa/Cairo", "Session Timezone", group = "Killzones")
+sessionTimezone = input.string("America/New_York", "Session Timezone", group = "Killzones", tooltip = "London and New York killzone hours below are conventionally quoted in New York time. Evaluating them against America/New_York lets Pine's own DST-aware session matching track the real session opens automatically; changing this to another timezone re-interprets the same hour numbers against a different clock, which will not line up with the actual sessions unless you also recalculate the hours.")
 showLondonKZ    = input.bool(true, "Show London Killzone", group = "Killzones")
 londonSession   = input.session("0200-0500", "London Killzone Time", group = "Killzones")
 showNewYorkKZ   = input.bool(true, "Show New York Killzone", group = "Killzones")
