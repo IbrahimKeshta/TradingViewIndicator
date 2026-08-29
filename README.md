@@ -193,6 +193,12 @@ Set `Minimum Score` equal to the number of enabled points to get the strictest p
 | **1R** | Entry minus stop. Every R figure on the chart uses the *initial* stop, never the trailed one |
 | **Targets** | The three nearest unbroken structure levels ahead, plus any EQH/EQL liquidity pool, each at least 1R away. If structure can't supply three, the rest fill at 1R/2R/3R |
 
+A zone can sit close enough to price that the buffered stop lands a fraction of an ATR away. An
+ordinary bar then takes that stop out for many multiples of R, because the denominator was tiny, not
+because the setup was bad — the same failure mode the trailing model's own risk floor exists to
+prevent (see below). `Minimum Risk (× ATR)` rejects a zone touch below that floor before it opens a
+trade; set it to 0 to take every touch, which is what produced the earlier record.
+
 ### How the stop moves
 
 1. **TP1 hit** → stop moves to entry. The trade can no longer lose.
@@ -440,6 +446,7 @@ claiming to quote a price or an R figure.
 | Score: Break Strength | on | Whether the break that set up the trade was a big candle |
 | Strong Break (× ATR) | 1.0 | How big that candle's body must be to earn the point |
 | Stop Buffer (× ATR) | 0.25 | How far beyond the zone edge the stop sits |
+| Minimum Risk (× ATR) | 1.0 | Rejects a zone touch whose stop lands closer than this — same floor and reason as Trail Minimum Risk |
 | Minimum Target Distance (R) | 1.0 | Structural levels closer than this are skipped |
 | Trailing Tier | Internal | Which tier's swings the stop trails behind |
 | Stop on Close Only | off | Exit only when a bar **closes** beyond the stop, instead of the moment its wick touches |
@@ -475,7 +482,10 @@ this script draws on the price chart, and an oscillator has no pane to live in h
 **Structure Display** — what gets drawn. Internal rays and internal break lines are **off** by
 default; on a fast timeframe they are near-continuous. Leave internal break lines off if you want a
 long trade history to survive — their labels share the chart's 500-label budget with your result
-labels.
+labels. `Panel Position` defaults to **Bottom Right**, not Top Right: TradingView's own expanded
+indicator-legend bar (the input list shown when the legend is hovered or pinned open) sits near the
+top of the chart and renders on top of the panel there, cutting through rows instead of sitting
+behind them.
 
 **Fair Value Gaps / Order Blocks** — `Max Tracked` caps how many are kept per side (order blocks: per
 side *and* per tier). `Include Internal-Tier Order Blocks` is on by default; turning it off leaves

@@ -58,7 +58,7 @@ showBreakLines     = input.bool(true, "Show Break Lines", group = "Structure Dis
 showInternalRays   = input.bool(false, "Show Internal Rays", group = "Structure Display", tooltip = "Entry-level detail. Off by default because on a fast timeframe these are near-continuous.")
 showInternalBreaks = input.bool(false, "Show Internal Break Lines", group = "Structure Display", tooltip = "Off by default. On a fast timeframe internal breaks are near-continuous, and their labels share the chart's 500-label budget with the trade result history — leave this off if you want a long track record to survive.")
 showStructurePanel = input.bool(true, "Show Structure Panel", group = "Structure Display")
-panelPosInput      = input.string("Top Right", "Panel Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Structure Display")
+panelPosInput      = input.string("Bottom Right", "Panel Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Structure Display", tooltip = "Where the STRUCTURE/PERFORMANCE panel renders. Defaults to Bottom Right rather than Top Right: TradingView's own expanded indicator-legend bar (the row of input values shown when the legend is hovered or pinned open) sits near the top of the chart and renders on top of whatever is there, cutting through panel rows instead of sitting behind them. The live price/symbol flag on the price scale can still cross whichever corner is chosen, since it tracks the current price rather than a fixed position.")
 majorTagColor      = input.color(color.orange, "Major Tag", group = "Structure Display")
 liquidityTagColor  = input.color(color.yellow, "Liquidity Tag (EQH/EQL)", group = "Structure Display")
 bosColor           = input.color(color.lime, "BOS", group = "Structure Display")
@@ -73,6 +73,7 @@ scoreMajorAgree    = input.bool(true, "Score: Major Trend Agreement", group = "T
 scoreBreakStrength = input.bool(true, "Score: Break Strength", group = "Trade Engine")
 strongBreakMult    = input.float(1.0, "Strong Break (x ATR)", minval = 0.1, step = 0.1, group = "Trade Engine", tooltip = "The breaking candle's body must exceed this multiple of ATR to earn the break-strength point.")
 stopBufferMult     = input.float(0.25, "Stop Buffer (x ATR)", minval = 0.0, step = 0.05, group = "Trade Engine", tooltip = "How far beyond the entry zone's far edge the stop sits, so an ordinary wick into the zone does not clip it. Also used by the trailing stop.")
+minRiskAtr         = input.float(1.0, "Minimum Risk (x ATR)", minval = 0.0, step = 0.1, group = "Trade Engine", tooltip = "Reject a zone-touch setup whose entry-to-stop distance is below this multiple of the Structure ATR — the same floor the trailing model already applies to its own flips (Trail Minimum Risk), and for the same reason: a stop that thin sits inside a single bar's ordinary range, so the R multiple it produces is inflated on winners and enormous on losers, not a real read of the setup.\n\nSet to 0 to disable the floor and take every zone touch, which is what produced the earlier record.")
 minTargetR         = input.float(1.0, "Minimum Target Distance (R)", minval = 0.1, step = 0.1, group = "Trade Engine", tooltip = "Structural levels closer than this are skipped. A target 0.3R away is a winner on paper and not worth the spread.")
 trailTierInput     = input.string("Internal", "Trailing Tier", options = ["Internal", "Major"], group = "Trade Engine", tooltip = "Which tier's swings the stop trails behind once TP1 is hit. Internal trails tightly; Major gives the trade room.")
 stopOnCloseOnly    = input.bool(false, "Stop on Close Only", group = "Trade Engine", tooltip = "Exit only when a bar CLOSES beyond the stop, instead of the moment its wick touches. On thin or wicky instruments — EGX dailies especially — an intrabar touch hands back trades that the close never confirmed.\n\nThe exit is then recorded at that bar's close, not at the stop price, because the close is where the decision was actually made. That is a worse fill than the stop level and it is the honest one: the trade is giving up the extra distance in exchange for surviving wicks.")
@@ -1230,6 +1231,18 @@ plot(trTrades > 0 ? trSumR / trTrades : 0.0, "DBG Trail Avg R", display = displa
 // ---- open: pullback model ----
 // Unchanged, including passing minTargetR explicitly now that selectTargets takes the floor as a
 // parameter. This slot is never touched by the trailing model, so the two never compete for it.
+//
+// Same floor the trailing model applies to its own flips (trailRiskOk below), and for the same
+// reason: a zone can sit close enough to price that the buffered stop lands a fraction of an ATR
+// away, and an ordinary bar then takes it out for many multiples of R because the denominator was
+// tiny, not because the setup was bad.
+pullbackRiskOk(float risk) =>
+    ok = false
+    if risk > 0
+        if not na(structAtr)
+            ok := risk >= minRiskAtr * structAtr
+    ok
+
 canOpen = na(activeTrade)
 if canOpen and longSetup
     zTop = bullTouch.top
@@ -1237,20 +1250,22 @@ if canOpen and longSetup
     st   = zBot - stopBufferMult * structAtr
     if close > st
         risk = close - st
-        tg   = selectTargets(true, close, risk, minTargetR)
-        activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false)
-        tradeOpened := true
-        openedSide  := "long"
+        if pullbackRiskOk(risk)
+            tg   = selectTargets(true, close, risk, minTargetR)
+            activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false)
+            tradeOpened := true
+            openedSide  := "long"
 if na(activeTrade) and shortSetup and not longOnly
     zTop = bearTouch.top
     zBot = bearTouch.bottom
     st   = zTop + stopBufferMult * structAtr
     if close < st
         risk = st - close
-        tg   = selectTargets(false, close, risk, minTargetR)
-        activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false)
-        tradeOpened := true
-        openedSide  := "short"
+        if pullbackRiskOk(risk)
+            tg   = selectTargets(false, close, risk, minTargetR)
+            activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false)
+            tradeOpened := true
+            openedSide  := "short"
 
 // ---- open: trailing stop model ----
 // Reads scoreLong/scoreShort, the RAW tally, never bullScore/bearScore — those are zeroed unless
