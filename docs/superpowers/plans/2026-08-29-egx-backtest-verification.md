@@ -377,17 +377,17 @@ Same format as Task 1 Step 12. Ask for go-ahead, then commit.
 - Consumes: the confirmed `EGX_DLY:MASR` symbol string and the Profile toggle procedure from Global Constraints.
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Load the symbol.** Set the chart symbol to `EGX_DLY:MASR`.
-- [ ] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 3: 1M — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
-- [ ] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 5: 1W — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
-- [ ] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 7: 1D — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
-- [ ] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 9: 4H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
-- [ ] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 11: 1H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
+- [x] **Step 1: Load the symbol.** Set the chart symbol to `EGX_DLY:MASR`.
+- [x] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 3: 1M — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
+- [x] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 5: 1W — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
+- [x] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 7: 1D — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
+- [x] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 9: 4H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
+- [x] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 11: 1H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
 
 If a drawing obstructs any view, stop and ask the user to hide it before continuing.
 
@@ -397,7 +397,30 @@ Same format as Task 1 Step 12. Ask for go-ahead, then commit.
 
 ### Findings — Task 5
 
-*(filled in during execution)*
+| TF | Baseline | EGX-Tuned(-Close) |
+|---|---|---|
+| 1M | n=11, 45% WR, +0.13R | n=5, 40% WR, **-0.47R** |
+| 1W | n=37, 46% WR, +0.57R | n=21, 57% WR, +1.14R |
+| 1D | n=105, 30% WR, +0.32R | n=71, 41% WR, +0.57R |
+| 4H | n=141, 33% WR, -0.15R | n=73, 38% WR, **-0.42R** |
+| 1H | n=97, 45% WR, +0.21R | n=70, 47% WR, **+0.08R** |
+
+- **[FINDING — third symbol where EGX-Tuned is not a uniform win]** MASR only improves on 1W and 1D;
+  it gets worse on 1M, 4H, and 1H — in every one of those three cases win rate still rises, but Avg R
+  falls. Combined with ORWE (Task 3), that's now **two of five symbols** where the EGX-tuned profile
+  is a net negative on more than half their timeframes, against **two of five** (ELEC, ABUK) where it
+  helps everywhere, and one (AMOC) that mostly helps outside its single anomalous reading. The
+  session-wide conclusion is clean: EGX-Tuned is the better *starting point* to test from, not a
+  blanket setting to assume — exactly the "verify per symbol" framing from the ORWE findings, now
+  confirmed on a second, unrelated symbol.
+- **[OBSERVATION]** MASR 1W Baseline is the only view in the entire session where **all three
+  grades (A/B/C) came back positive** — no losing bucket at all (A +1.10R (4), B +0.16R (12), C
+  +0.70R (21)). Worth noting as the cleanest possible reading in favor of the score's predictive
+  value, right alongside the ELEC/ORWE cases where the score reads backwards. The grade's
+  usefulness genuinely varies by symbol and timeframe, not just by model.
+- **Clean rendering:** no panel clipping or label overlap on MASR. One tooltip (a hovering date
+  label) transiently blocked a click during the session — resolved by pressing Escape before
+  retrying, not a chart bug.
 
 ---
 
