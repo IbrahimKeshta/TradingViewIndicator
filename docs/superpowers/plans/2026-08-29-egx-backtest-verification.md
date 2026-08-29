@@ -256,17 +256,17 @@ Same format as Task 1 Step 12, tagging each entry `[BUG]` or `[ENHANCEMENT]`. As
 - Consumes: the confirmed `EGX_DLY:ORWE` symbol string and the Profile toggle procedure from Global Constraints.
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Load the symbol.** Set the chart symbol to `EGX_DLY:ORWE`.
-- [ ] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 3: 1M — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
-- [ ] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 5: 1W — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
-- [ ] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 7: 1D — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
-- [ ] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 9: 4H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
-- [ ] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 11: 1H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
+- [x] **Step 1: Load the symbol.** Set the chart symbol to `EGX_DLY:ORWE`.
+- [x] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 3: 1M — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
+- [x] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 5: 1W — EGX-Tuned.** Set inputs to **EGX-Tuned**, screenshot, read.
+- [x] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 7: 1D — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
+- [x] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 9: 4H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
+- [x] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 11: 1H — EGX-Tuned-Close.** Set inputs to **EGX-Tuned-Close**, screenshot, read.
 
 If a drawing obstructs any view, stop and ask the user to hide it before continuing.
 
@@ -276,7 +276,35 @@ Same format as Task 1 Step 12. Ask for go-ahead, then commit.
 
 ### Findings — Task 3
 
-*(filled in during execution)*
+| TF | Baseline | EGX-Tuned(-Close) |
+|---|---|---|
+| 1M | n=6, 83% WR, +1.00R | n=5, 100% WR, +1.40R |
+| 1W | n=32, 34% WR, +0.29R | n=16, 50% WR, +1.00R |
+| 1D | n=112, 30% WR, -0.23R | n=68, 41% WR, **-0.35R** |
+| 4H | n=151, 30% WR, -0.13R | n=72, 40% WR, -0.01R |
+| 1H | n=110, 23% WR, -0.50R | n=53, 38% WR, **-0.56R** |
+
+- **[FINDING — tempers the "EGX-Tuned always helps" read from ELEC/ABUK]** On ORWE, EGX-Tuned-Close
+  raises win rate on **every** timeframe (as on the other two symbols) but on 1D and 1H it makes
+  **Avg R worse**, not better, despite the higher win rate. The likely mechanism: `Stop on Close
+  Only` survives more wicks (more wins) but the fills it does take are worse (further from the
+  wick-triggered stop), and on this symbol/timeframe combination that trade-off nets negative. This
+  is exactly the trade-off the README's own tooltip warns about ("a worse fill than the stop level
+  ... the trade is giving up the extra distance in exchange for surviving wicks") — ORWE 1D/1H is a
+  real case where the giving-up outweighs the surviving. The backlog conclusion isn't "EGX-Tuned is
+  better" — it's "EGX-Tuned is usually better, verify per symbol before assuming."
+- **[OBSERVATION]** ORWE's `Last event` break-strength readings included **0.0x** (4H Baseline) and
+  **0.1x** (1H, both profiles) — small positive values, never negative on this symbol. Combined with
+  ELEC's negative readings and ABUK's/AMOC's TBD, this is useful raw data for Task 6's synthesis of
+  the break-strength sign question.
+- **[OBSERVATION]** ORWE has the longest history of the five symbols (data back to 2009) and the
+  worst overall Baseline performance seen so far (30% WR on 1D/4H, 23% on 1H, deeply negative Total
+  R on 1D at -25.28R). Whether that's a genuine edge-negative instrument for this strategy or an
+  artifact of RSI/MA-length settings tuned on a different kind of stock is a fair question for
+  follow-up, not something this pass can answer.
+- **Clean:** no rendering bugs, no label overlap issues on ORWE specifically (the legend briefly
+  auto-collapsed to a compact summary row once during the session — a hover-state UI behavior, not a
+  bug — and was restored via the "Show indicators legend" toggle).
 
 ---
 
