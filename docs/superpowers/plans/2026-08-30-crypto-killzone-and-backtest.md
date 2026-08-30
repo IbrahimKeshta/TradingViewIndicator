@@ -458,24 +458,64 @@ Raw numbers per view (n = closed trades, WR = win rate, Avg R, Total R; grade co
   Global Constraints.
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Load the symbol.** Set the chart symbol to `BINANCE:ADAUSDT`.
-- [ ] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 3: 1M — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
-- [ ] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 5: 1W — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
-- [ ] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 7: 1D — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 9: 4H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 11: 1H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 12: 15M — Baseline.** Set timeframe 15m, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 13: 15M — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 14: Append ADA findings and commit.** Same procedure as Task 4 Step 14, naming ADA.
+- [x] **Step 1: Load the symbol.** Set the chart symbol to `BINANCE:ADAUSDT`.
+- [x] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 3: 1M — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
+- [x] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 5: 1W — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
+- [x] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 7: 1D — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 9: 4H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 11: 1H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 12: 15M — Baseline.** Set timeframe 15m, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 13: 15M — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 14: Append ADA findings and commit.** Same procedure as Task 4 Step 14, naming ADA.
 
 ### Findings — Task 6
 
-*(filled in during execution)*
+| View | n | WR | Avg R | Total R | A | B | C |
+|---|---|---|---|---|---|---|---|
+| 1M Baseline | 0 | — | — | — | — | — | — |
+| 1M Crypto-Tuned | 1 | 0% | -1.00R | -1.00R | — | — | -1.00R(1) |
+| 1W Baseline | 6 | 17% | -0.69R | -4.12R | —(0) | -1.00R(2) | -0.53R(4) |
+| 1W Crypto-Tuned | 8 | 13% | -0.76R | -6.12R | —(0) | -0.90R(5) | -0.53R(3) |
+| 1D Baseline | 35 | 43% | +0.15R | +5.20R | —(0) | +0.15R(14) | +0.14R(21) |
+| 1D Crypto-Tuned-Close | 51 | 45% | +0.02R | +1.20R | -0.19R(5) | +0.65R(13) | -0.19R(33) |
+| 4H Baseline | 87 | 38% | +0.11R | +9.76R | +0.22R(14) | +0.23R(34) | -0.03R(39) |
+| 4H Crypto-Tuned-Close | 84 | 42% | +0.13R | +11.12R | +0.37R(13) | +0.31R(36) | -0.14R(35) |
+| 1H Baseline | 72 | 43% | +0.25R | +18.31R | +0.45R(3) | +0.49R(27) | +0.09R(42) |
+| 1H Crypto-Tuned-Close | 76 | 47% | +0.36R | +26.99R | +0.41R(5) | +0.31R(31) | +0.39R(40) |
+| 15M Baseline | 81 | 40% | -0.19R | -15.25R | +0.11R(4) | -0.38R(24) | -0.12R(53) |
+| 15M Crypto-Tuned-Close | 83 | 41% | -0.14R | -11.76R | -0.21R(5) | -0.18R(30) | -0.11R(48) |
+
+- **[BUG, high severity]** On **1W Baseline**, the live open SHORT trade's `TP3` reads
+  `-0.0555 (3.9R)` — a negative price target on an asset that cannot trade below zero. Entry ≈0.2031,
+  stop 0.3001 (risk 0.097/share). 3.9R below entry is `0.2031 − 3.9 × 0.097 ≈ −0.178`, consistent
+  with the displayed negative value. The trade engine's target math has no floor at zero (or some
+  small positive price), so a wide-stop short on a low-priced asset can produce a structurally
+  meaningless target. Not seen on ETH/XRP because their prices (thousands / ~1.4) keep even large R
+  multiples comfortably positive — this is specific to sub-$1 assets like ADA, which is exactly the
+  price range a lot of altcoins live in.
+- **[OBSERVATION, now 3/3 on Baseline]** A-grade is again the best grade on **15M Baseline**
+  (+0.11R(4)), matching ETH and XRP — three symbols in a row. On **15M Crypto-Tuned-Close** it
+  flips to the *worst* grade (-0.21R(5)), same as XRP's Crypto-Tuned-Close (ETH is the one exception
+  that keeps A best on 15M-Close too). So: A-best-on-15M is a real, reproducible Baseline pattern;
+  the Crypto-Tuned-Close profile disrupts it on 2 of 3 symbols.
+- **[OBSERVATION] Crypto-Tuned-Close's effect on ADA is genuinely mixed within the symbol itself** —
+  worse on 1D (+5.20R → +1.20R) and 1W (-4.12R → -6.12R), better on 4H (+9.76R → +11.12R), 1H
+  (+18.31R → +26.99R), and 15M (-15.25R → -11.76R). Combined with ETH (worse only on 15M) and XRP
+  (better everywhere), all three symbols now show a *different* shape of response to the same
+  profile change. There is no per-symbol rule visible yet, let alone a cross-symbol one — this
+  keeps building the case against Crypto-Tuned-Close as any kind of default.
+- **Clean otherwise:** all `Last event` strength readings positive across all 12 views (no negative
+  values — third symbol confirming the source-level finding). No rendering bugs; one quirky but
+  correct `Gate` message seen for the first time (`S · score short · 4/7` on 1M Baseline, `S · bar
+  not closed · 5/7` on 1M Crypto-Tuned) — different rejection reasons than the `no zone touch`
+  seen everywhere else, expected variety in the gate's reason string, not a bug.
+
+---
 
 ---
 
