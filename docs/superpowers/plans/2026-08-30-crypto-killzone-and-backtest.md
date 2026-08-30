@@ -396,24 +396,55 @@ Raw numbers per view (n = closed trades, WR = win rate, Avg R, Total R; grade co
   Global Constraints.
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Load the symbol.** Set the chart symbol to `BINANCE:XRPUSDT`.
-- [ ] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 3: 1M — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
-- [ ] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 5: 1W — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
-- [ ] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 7: 1D — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 9: 4H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 11: 1H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 12: 15M — Baseline.** Set timeframe 15m, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 13: 15M — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 14: Append XRP findings and commit.** Same procedure as Task 4 Step 14, naming XRP.
+- [x] **Step 1: Load the symbol.** Set the chart symbol to `BINANCE:XRPUSDT`.
+- [x] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 3: 1M — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
+- [x] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 5: 1W — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
+- [x] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 7: 1D — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 9: 4H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 11: 1H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 12: 15M — Baseline.** Set timeframe 15m, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 13: 15M — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 14: Append XRP findings and commit.** Same procedure as Task 4 Step 14, naming XRP.
 
 ### Findings — Task 5
 
-*(filled in during execution)*
+| View | n | WR | Avg R | Total R | A | B | C |
+|---|---|---|---|---|---|---|---|
+| 1M Baseline | 0 | — | — | — | — | — | — |
+| 1M Crypto-Tuned | 1 | 0% | -1.00R | -1.00R | — | — | -1.00R(1) |
+| 1W Baseline | 8 | 50% | -0.27R | -2.18R | —(0) | -0.33R(4) | -0.21R(4) |
+| 1W Crypto-Tuned | 8 | 50% | -0.27R | -2.18R | —(0) | -0.47R(5) | +0.05R(3) |
+| 1D Baseline | 32 | 47% | +0.18R | +5.92R | —(0) | +0.72R(6) | +0.06R(26) |
+| 1D Crypto-Tuned-Close | 44 | 50% | +0.33R | +14.50R | +0.26R(3) | -0.52R(15) | +0.83R(26) |
+| 4H Baseline | 83 | 42% | +0.24R | +20.02R | +0.48R(9) | -0.11R(29) | +0.42R(45) |
+| 4H Crypto-Tuned-Close | 81 | 48% | +0.34R | +27.69R | +0.86R(12) | -0.24R(28) | +0.59R(41) |
+| 1H Baseline | 69 | 48% | +0.21R | +14.58R | +0.33R(1) | +0.19R(17) | +0.22R(51) |
+| 1H Crypto-Tuned-Close | 71 | 52% | +0.27R | +19.08R | +0.23R(4) | +0.10R(22) | +0.36R(45) |
+| 15M Baseline | 78 | 31% | -0.08R | -5.89R | +0.05R(8) | -0.07R(26) | -0.10R(44) |
+| 15M Crypto-Tuned-Close | 79 | 39% | -0.03R | -2.12R | -0.05R(9) | +0.21R(26) | -0.16R(44) |
+
+- **[ENHANCEMENT candidate] Unlike ETH, the Crypto-Tuned(-Close) profile improved Total R on every
+  single XRP timeframe pair** — 1D (+5.92R → +14.50R), 4H (+20.02R → +27.69R), 1H (+14.58R →
+  +19.08R), 15M (-5.89R → -2.12R), 1W (unchanged). On ETH the same profile made 15M *worse*
+  (-12.15R → -23.16R). Two symbols, opposite verdicts on the fastest timeframe — this is exactly the
+  kind of per-symbol variance the design spec flagged as a risk of treating Crypto-Tuned-Close as a
+  blanket default, mirroring the EGX pass's finding #3 about EGX-Tuned-Close.
+- **[OBSERVATION, now seen on 2/2 symbols]** A-grade is the best-performing grade on **15M Baseline**
+  specifically, on both ETH (+0.46R) and XRP (+0.05R) — every other grade is negative on both. Still
+  too small a sample to call a rule, but it's the first grade pattern that's reproduced identically
+  across symbols rather than flipping.
+- **[OBSERVATION]** B-grade is negative on both 1D-Close and 4H (both profiles) for XRP, while A and
+  C are positive — the "middle" grade underperforming both its neighbors, not just being noisy.
+- **Clean:** all `Last event` strength readings positive (0.2x–3.0x) across all 12 views, no negative
+  values — second symbol confirming the same source-level finding as ETH. No rendering bugs; panel
+  legible in all 12 views at the 1600×1000 window size established in Task 4.
+
+---
 
 ---
 
