@@ -529,24 +529,60 @@ Raw numbers per view (n = closed trades, WR = win rate, Avg R, Total R; grade co
   Global Constraints.
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Load the symbol.** Set the chart symbol to `BINANCE:SOLUSDT`.
-- [ ] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 3: 1M — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
-- [ ] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 5: 1W — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
-- [ ] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 7: 1D — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 9: 4H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 11: 1H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 12: 15M — Baseline.** Set timeframe 15m, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 13: 15M — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 14: Append SOL findings and commit.** Same procedure as Task 4 Step 14, naming SOL.
+- [x] **Step 1: Load the symbol.** Set the chart symbol to `BINANCE:SOLUSDT`.
+- [x] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 3: 1M — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
+- [x] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 5: 1W — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
+- [x] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 7: 1D — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 9: 4H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 11: 1H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 12: 15M — Baseline.** Set timeframe 15m, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 13: 15M — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 14: Append SOL findings and commit.** Same procedure as Task 4 Step 14, naming SOL.
 
 ### Findings — Task 7
 
-*(filled in during execution)*
+| View | n | WR | Avg R | Total R | A | B | C |
+|---|---|---|---|---|---|---|---|
+| 1M Baseline | 0 | — | — | — | — | — | — |
+| 1M Crypto-Tuned | 0 | — | — | — | — | — | — |
+| 1W Baseline | 1 | 0% | -0.49R | -0.49R | — | — | -0.49R(1) |
+| 1W Crypto-Tuned | 1 | 0% | -0.49R | -0.49R | — | -0.49R(1) | — |
+| 1D Baseline | 31 | 52% | +0.62R | +19.22R | —(0) | -0.11R(3) | +0.70R(28) |
+| 1D Crypto-Tuned-Close | 43 | 44% | +0.29R | +12.39R | —(0) | +0.27R(17) | +0.30R(26) |
+| 4H Baseline | 81 | 42% | +0.02R | +1.90R | +0.54R(10) | -0.08R(30) | -0.03R(41) |
+| 4H Crypto-Tuned-Close | 87 | 48% | +0.09R | +7.66R | +0.63R(11) | -0.12R(37) | +0.14R(39) |
+| 1H Baseline | 72 | 54% | +0.20R | +14.48R | +0.37R(2) | +0.16R(18) | +0.21R(52) |
+| 1H Crypto-Tuned-Close | 76 | 53% | +0.24R | +18.17R | +0.98R(2) | +0.04R(26) | +0.31R(48) |
+| 15M Baseline | 94 | 31% | -0.21R | -19.63R | -0.36R(7) | -0.41R(22) | -0.13R(65) |
+| 15M Crypto-Tuned-Close | 96 | 33% | -0.29R | -27.84R | -0.59R(13) | -0.38R(20) | -0.20R(63) |
+
+- **[OBSERVATION] SOL breaks the "A-grade best on 15M Baseline" pattern.** ETH, XRP, and ADA all
+  showed A as the best (or least-bad) grade on 15M Baseline; SOL shows the opposite — A is the
+  *worst* grade (-0.36R(7)) and C the least-bad (-0.13R(65)), on both Baseline and Crypto-Tuned-Close.
+  Downgraded from "reproducible pattern" to "true on 3 of 4 symbols" — still notable, but not
+  universal, and not something a trader could safely rely on without knowing which symbol they're
+  looking at.
+- **[OBSERVATION] Crypto-Tuned-Close's effect on SOL is yet another distinct shape**: worse on 1D
+  (+19.22R → +12.39R) and 15M (-19.63R → -27.84R), better on 4H (+1.90R → +7.66R) and 1H (+14.48R →
+  +18.17R). Combined with ETH (worse only on 15M), XRP (better everywhere), and ADA (worse on 1D/1W,
+  better on 4H/1H/15M), all four symbols now show *different* response shapes to the same profile
+  change — the strongest evidence yet against Crypto-Tuned-Close as any kind of default, blanket or
+  otherwise.
+- **[Confirms Part 0 self-exclusion logic]** On **1M** (both profiles), `Confirm` showed `Ichi -`
+  and the `Gate` denominator read `1/6` and `2/6` instead of the usual `X/7` — the Ichimoku point
+  correctly excludes itself from the denominator when `ichiReady` is false (insufficient monthly
+  history for the cloud calculation), exactly as the source comment describes. First time this
+  exclusion was directly observed rather than just read from source.
+- **Clean otherwise:** no negative-price targets on any SOL view (price stays ≥ ~$100, same as ETH
+  — reinforces that the ADA TP3 bug is specific to low-priced assets), all `Last event` strength
+  readings positive, no rendering bugs across all 12 views. **This closes all 48 planned views.**
+
+---
 
 ---
 
