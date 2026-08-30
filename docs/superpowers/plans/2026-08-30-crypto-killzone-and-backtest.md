@@ -561,9 +561,12 @@ Raw numbers per view (n = closed trades, WR = win rate, Avg R, Total R; grade co
 | 15M Baseline | 94 | 31% | -0.21R | -19.63R | -0.36R(7) | -0.41R(22) | -0.13R(65) |
 | 15M Crypto-Tuned-Close | 96 | 33% | -0.29R | -27.84R | -0.59R(13) | -0.38R(20) | -0.20R(63) |
 
-- **[OBSERVATION] SOL breaks the "A-grade best on 15M Baseline" pattern.** ETH, XRP, and ADA all
-  showed A as the best (or least-bad) grade on 15M Baseline; SOL shows the opposite — A is the
-  *worst* grade (-0.36R(7)) and C the least-bad (-0.13R(65)), on both Baseline and Crypto-Tuned-Close.
+- **[OBSERVATION] SOL breaks the "A-grade best on 15M Baseline" pattern — fully on Crypto-Tuned-Close,
+  partially on Baseline.** ETH, XRP, and ADA all showed A as the best (or least-bad) grade on 15M
+  Baseline; SOL's 15M Baseline has C as least-bad (-0.13R(65)) with A in the *middle* (-0.36R(7))
+  and B actually worst (-0.41R(22)) — so A isn't best, but it isn't the extreme-worst case either
+  (corrected after a closer re-check: an earlier pass here mis-stated A as the worst grade on this
+  view). On 15M Crypto-Tuned-Close, SOL is unambiguous: A is worst (-0.59R(13)), C best (-0.20R(63)).
   Downgraded from "reproducible pattern" to "true on 3 of 4 symbols" — still notable, but not
   universal, and not something a trader could safely rely on without knowing which symbol they're
   looking at.
@@ -596,10 +599,10 @@ Raw numbers per view (n = closed trades, WR = win rate, Avg R, Total R; grade co
 - Produces: a ranked backlog the user can turn into new dated spec/plan pairs, following this
   repo's existing pattern.
 
-- [ ] **Step 1: Re-read every Findings section.** Tasks 3 through 7, in order.
-- [ ] **Step 2: Group repeated findings.** An issue seen on more than one view is one backlog entry
+- [x] **Step 1: Re-read every Findings section.** Tasks 3 through 7, in order.
+- [x] **Step 2: Group repeated findings.** An issue seen on more than one view is one backlog entry
   noting every view it appeared on, not one entry per view.
-- [ ] **Step 3: Write the backlog section.** Append `## Enhancement Backlog` at the end of this
+- [x] **Step 3: Write the backlog section.** Append `## Enhancement Backlog` at the end of this
   document: an ordered list, highest-impact first, each entry naming the issue, how many views it
   appeared on, and whether it's a `[BUG]` (contradicts the README) or `[ENHANCEMENT]` (works as
   designed, crypto evidence suggests improving it). Explicitly call out whether the Task 1/2
@@ -615,5 +618,100 @@ git commit -m "docs: close out crypto backtest verification with ranked backlog"
 ```
 
 ## Enhancement Backlog
+
+Ranked highest-impact first. Views = how many of the 48 symbol/timeframe/profile combinations
+(plus the Task 3 setup checks) the finding appeared on.
+
+### 1. [BUG] Trade target math has no price floor — negative TP3 on low-priced assets (1 view, high severity)
+
+On ADA 1W Baseline, the live open SHORT trade's `TP3` read `-0.0555 (3.9R)` — a negative price
+target on a spot asset that cannot trade below zero. Entry ≈0.2031, stop 0.3001 (risk
+0.097/share); `0.2031 − 3.9 × 0.097 ≈ −0.178`, matching the displayed value. Not seen on
+ETH/XRP/SOL (prices high enough that even large R multiples stay positive) — this is specific to
+sub-$1 assets, which is a large fraction of the altcoin market. The engine's target calculation
+needs a floor (zero, or some small positive price) for short-side targets.
+
+### 2. [FINDING] Grade is inconsistent by symbol and timeframe, not simply anti-predictive (~40 views, all 4 symbols)
+
+The EGX pass found grade *consistently* inverted — A-grade lost the most. The crypto sweep found
+something messier: C beats A and B on ETH 4H (both profiles); A beats B and C on ETH 15M, XRP
+15M-Baseline, ADA 15M-Baseline, ETH/XRP/ADA 1D-Close; A is the *worst* grade on ETH 1H and SOL
+15M (both profiles). No single direction holds across symbols or timeframes — a trader reading
+"A-grade, safer trade" would be right on some views and badly wrong on others, with no visible way
+to tell which regime they're in. This is a stronger and more actionable finding than a flat
+"anti-predictive" label: the grade isn't quietly failing in one consistent direction, it has no
+reliable direction at all in this dataset.
+
+### 2a. [CHECKED] Is the inconsistency in #2 just small-sample noise on the rare A-grade bucket?
+
+No — checked at the user's request. Across all 27 A-grade view-results with n > 0, split by
+sample size: for n < 6 (11 views), A landed as a clear extreme (best or worst of the three grades,
+not the middle) in 8/11 (73%); for n ≥ 6, up to n = 14 (16 views), A was extreme in 12/16 (75%).
+If the flipping were sample-size noise, the larger-n bucket should converge toward A sitting in
+the middle far more often — it doesn't. The inconsistency looks structural (something about which
+confirmation points dominate differs by symbol/timeframe regime), not an artifact of small counts.
+This makes #2 a *stronger* finding, not a weaker one, and points toward the costlier real
+diagnostic — instrumenting which of the 7 confirmation points fire on winners vs. losers per
+trade — as the next step if this is worth pursuing further.
+
+### 2b. [OBSERVATION] The 15M-Baseline "A is best" shape held on 3 of 4 symbols, but isn't universal
+
+ETH, XRP, and ADA all showed A as the best (or least-bad) grade specifically on 15M Baseline; SOL's
+15M Baseline puts C least-bad with A in the *middle* (B is actually worst there) — not a clean
+inversion, just not "A best" either. On 15M Crypto-Tuned-Close specifically, SOL does invert
+cleanly (A worst, C best). Worth remembering as a "usually, but not always" pattern — not a rule to
+gate anything on.
+
+### 3. [FINDING] Crypto-Tuned-Close cannot be a blanket default — four symbols, four different response shapes (32 views)
+
+Turning on Asia + Stop-on-Close-Only changed Total R in a different direction on every symbol:
+ETH — helps 1D/4H/1H, hurts 15M. XRP — helps everywhere tested. ADA — hurts 1D/1W, helps
+4H/1H/15M. SOL — hurts 1D/15M, helps 4H/1H. This mirrors the EGX pass's own finding #3
+(EGX-Tuned-Close isn't safe as a blanket default either) — the pattern generalizes past EGX
+equities to crypto: **any settings profile needs to be verified per symbol**, not applied
+wholesale.
+
+### 4. [ANSWERED] Does `Score: Killzone` discriminate crypto setups the way it does on EGX?
+
+Inconclusive by design — `Score: Killzone` was **on** in every view run (Baseline and both
+Crypto-Tuned variants), so this sweep never isolated killzone-on vs. killzone-off. What it did
+test is narrower: does *adding the Asia session* to an already-active killzone score change
+results? Answer: yes, but with no consistent direction (see #3) — sometimes more trades and worse
+grades (XRP 1W: n=8, C-grade split changes but Total R unchanged), sometimes materially different
+performance (ETH 1M: Gate moved from 1/7 to 2/7 the instant Asia was toggled, on the same bar).
+The honest conclusion is that this plan answers "does adding Asia help" (no consistent answer) but
+not "does the killzone score matter at all" (would need a killzone-off profile run separately).
+
+### 5. [CONFIRMED CLEAN] The Task 1/2 killzone fix works correctly on all four symbols
+
+`Session Timezone` reads `America/New_York` and `Asia Killzone Time` (`2000-0000`, default off)
+is present on every fresh instance across all 4 symbols — no stale-default sightings once the
+fresh-instance pattern from Task 3 was used throughout. Toggling `Show Asia Killzone` visibly
+changed the chart background tint and moved the `Gate` fraction in the same render pass (first
+seen on ETH 1M Crypto-Tuned) — the fix is not just present in settings, it's actually being
+evaluated and scored. This closes the deferred live check from Task 1/2.
+
+### 6. [CONFIRMED CLEAN, closes EGX backlog #5] Break-strength (`Last event ... X.Xx`) never read negative
+
+Across all 48 crypto views, every `Last event` strength reading was positive (0.2x–3.0x). This
+matches the source-level read from Task 1 (`math.abs(close - open) / structAtr` cannot go
+negative) and confirms the EGX backlog's bug-candidate #5 was never actually reproducible — safe
+to close that item as "investigated, not a bug" rather than leave it open.
+
+### 7. [CONFIRMED CLEAN] Ichimoku's self-exclusion from the score denominator works on live data
+
+On SOL 1M (both profiles — the shortest-history monthly views), `Confirm` showed `Ichi -` and the
+`Gate` fraction read `X/6` instead of the usual `X/7`, matching the source's `ichiOn = scoreIchimoku
+and ichiReady` guard for insufficient monthly history (`senkouBLen + ichiDisp` bars). First time
+this exclusion was observed directly rather than just read from source — no code change needed,
+just confirmation.
+
+### 8. [ENVIRONMENT NOTE] Panel legibility needs a ~1600×1000 browser window with the legend collapsed
+
+Not a code bug — a session note for next time. The STRUCTURE/PERFORMANCE panel got clipped at
+default and even oversized (2200px-tall) browser windows in early Task 4 testing; the fix was a
+1600×1000 window plus collapsing the indicator legend list (`Hide indicators legend`), which then
+worked reliably for the remaining 46 views. Worth setting up front in any future TradingView
+Playwright session.
 
 *(filled in during Task 8)*
