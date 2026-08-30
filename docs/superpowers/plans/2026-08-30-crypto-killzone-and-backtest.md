@@ -320,27 +320,69 @@ git commit -m "docs: record crypto backtest verification setup findings"
   Global Constraints.
 - Produces: nothing consumed by later tasks — each symbol task is independent.
 
-- [ ] **Step 1: Load the symbol.** Set the chart symbol to `BINANCE:ETHUSDT`.
-- [ ] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 3: 1M — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
-- [ ] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 5: 1W — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
-- [ ] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 7: 1D — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 9: 4H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 11: 1H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 12: 15M — Baseline.** Set timeframe 15m, set inputs to **Baseline**, screenshot, read.
-- [ ] **Step 13: 15M — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
-- [ ] **Step 14: Append ETH findings and commit.** Under `### Findings — Task 4` below, write one
+- [x] **Step 1: Load the symbol.** Set the chart symbol to `BINANCE:ETHUSDT`.
+- [x] **Step 2: 1M — Baseline.** Set timeframe 1M, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 3: 1M — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
+- [x] **Step 4: 1W — Baseline.** Set timeframe 1W, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 5: 1W — Crypto-Tuned.** Set inputs to **Crypto-Tuned**, screenshot, read.
+- [x] **Step 6: 1D — Baseline.** Set timeframe 1D, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 7: 1D — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 8: 4H — Baseline.** Set timeframe 4H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 9: 4H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 10: 1H — Baseline.** Set timeframe 1H, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 11: 1H — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 12: 15M — Baseline.** Set timeframe 15m, set inputs to **Baseline**, screenshot, read.
+- [x] **Step 13: 15M — Crypto-Tuned-Close.** Set inputs to **Crypto-Tuned-Close**, screenshot, read.
+- [x] **Step 14: Append ETH findings and commit.** Under `### Findings — Task 4` below, write one
   entry per anomaly across the 12 views, tagged `[BUG]` or `[ENHANCEMENT]`, naming the exact view.
   A clean view gets a one-line "clean" note. Ask the user for go-ahead, then commit as in Task 3
   Step 5 (adjust the commit message to name ETH).
 
 ### Findings — Task 4
 
-*(filled in during execution)*
+Raw numbers per view (n = closed trades, WR = win rate, Avg R, Total R; grade columns show Avg R
+(count)):
+
+| View | n | WR | Avg R | Total R | A | B | C |
+|---|---|---|---|---|---|---|---|
+| 1M Baseline | 0 | — | — | — | — | — | — |
+| 1M Crypto-Tuned | 0 | — | — | — | — | — | — |
+| 1W Baseline | 3 | 33% | -0.05R | -0.16R | —(0) | —(0) | -0.05R(3) |
+| 1W Crypto-Tuned | 4 | 25% | -0.29R | -1.16R | —(0) | -1.00R(1) | -0.05R(3) |
+| 1D Baseline | 42 | 38% | +0.07R | +3.06R | —(0) | +0.42R(15) | -0.12R(27) |
+| 1D Crypto-Tuned-Close | 55 | 40% | +0.06R | +3.38R | +0.82R(5) | +0.21R(23) | -0.21R(27) |
+| 4H Baseline | 94 | 47% | +0.14R | +13.28R | -0.02R(13) | -0.14R(29) | +0.34R(52) |
+| 4H Crypto-Tuned-Close | 93 | 48% | +0.20R | +18.96R | -0.09R(11) | +0.04R(34) | +0.39R(48) |
+| 1H Baseline | 90 | 38% | -0.12R | -11.11R | -0.18R(7) | +0.10R(22) | -0.20R(61) |
+| 1H Crypto-Tuned-Close | 92 | 43% | -0.05R | -4.63R | -0.44R(8) | +0.12R(26) | -0.08R(58) |
+| 15M Baseline | 74 | 34% | -0.16R | -12.15R | +0.46R(7) | -0.26R(21) | -0.21R(46) |
+| 15M Crypto-Tuned-Close | 77 | 35% | -0.30R | -23.16R | +0.55R(6) | -0.31R(27) | -0.41R(44) |
+
+- **[CONFIRMED]** Task 1/2's killzone fix works end to end on a live chart, closing the gap Task 3
+  couldn't verify visually. Toggling `Show Asia Killzone` on (1M Crypto-Tuned) visibly tinted the
+  entire chart background purple and moved `Gate` from `1/7` to `2/7` on the same bar — the new
+  session is being evaluated and scored, not just accepted as an input.
+- **[OBSERVATION] Grade is not just anti-predictive here — it's directionally inconsistent by
+  timeframe**, which is a different and arguably more concerning shape than the EGX finding (which
+  was a *consistent* inversion). On ETH: C-grade outperforms A and B on 4H (both profiles); A-grade
+  outperforms B and C on 15M (both profiles) and on 1D-Close; A-grade is the *worst* grade on 1H and
+  tied-worst on 4H. A trader reading "A-grade" as "more confluence, safer trade" would be right on
+  some timeframes and badly wrong on others, with no visible way to tell which regime they're in.
+- **[OBSERVATION] The Crypto-Tuned-Close profile (Asia killzone + Stop on Close Only) doesn't have a
+  consistent effect.** It improves Total R on 1D (+3.06R → +3.38R), 4H (+13.28R → +18.96R), and 1H
+  (-11.11R → -4.63R, still net negative but notably less bad), but makes it clearly worse on 15M
+  (-12.15R → -23.16R). Net: helps on three of the four intraday-and-up timeframes tested, hurts on
+  the fastest one (15M) — the opposite of what "Stop on Close Only exists for wicky fast timeframes"
+  would predict.
+- **[OBSERVATION]** 1D Baseline's live open trade has TP3 at 10.5R–18R depending on view — a very
+  long-dated target on a symbol/timeframe combination this volatile. Not evaluated as a bug here,
+  but worth a closer look given how rarely price likely reaches it before structure invalidates the
+  trade first.
+- **[Clean, corroborates EGX backlog item #5]** Every `Last event` strength reading across all 12
+  ETH views was positive (0.8x–2.1x), reproducing the source-level finding that `lastStrength` is
+  `math.abs(...)`-derived and cannot go negative. No negative or zero readings seen.
+- **Clean:** no label overlap, panel clipping (once the browser window was sized correctly — see
+  Task 3 findings), or rendering bugs across all 12 views.
 
 ---
 
