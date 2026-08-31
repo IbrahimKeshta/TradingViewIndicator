@@ -87,6 +87,7 @@ showTradeHistory   = input.bool(true, "Show Trade History", group = "Trade Engin
 showTradePanel     = input.bool(true, "Show Trade Panel Rows", group = "Trade Engine")
 showGatePanel      = input.bool(true, "Show Gate Panel Row", group = "Trade Engine", tooltip = "One row naming what is currently stopping a trade, with the live score beside it. Without it the score is only ever rendered inside a live trade's rows, so on a bar where nothing fires there is no surface anywhere that reflects a scoring input you just changed.")
 showStatsPanel     = input.bool(true, "Show Performance Rows", group = "Trade Engine", tooltip = "Win rate, average R, total R and a per-grade breakdown over every trade in the loaded history.\n\nResults assume one third of the position leaves at each target reached — the engine itself manages one unit, so this is an accounting convention. The live trade's Open R row is single-unit and will not match.\n\nThe counters run whether or not this is on; hiding the rows never resets them. The sample is whatever history TradingView loaded, so read n before trusting a percentage.\n\nA trade that closes at exactly 0.0R counts as neither a win nor a loss, so W + L can come to one less than n.")
+showPointStats     = input.bool(false, "Show Confirmation Point Stats", group = "Trade Engine", tooltip = "Per-confirmation-point breakdown: average R on closed trades where that point was true at entry, versus where it was false — independent of whether the point currently counts toward the score, so it also shows what a disabled point would have correlated with.\n\nOff by default: adds up to 7 rows per model to the panel, and exists to answer one question (does this specific point actually track the trades that worked) rather than for everyday use.")
 tradeLongColor     = input.color(color.teal, "Long", group = "Trade Engine")
 tradeShortColor    = input.color(color.maroon, "Short", group = "Trade Engine")
 tradeStopColor     = input.color(color.red, "Stop", group = "Trade Engine")
@@ -765,6 +766,22 @@ scoreTally(bool isLong) =>
             got += 1
     [ofPts, got]
 
+// The seven points' raw achieved-state, independent of whether the point currently counts toward
+// the score. Deliberately NOT reused from scoreTally() — that function only evaluates a point's
+// achieved-condition when the point is enabled, so a disabled point never reports whether it
+// would have hit. This is a separate read of the same underlying booleans, kept apart from the
+// already-reviewed gating logic above rather than refactored into it, so a diagnostic feature
+// carries no risk to the trade engine it is only watching.
+pointsRaw(bool isLong) =>
+    pKz   = killzoneActive
+    pMom  = isLong ? momLongOk : momShortOk
+    pMa   = isLong ? maBullishConfirm : maBearishConfirm
+    pMaj  = majorState.trend == intState.trend
+    pBrk  = not na(intState.lastStrength) and intState.lastStrength >= strongBreakMult
+    pPart = isLong ? partLongOk : partShortOk
+    pIchi = isLong ? ichiBullConfirm : ichiBearConfirm
+    [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi]
+
 // Grades are a fraction of the enabled points: A at 90%, B at 75%, C otherwise. Absolute
 // shortfall did not scale — "two short" is 3/5 on one chart and 8/10 on another, and both
 // graded C. Integer arithmetic, so no float rounding sits between a setup and its grade.
@@ -963,6 +980,16 @@ type Trade
     // advanceTrade() is shared by both models and must never hand one model's trade to the
     // other's trail. False = the structural swing anchor; true = this model's Chandelier line.
     bool   chandelier
+    // Per-point raw confirmation state at open, independent of whether the point currently counts
+    // toward the score — see pointsRaw(). Lets the PERFORMANCE panel show whether a point actually
+    // correlates with the trades that worked, even for a point the user has switched off.
+    bool   ptKillzone
+    bool   ptMomentum
+    bool   ptMa
+    bool   ptMajorAgree
+    bool   ptBreakStrength
+    bool   ptParticipation
+    bool   ptIchimoku
 
 // Two independent slots, one per entry model, deliberately stored as two named vars rather than
 // an array: assigning one slot's object into the other would ALIAS them — Pine UDTs are
@@ -1085,6 +1112,16 @@ var array<float> statSumR   = array.new<float>(2, 0.0)
 var array<int>   statGradeCount = array.new<int>(6, 0)
 var array<float> statGradeSumR  = array.new<float>(6, 0.0)
 
+// Fourteen slots each, indexed model * 7 + pointIndex — same flat-array convention as the grade
+// stats above, one point index per field on Trade in the order they appear there (Killzone,
+// Momentum, MA, MajorAgree, BreakStrength, Participation, Ichimoku). Separate true/false arrays
+// rather than one signed accumulator, so a point with zero closed trades on one side reads as an
+// explicit "no data" rather than a misleading 0.00R.
+var array<int>   statPointCountTrue  = array.new<int>(14, 0)
+var array<float> statPointSumRTrue   = array.new<float>(14, 0.0)
+var array<int>   statPointCountFalse = array.new<int>(14, 0)
+var array<float> statPointSumRFalse  = array.new<float>(14, 0.0)
+
 // ---- one bar of exit processing for one slot ----
 // The whole exit block, lifted verbatim from the single-slot version with `activeTrade` renamed
 // to `t`. Pine UDTs are reference types, so every field written here is visible to the caller —
@@ -1191,6 +1228,15 @@ recordResult(Trade t, int model) =>
         array.set(statLosses, model, array.get(statLosses, model) + 1)
     array.set(statGradeCount, gi, array.get(statGradeCount, gi) + 1)
     array.set(statGradeSumR,  gi, array.get(statGradeSumR,  gi) + r)
+    pts = array.from(t.ptKillzone, t.ptMomentum, t.ptMa, t.ptMajorAgree, t.ptBreakStrength, t.ptParticipation, t.ptIchimoku)
+    for pIdx = 0 to 6
+        pi = model * 7 + pIdx
+        if array.get(pts, pIdx)
+            array.set(statPointCountTrue, pi, array.get(statPointCountTrue, pi) + 1)
+            array.set(statPointSumRTrue,  pi, array.get(statPointSumRTrue,  pi) + r)
+        else
+            array.set(statPointCountFalse, pi, array.get(statPointCountFalse, pi) + 1)
+            array.set(statPointSumRFalse,  pi, array.get(statPointSumRFalse,  pi) + r)
     r
 
 // Keyed on the PER-SLOT close flag, never the shared tradeClosed. With one slot the two were the
@@ -1256,7 +1302,8 @@ if canOpen and longSetup
         risk = close - st
         if pullbackRiskOk(risk)
             tg   = selectTargets(true, close, risk, minTargetR)
-            activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false)
+            [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(true)
+            activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi)
             tradeOpened := true
             openedSide  := "long"
 if na(activeTrade) and shortSetup and not longOnly
@@ -1267,7 +1314,8 @@ if na(activeTrade) and shortSetup and not longOnly
         risk = st - close
         if pullbackRiskOk(risk)
             tg   = selectTargets(false, close, risk, minTargetR)
-            activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false)
+            [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(false)
+            activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi)
             tradeOpened := true
             openedSide  := "short"
 
@@ -1314,7 +1362,8 @@ if na(trailTrade) and trailLongEntry
         //
         // zoneTop/zoneBottom carry entry and stop: this model has no zone, and those two fields
         // are what the trade box is drawn from.
-        trailTrade := Trade.new("long", gradeFor(scoreLong, ofPtsLong), scoreLong, ofPtsLong, close, st, st, close, st, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop)
+        [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(true)
+        trailTrade := Trade.new("long", gradeFor(scoreLong, ofPtsLong), scoreLong, ofPtsLong, close, st, st, close, st, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi)
         tradeOpened := true
         if na(openedSide)
             openedSide := "long"
@@ -1323,7 +1372,8 @@ if na(trailTrade) and trailShortEntry
     risk = st - close
     if trailRiskOk(risk)
         tg   = selectTargets(false, close, risk, trailMinTargetR)
-        trailTrade := Trade.new("short", gradeFor(scoreShort, ofPtsShort), scoreShort, ofPtsShort, close, st, st, st, close, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop)
+        [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(false)
+        trailTrade := Trade.new("short", gradeFor(scoreShort, ofPtsShort), scoreShort, ofPtsShort, close, st, st, st, close, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi)
         tradeOpened := true
         if na(openedSide)
             openedSide := "short"
@@ -1586,6 +1636,27 @@ statsPanelBlock(int model, string title, int base) =>
             table.cell(structPanel, 1, base + 4 + gi, gTxt, text_color = gCol)
     base
 
+// One model's per-point breakdown: always 7 rows plus a header, gated entirely by showPointStats
+// at the call site — unlike statsPanelBlock this never shows an empty-state row, since it is an
+// opt-in diagnostic, not something a trade-less chart needs to announce it has nothing yet.
+pointStatsPanelBlock(int model, string title, int base) =>
+    pointNames = array.from("Killzone", "Momentum", "MA", "Major Agree", "Break Strength", "Participation", "Ichimoku")
+    table.cell(structPanel, 0, base, title, text_color = color.white, bgcolor = color.new(color.gray, 50))
+    table.cell(structPanel, 1, base, "true / false", text_color = color.silver, bgcolor = color.new(color.gray, 50))
+    for pIdx = 0 to 6
+        pi       = model * 7 + pIdx
+        ctTrue   = array.get(statPointCountTrue,  pi)
+        sumTrue  = array.get(statPointSumRTrue,   pi)
+        ctFalse  = array.get(statPointCountFalse, pi)
+        sumFalse = array.get(statPointSumRFalse,  pi)
+        avgTrue  = ctTrue  > 0 ? sumTrue  / ctTrue  : 0.0
+        avgFalse = ctFalse > 0 ? sumFalse / ctFalse : 0.0
+        txtTrue  = ctTrue  > 0 ? rText(avgTrue)  + " (" + str.tostring(ctTrue)  + ")" : "— (0)"
+        txtFalse = ctFalse > 0 ? rText(avgFalse) + " (" + str.tostring(ctFalse) + ")" : "— (0)"
+        table.cell(structPanel, 0, base + 1 + pIdx, array.get(pointNames, pIdx), text_color = color.silver)
+        table.cell(structPanel, 1, base + 1 + pIdx, txtTrue + " / " + txtFalse, text_color = color.white)
+    base
+
 if barstate.islast
     table.delete(structPanel)
     if showStructurePanel
@@ -1634,7 +1705,12 @@ if barstate.islast
         // The trailing model's block appears only when the model is enabled. With it off the
         // panel is row-for-row identical to the single-model version.
         trStatsRows = showStatsPanel and useTrailModel ? (trTrades > 0 ? 7 : 2) : 0
-        structPanel := table.new(panelPos, 2, 5 + confirmRows + gateRows + pbRows + trRows + pbStatsRows + trStatsRows, bgcolor = color.new(color.black, 80), border_width = 1)
+        // 8 rows (header + 7 points) once the model has a closed trade to break down; 0 otherwise
+        // — this block has no empty-state row, since it is opt-in and only worth showing once
+        // there is something to show.
+        pbPointRows = showPointStats and pbTrades > 0 ? 8 : 0
+        trPointRows = showPointStats and useTrailModel and trTrades > 0 ? 8 : 0
+        structPanel := table.new(panelPos, 2, 5 + confirmRows + gateRows + pbRows + trRows + pbStatsRows + trStatsRows + pbPointRows + trPointRows, bgcolor = color.new(color.black, 80), border_width = 1)
         table.cell(structPanel, 0, 0, "STRUCTURE", text_color = color.white, bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 1, 0, "", bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 0, 1, "Major trend", text_color = color.silver)
@@ -1656,6 +1732,8 @@ if barstate.islast
         trBase      = pbBase + pbRows
         pbStatsBase = trBase + trRows
         trStatsBase = pbStatsBase + pbStatsRows
+        pbPointBase = trStatsBase + trStatsRows
+        trPointBase = pbPointBase + pbPointRows
         if pbRows > 0
             tradePanelBlock(activeTrade, tradeOpenR, "", pbBase)
         if trRows > 0
@@ -1664,6 +1742,10 @@ if barstate.islast
             statsPanelBlock(MODEL_PULLBACK, useTrailModel ? "PERFORMANCE · PULLBACK" : "PERFORMANCE", pbStatsBase)
         if trStatsRows > 0
             statsPanelBlock(MODEL_TRAIL, "PERFORMANCE · TRAIL", trStatsBase)
+        if pbPointRows > 0
+            pointStatsPanelBlock(MODEL_PULLBACK, useTrailModel ? "POINTS · PULLBACK" : "POINTS", pbPointBase)
+        if trPointRows > 0
+            pointStatsPanelBlock(MODEL_TRAIL, "POINTS · TRAIL", trPointBase)
 
 // ============================================================
 // ALERTS
