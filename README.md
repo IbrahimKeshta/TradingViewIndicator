@@ -1,3 +1,5 @@
+🌐 [اقرأ هذا بالعربية](README.ar.md)
+
 # TradingView Indicators
 
 Two Pine Script v6 indicators for TradingView, written to be read as much as used. Both are single
