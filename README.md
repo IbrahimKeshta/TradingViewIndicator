@@ -487,7 +487,8 @@ long trade history to survive — their labels share the chart's 500-label budge
 labels. `Panel Position` defaults to **Bottom Right**, not Top Right: TradingView's own expanded
 indicator-legend bar (the input list shown when the legend is hovered or pinned open) sits near the
 top of the chart and renders on top of the panel there, cutting through rows instead of sitting
-behind them.
+behind them. `Panel Background` controls the whole STRUCTURE/PERFORMANCE/POINTS panel's background
+color and opacity in one control — header rows keep their own gray highlight on top of it.
 
 **Fair Value Gaps / Order Blocks** — `Max Tracked` caps how many are kept per side (order blocks: per
 side *and* per tier). `Include Internal-Tier Order Blocks` is on by default; turning it off leaves

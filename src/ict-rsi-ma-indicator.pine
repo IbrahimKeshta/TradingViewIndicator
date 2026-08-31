@@ -61,6 +61,7 @@ showInternalRays   = input.bool(false, "Show Internal Rays", group = "Structure 
 showInternalBreaks = input.bool(false, "Show Internal Break Lines", group = "Structure Display", tooltip = "Off by default. On a fast timeframe internal breaks are near-continuous, and their labels share the chart's 500-label budget with the trade result history — leave this off if you want a long track record to survive.")
 showStructurePanel = input.bool(true, "Show Structure Panel", group = "Structure Display")
 panelPosInput      = input.string("Bottom Right", "Panel Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Structure Display", tooltip = "Where the STRUCTURE/PERFORMANCE panel renders. Defaults to Bottom Right rather than Top Right: TradingView's own expanded indicator-legend bar (the row of input values shown when the legend is hovered or pinned open) sits near the top of the chart and renders on top of whatever is there, cutting through panel rows instead of sitting behind them. The live price/symbol flag on the price scale can still cross whichever corner is chosen, since it tracks the current price rather than a fixed position.")
+panelBgColor       = input.color(color.new(color.black, 80), "Panel Background", group = "Structure Display", tooltip = "Background for the whole STRUCTURE/PERFORMANCE/POINTS panel — header rows keep their own gray highlight on top of this. Use the color picker's own opacity slider for transparency.")
 majorTagColor      = input.color(color.orange, "Major Tag", group = "Structure Display")
 liquidityTagColor  = input.color(color.yellow, "Liquidity Tag (EQH/EQL)", group = "Structure Display")
 bosColor           = input.color(color.lime, "BOS", group = "Structure Display")
@@ -1710,7 +1711,7 @@ if barstate.islast
         // there is something to show.
         pbPointRows = showPointStats and pbTrades > 0 ? 8 : 0
         trPointRows = showPointStats and useTrailModel and trTrades > 0 ? 8 : 0
-        structPanel := table.new(panelPos, 2, 5 + confirmRows + gateRows + pbRows + trRows + pbStatsRows + trStatsRows + pbPointRows + trPointRows, bgcolor = color.new(color.black, 80), border_width = 1)
+        structPanel := table.new(panelPos, 2, 5 + confirmRows + gateRows + pbRows + trRows + pbStatsRows + trStatsRows + pbPointRows + trPointRows, bgcolor = panelBgColor, border_width = 1)
         table.cell(structPanel, 0, 0, "STRUCTURE", text_color = color.white, bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 1, 0, "", bgcolor = color.new(color.gray, 50))
         table.cell(structPanel, 0, 1, "Major trend", text_color = color.silver)
