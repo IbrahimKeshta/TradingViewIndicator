@@ -35,7 +35,9 @@ boxGridDivisions = input.int(8, "Box Grid Divisions", minval = 1, maxval = 20, g
 
 // ---------------- Square of 9 ----------------
 ringCount   = input.int(2, "Rings", minval = 1, maxval = 3, group = "Square of 9", tooltip = "Each ring is 16 levels at 22.5-degree increments. Capped at 3 so the table stays within Pine's 100-row limit.") // maxval 3 also caps levels/side at 3*16=48, which is what makes Max Touched Levels' "100 means show all" tooltip true — raising this maxval breaks that claim
-scaleFactor = input.float(1.0, "Scale Factor", minval = 0.001, group = "Square of 9", tooltip = "Controls level spacing. Higher values tighten the levels together, lower values spread them apart. Raise this on high-priced instruments where the default packs all levels into a narrow band.")
+autoScale   = input.bool(true, "Auto Scale to Volatility", group = "Square of 9", tooltip = "Sizes the spiral from the ATR held at the anchor, so one 22.5° step is about one bar's range on any instrument and any timeframe. Price alone cannot do this: it reads the same on a daily and a monthly chart, so a price-derived scale draws an identical grid on both and a single weekly bar can cross a whole revolution.")
+atrPerRev   = input.float(16.0, "ATRs per Revolution", minval = 1.0, maxval = 200.0, step = 1.0, group = "Square of 9", tooltip = "How far one full 360° revolution runs, counted in anchor ATRs. A revolution is 16 levels, so the default 16 leaves adjacent levels about one ATR apart — far enough that a single bar does not sweep several of them. Raise for a coarser grid, lower for a tighter one.")
+scaleFactor = input.float(1.0, "Scale Factor", minval = 0.001, group = "Square of 9", tooltip = "Used only when Auto Scale to Volatility is off, which gives literal unscaled Gann. Spacing is proportional to 1 / sqrt(anchor price x this), so higher values tighten the levels together and lower values spread them apart. A five-figure index needs a value well below 1; a sub-cent crypto needs a very large one.")
 
 // ---------------- Gann Time ----------------
 showTimeLines     = input.bool(true, "Show Time Lines", group = "Gann Time", tooltip = "Master switch for the vertical cycle lines at 30/45/60/90/120/144/180/270/360 bars forward from each anchor bar. Independent of Mode — cycles draw in all three.")
@@ -156,8 +158,10 @@ var float prevBearPrice = na
 var int   prevBearBar   = na
 var float prevBearUnit  = na
 
-bullAnchorChanged = bullAnchorReady and (na(prevBullPrice) or bullAnchorPrice != prevBullPrice or (modeInput != "Square of 9" and bullAnchorUnit != prevBullUnit))
-bearAnchorChanged = bearAnchorReady and (na(prevBearPrice) or bearAnchorPrice != prevBearPrice or (modeInput != "Square of 9" and bearAnchorUnit != prevBearUnit))
+// Every mode now reads the anchor's ATR — Square of 9 included, since its root is derived
+// from it — so a unit change rebuilds the levels in all of them.
+bullAnchorChanged = bullAnchorReady and (na(prevBullPrice) or bullAnchorPrice != prevBullPrice or bullAnchorUnit != prevBullUnit)
+bearAnchorChanged = bearAnchorReady and (na(prevBearPrice) or bearAnchorPrice != prevBearPrice or bearAnchorUnit != prevBearUnit)
 
 if bullAnchorChanged
     prevBullPrice := bullAnchorPrice
@@ -219,6 +223,40 @@ type GannLevel
 var array<GannLevel> bullLevels = array.new<GannLevel>()
 var array<GannLevel> bearLevels = array.new<GannLevel>()
 
+// Gann's spiral itself is untouched: 0.125 of root per 22.5°, so a full revolution adds the
+// classic +2. What has to be chosen is the root, because the root alone fixes the geometry —
+// a revolution costs ((root+2)/root)^2 - 1 whatever the price, and each 22.5° step is a
+// sixteenth of that. Sizing a revolution at atrPerRev ATRs and solving for the root gives the
+// line below, which leaves adjacent levels about one ATR apart on any instrument and any
+// timeframe. Price cannot stand in for volatility here: it is identical on a daily and a
+// monthly chart, so any price-derived root draws the same grid on both.
+square9IdealRoot(float startPrice, float unit) =>
+    startPrice > 0 and unit > 0 ? 2.0 / (math.sqrt(1.0 + atrPerRev * unit / startPrice) - 1.0) : float(na)
+
+// The root is used exactly as derived. An earlier attempt floored it at 4 per ring to stop
+// bearish levels reaching zero, but that floor bound on any chart volatile enough to want a
+// coarse grid — weekly and monthly EGX30 both hit it and came out with identical levels,
+// destroying the timeframe adaptation the ATR derivation exists to provide. The 1.0 below is
+// only a guard against a pathological anchor, not a working limit.
+//
+// Bearish levels descend as root - n*0.125 and genuinely run out once the steps catch the
+// root: the spiral has a floor, and on a very volatile chart fewer bearish rings fit than
+// bullish ones. buildSquare9's `offset > 0` test already drops those, which is the honest
+// answer — the wheel is asymmetric — rather than distorting every level to keep the count even.
+square9Root(float startPrice, float unit) =>
+    ideal = square9IdealRoot(startPrice, unit)
+    na(ideal) ? 8.0 : math.max(ideal, 1.0)
+
+// buildSquare9 recovers the root as sqrt(startPrice * scale), so hand back root^2 / price.
+square9Scale(float startPrice, float unit) =>
+    autoScale and startPrice > 0 ? math.pow(square9Root(startPrice, unit), 2) / startPrice : scaleFactor
+
+// The live root, surfaced on the Start row. It is the one number that fixes the whole
+// geometry, so showing it makes the scaling auditable instead of something to take on trust.
+s9AutoActive = modeInput == "Square of 9" and autoScale
+bullS9Root   = s9AutoActive and bullAnchorReady ? square9Root(bullAnchorPrice, bullAnchorUnit) : float(na)
+bearS9Root   = s9AutoActive and bearAnchorReady ? square9Root(bearAnchorPrice, bearAnchorUnit) : float(na)
+
 buildSquare9(array<GannLevel> target, float startPrice, int rings, float scale, float direction) =>
     root = math.sqrt(startPrice * scale)
     for r = 1 to rings
@@ -262,7 +300,7 @@ else
     if bullAnchorChanged
         array.clear(bullLevels)
         if modeInput == "Square of 9"
-            buildSquare9(bullLevels, bullAnchorPrice, ringCount, scaleFactor, 1.0)
+            buildSquare9(bullLevels, bullAnchorPrice, ringCount, square9Scale(bullAnchorPrice, bullAnchorUnit), 1.0)
         else
             buildFan(bullLevels, bullAnchorPrice, bullAnchorUnit, fanProjection, 1.0)
         if not bullManual
@@ -273,7 +311,7 @@ else
     if bearAnchorChanged
         array.clear(bearLevels)
         if modeInput == "Square of 9"
-            buildSquare9(bearLevels, bearAnchorPrice, ringCount, scaleFactor, -1.0)
+            buildSquare9(bearLevels, bearAnchorPrice, ringCount, square9Scale(bearAnchorPrice, bearAnchorUnit), -1.0)
         else
             buildFan(bearLevels, bearAnchorPrice, bearAnchorUnit, fanProjection, -1.0)
         if not bearManual
@@ -447,7 +485,7 @@ if barstate.islast
         if bullTableVisible and nextRow < rowCount
             table.cell(gannTable, 0, nextRow, "Bull Start", text_color = bullStartColor)
             table.cell(gannTable, 1, nextRow, str.tostring(bullAnchorPrice, format.mintick), text_color = color.white)
-            table.cell(gannTable, 2, nextRow, "—", text_color = color.gray)
+            table.cell(gannTable, 2, nextRow, na(bullS9Root) ? "—" : "root " + str.tostring(bullS9Root, "#.##"), text_color = color.gray)
             nextRow += 1
             for lvl in bullLevels
                 if nextRow < rowCount and passesFilter(lvl.isPrimary, bullishAngles) and passesTouchFilter(lvl, bullTouchCutoff)
@@ -459,7 +497,7 @@ if barstate.islast
         if bearTableVisible and nextRow < rowCount
             table.cell(gannTable, 0, nextRow, "Bear Start", text_color = bearStartColor)
             table.cell(gannTable, 1, nextRow, str.tostring(bearAnchorPrice, format.mintick), text_color = color.white)
-            table.cell(gannTable, 2, nextRow, "—", text_color = color.gray)
+            table.cell(gannTable, 2, nextRow, na(bearS9Root) ? "—" : "root " + str.tostring(bearS9Root, "#.##"), text_color = color.gray)
             nextRow += 1
             for lvl in bearLevels
                 if nextRow < rowCount and passesFilter(lvl.isPrimary, bearishAngles) and passesTouchFilter(lvl, bearTouchCutoff)

@@ -554,6 +554,48 @@ rest — per direction, and applied to the lines and labels as well as the table
 line with no row explaining it. Set it to `0` to hide touched levels entirely, or `100` to show
 everything.
 
+## Square of 9 scaling
+
+Gann's spiral adds **+2 to the square root of price per 360° revolution** — so 22.5° is `+0.125`,
+which is exactly what the level formula does and what makes a level a Gann level. That part is not
+negotiable and is untouched.
+
+What *is* a choice is the **root** the spiral starts from, and it turns out the root alone fixes the
+whole geometry: a revolution costs `((root+2)/root)² − 1` regardless of price, and each 22.5° step is
+a sixteenth of that. Pick the root badly and every level is wrong.
+
+Deriving it from **price** cannot work, for two independent reasons:
+
+- Price is identical on a daily and a monthly chart, so a price-derived root draws the same grid on
+  both. On a weekly chart that leaves a single candle crossing five levels — or twenty-two on SHIB.
+- Raw prices span ten orders of magnitude here. `√8598 = 92.7`, so an unscaled revolution on EGX30 is
+  4.4%; on sub-cent crypto the first level lands *thousands* of percent away and every bearish level
+  falls off the bottom of the spiral.
+
+So `Auto Scale to Volatility` (on by default) derives the root from the **ATR held at the anchor**,
+sizing one revolution at `ATRs per Revolution` (default 16). Since a revolution is 16 levels, that
+leaves adjacent levels about **one ATR apart** — far enough that routine single-bar noise cannot
+sweep several. It adapts on all three axes at once: coarser on monthly than weekly than daily, wider
+on volatile instruments, and unaffected by price magnitude because `ATR/price` is a ratio.
+
+Measured on EGX30 from one pinned anchor, changing nothing but the timeframe:
+
+| timeframe | root | step per level |
+|---|---|---|
+| Daily | 14.25 | 1.76% |
+| Weekly | 5.91 | 4.27% |
+| Monthly | 2.85 | 8.96% |
+
+Bearish levels descend as `root − n×0.125` and genuinely run out once the steps catch the root — the
+spiral has a floor, so on a volatile chart fewer bearish rings fit than bullish ones. That asymmetry
+is real and is left alone; an earlier attempt to force the count even by flooring the root bound on
+every chart coarse enough to need it, and handed weekly and monthly EGX30 identical levels.
+
+The Start row's Status cell shows the live **root**, since that single number fixes the whole
+geometry — it makes the scaling auditable instead of something to take on trust.
+
+Turn the switch off for literal unscaled Gann, dialled by hand with `Scale Factor`.
+
 ## Settings worth knowing
 
 | Setting | Default | What it does |
@@ -561,7 +603,9 @@ everything.
 | Mode | Square of 9 | Which geometry to draw |
 | Swing Pivot Lookback | 50 | How major a turn must be to anchor to. Higher = fewer, bigger anchors, confirmed later |
 | Rings *(Square of 9)* | 2 | Each ring is 16 levels. Max 3 |
-| Scale Factor *(Square of 9)* | 1.0 | Raise this on high-priced instruments where all the levels bunch into a narrow band |
+| Auto Scale to Volatility *(Square of 9)* | on | Derives the spiral's root from the anchor ATR so levels land ~1 ATR apart on any instrument and timeframe. See above |
+| ATRs per Revolution *(Square of 9)* | 16 | How far a full 360° turn runs, in anchor ATRs. 16 levels per revolution, so 16 ≈ one ATR per level. Raise to coarsen |
+| Scale Factor *(Square of 9)* | 1.0 | Only read with Auto Scale off. Spacing goes as 1/√(anchor price × this): higher tightens, lower spreads |
 | ATR Length | 14 | Sets the price-per-bar unit for Fan slopes and Square width. Sampled once at the anchor and held, so the geometry does not drift |
 | Max Touched Levels | 5 | Per direction. See above |
 

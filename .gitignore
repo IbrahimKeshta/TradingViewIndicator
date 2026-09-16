@@ -6,3 +6,8 @@
 # Nothing under here is shareable — settings.local.json is per-machine, and
 # worktrees/ holds nested checkouts whose .git files point at absolute paths.
 .claude/
+
+# Playwright MCP browser artifacts: screenshots, page snapshots and console logs
+# captured while driving TradingView. Session debris, and the snapshots contain
+# logged-in account state.
+.playwright-mcp/
