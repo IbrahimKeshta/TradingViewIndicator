@@ -143,6 +143,7 @@ flowchart LR
         H1["Internal trend<br/>has a direction"]
         H2["Price touched an unmitigated<br/>FVG or order block"]
         H3["Not in a range"]
+        H5["HTF bias agrees<br/><i>only with Require HTF Bias</i>"]
         H4["Bar is closed"]
     end
     subgraph S["SCORED — one point each"]
@@ -162,6 +163,14 @@ flowchart LR
 
 The hard four are absolute because without them there is nothing to compute — no direction means no
 side, and no zone means no entry price and no stop.
+
+**Two optional trade filters** sit alongside them, both off by default (**Trade Filters** in
+Settings). `Require HTF Bias` adds a fifth hard condition: the trade must agree with structure on a
+higher timeframe, read one closed HTF bar back so it never repaints. `Require Displacement` acts
+earlier — it stops weak zones being created at all, so a gap or order block that did not come from a
+real impulse candle is never drawn and never traded. They are filters rather than score points on
+purpose: the score's direction has not held up consistently across symbols, so these decide which
+setups exist instead of adding votes to it.
 
 **The score is out of however many points you switch on, not a fixed seven.** That is deliberate.
 Killzones mean nothing on a single-session market like EGX, so if killzone were a mandatory veto the
@@ -352,6 +361,7 @@ is the one thing to act on, in the order the gate applies its checks:
 |---|---|
 | `no trend` | The internal tier has no direction yet |
 | `in range` | Price is inside a major range — the engine stands down |
+| `htf bias` | `Require HTF Bias` is on and higher-timeframe structure points the other way, or has no direction yet |
 | `no zone touch` | **The common one.** Price has not traded back into an FVG or order block. This is a hard requirement, not a scored point: no amount of score tuning produces a trade while it reads this |
 | `score short` | Everything structural is met and the score is below `Minimum Score` |
 | `bar not closed` | Everything is met and the bar is still live. On a daily chart this is what you see while waiting for the close |
@@ -459,6 +469,18 @@ claiming to quote a price or an R figure.
 | Show Gate Panel Row | on | One row naming what is currently stopping a trade, with the live score |
 | Show Performance Rows | on | Win rate, average R and a per-grade split over the loaded history. The counters run whether or not this is on |
 | Show Confirmation Point Stats | off | Avg R when each of the 7 confirmation points was true vs. false at entry — independent of whether the point currently counts toward the score. Off by default; adds up to 7 rows per model |
+
+**Trade Filters** — hard filters for the pullback model, both off by default. With both off, results
+are identical to running without them.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Require HTF Bias | off | Only take trades in the direction of the last higher-timeframe structure break. No HTF break yet means no bias and no trade. Turns itself off when the chart is at or above Bias Timeframe |
+| Bias Timeframe | 1D | Use 1D on 1H–4H charts, 1W on a daily chart |
+| HTF Swing Lookback | 5 | Swing size on the higher timeframe, in HTF bars |
+| Require Displacement | off | Only create FVGs and order blocks born from an impulse candle. Filtered zones are never drawn, alerted or traded |
+| Displacement (× ATR) | 1.0 | Minimum body of that impulse candle — the FVG's middle candle, or the candle that broke structure for an order block |
+| Min FVG Size (× ATR) | 0.3 | Minimum gap height for an FVG |
 
 **Confirmations** — three more scored points, five indicators.
 

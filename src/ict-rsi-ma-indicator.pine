@@ -88,6 +88,17 @@ showTradeHistory   = input.bool(true, "Show Trade History", group = "Trade Engin
 showTradePanel     = input.bool(true, "Show Trade Panel Rows", group = "Trade Engine")
 showGatePanel      = input.bool(true, "Show Gate Panel Row", group = "Trade Engine", tooltip = "One row naming what is currently stopping a trade, with the live score beside it. Without it the score is only ever rendered inside a live trade's rows, so on a bar where nothing fires there is no surface anywhere that reflects a scoring input you just changed.")
 showStatsPanel     = input.bool(true, "Show Performance Rows", group = "Trade Engine", tooltip = "Win rate, average R, total R and a per-grade breakdown over every trade in the loaded history.\n\nResults assume one third of the position leaves at each target reached — the engine itself manages one unit, so this is an accounting convention. The live trade's Open R row is single-unit and will not match.\n\nThe counters run whether or not this is on; hiding the rows never resets them. The sample is whatever history TradingView loaded, so read n before trusting a percentage.\n\nA trade that closes at exactly 0.0R counts as neither a win nor a loss, so W + L can come to one less than n.")
+// ---------------- Trade Filters ----------------
+// Hard filters, not score points: the score's direction is inconsistent across symbols on the
+// record so far, so these decide which setups exist at all rather than adding more votes to it.
+// Both default off, and with both off the engine must reproduce the earlier record exactly.
+requireHtfBias     = input.bool(false, "Require HTF Bias", group = "Trade Filters", tooltip = "Only take a pullback trade in the direction of higher-timeframe structure: the side of the last closed HTF bar's break through a confirmed HTF swing high or low. Until the HTF has broken a swing at all there is no bias, and no trade.\n\nRead one closed HTF bar back, so it never reports a bias the chart could not have seen at the time. Disables itself when the chart timeframe is at or above Bias Timeframe.")
+htfBiasTf          = input.timeframe("1D", "Bias Timeframe", group = "Trade Filters", tooltip = "Pick a timeframe well above the chart's: 1D for 1H–4H charts, 1W for a daily chart.")
+htfSwingLen        = input.int(5, "HTF Swing Lookback", minval = 2, maxval = 50, group = "Trade Filters", tooltip = "Bars either side an HTF bar must dominate to count as a swing, measured in HTF bars.")
+requireDisplacement = input.bool(false, "Require Displacement", group = "Trade Filters", tooltip = "Only create zones that were born from a real impulse. A fair value gap must be at least Min FVG Size wide and its middle candle's body at least Displacement in the gap's direction; an order block is only kept when the candle that broke structure has a body of at least Displacement.\n\nApplied when a zone is created, so a rejected zone is never drawn, never alerts and never trades.")
+dispMult           = input.float(1.0, "Displacement (x ATR)", minval = 0.1, step = 0.1, group = "Trade Filters", tooltip = "Minimum body of the impulse candle, in Structure ATR.")
+fvgMinAtr          = input.float(0.3, "Min FVG Size (x ATR)", minval = 0.0, step = 0.05, group = "Trade Filters", tooltip = "Minimum gap height, in Structure ATR.")
+
 showPointStats     = input.bool(false, "Show Confirmation Point Stats", group = "Trade Engine", tooltip = "Per-confirmation-point breakdown: average R on closed trades where that point was true at entry, versus where it was false — independent of whether the point currently counts toward the score, so it also shows what a disabled point would have correlated with.\n\nOff by default: adds up to 7 rows per model to the panel, and exists to answer one question (does this specific point actually track the trades that worked) rather than for everyday use.")
 tradeLongColor     = input.color(color.teal, "Long", group = "Trade Engine")
 tradeShortColor    = input.color(color.maroon, "Short", group = "Trade Engine")
@@ -432,8 +443,12 @@ bearTouch.tier   := na
 bullishFvgTouched = mitigateZones(bullishFvgZones, true, bullTouch)
 bearishFvgTouched = mitigateZones(bearishFvgZones, false, bearTouch)
 
-bullishFvgDetected = barstate.isconfirmed and showFVG and low > high[2]
-bearishFvgDetected = barstate.isconfirmed and showFVG and high < low[2]
+// With Require Displacement off both of these are true, so detection is exactly the old 3-bar test.
+bullFvgDispOk = not requireDisplacement or (structAtr > 0 and low - high[2] >= fvgMinAtr * structAtr and close[1] - open[1] >= dispMult * structAtr)
+bearFvgDispOk = not requireDisplacement or (structAtr > 0 and low[2] - high >= fvgMinAtr * structAtr and open[1] - close[1] >= dispMult * structAtr)
+
+bullishFvgDetected = barstate.isconfirmed and showFVG and low > high[2] and bullFvgDispOk
+bearishFvgDetected = barstate.isconfirmed and showFVG and high < low[2] and bearFvgDispOk
 
 if bullishFvgDetected
     newBullishFvg = box.new(bar_index[2], low, bar_index, high[2], border_color = color.new(color.teal, 40), bgcolor = color.new(color.teal, 85))
@@ -479,7 +494,11 @@ findOppositeCandle(isBullishBreak) =>
 bullishObTouched = mitigateZones(bullishObZones, true, bullTouch)
 bearishObTouched = mitigateZones(bearishObZones, false, bearTouch)
 
-if barstate.isconfirmed and showOB and (majorState.bullBreak or (showInternalOb and intState.bullBreak))
+// The breaking bar is the current bar, so its body is the displacement. Same measure as the
+// tier's lastStrength, computed here so both tiers read it identically.
+obDispOk = not requireDisplacement or (structAtr > 0 and math.abs(close - open) >= dispMult * structAtr)
+
+if barstate.isconfirmed and showOB and obDispOk and (majorState.bullBreak or (showInternalOb and intState.bullBreak))
     obTier = majorState.bullBreak ? "MAJOR" : "INTERNAL"
     obTrans = obTier == "MAJOR" ? 40 : 70
     obFill = obTier == "MAJOR" ? 85 : 92
@@ -490,7 +509,7 @@ if barstate.isconfirmed and showOB and (majorState.bullBreak or (showInternalOb 
         array.push(bullishObZones, Zone.new(newBullishOb, newBullishObLabel, obTier, "bull"))
         pruneTier(bullishObZones, obTier, obMaxCount)
 
-if barstate.isconfirmed and showOB and (majorState.bearBreak or (showInternalOb and intState.bearBreak))
+if barstate.isconfirmed and showOB and obDispOk and (majorState.bearBreak or (showInternalOb and intState.bearBreak))
     obTier = majorState.bearBreak ? "MAJOR" : "INTERNAL"
     obTrans = obTier == "MAJOR" ? 40 : 70
     obFill = obTier == "MAJOR" ? 85 : 92
@@ -796,8 +815,41 @@ pointsRaw(bool isLong) =>
 gradeFor(int score, int ofPoints) =>
     score * 100 >= 90 * ofPoints ? "A" : score * 100 >= 75 * ofPoints ? "B" : "C"
 
-bullHardOk = intState.trend == "up" and bullTouch.hit and not inRange and barstate.isconfirmed
-bearHardOk = intState.trend == "down" and bearTouch.hit and not inRange and barstate.isconfirmed
+// HTF structure bias, evaluated inside the HTF context: 1 after a close through the latest
+// confirmed swing high, -1 after a close through the latest swing low, 0 before either. A level
+// is consumed once broken, so the bias only flips on a fresh swing — the same break semantics as
+// processTier, without its tiers, EQH/EQL or drawing.
+htfBiasCalc(int len) =>
+    ph = ta.pivothigh(high, len, len)
+    pl = ta.pivotlow(low, len, len)
+    var float lvlHigh = na
+    var float lvlLow  = na
+    var int   bias    = 0
+    if not na(ph)
+        lvlHigh := ph
+    if not na(pl)
+        lvlLow := pl
+    if not na(lvlHigh) and close > lvlHigh
+        bias    := 1
+        lvlHigh := na
+    if not na(lvlLow) and close < lvlLow
+        bias   := -1
+        lvlLow := na
+    bias
+
+// [1] with lookahead_on is the non-repainting idiom: every chart bar sees the last CLOSED HTF
+// bar's value, on history and in realtime alike. Called unconditionally so the filter's on/off
+// state can never change what the request itself does.
+htfBiasRaw = request.security(syminfo.tickerid, htfBiasTf, htfBiasCalc(htfSwingLen)[1], lookahead = barmerge.lookahead_on)
+htfBias    = nz(htfBiasRaw, 0)
+htfActive  = requireHtfBias and timeframe.in_seconds(htfBiasTf) > timeframe.in_seconds(timeframe.period)
+htfLongOk  = not htfActive or htfBias == 1
+htfShortOk = not htfActive or htfBias == -1
+
+plot(htfBias, "DBG HTF Bias (1/-1/0)", display = display.data_window)
+
+bullHardOk = intState.trend == "up" and bullTouch.hit and not inRange and htfLongOk and barstate.isconfirmed
+bearHardOk = intState.trend == "down" and bearTouch.hit and not inRange and htfShortOk and barstate.isconfirmed
 
 var int    setupScoreVal = 0
 var int    setupOfVal    = 0
@@ -846,7 +898,8 @@ gateTouch = gateLong ? bullTouch.hit : bearTouch.hit
 // act on rather than everything that happens to be false. Score is reported before the bar-close
 // check because it is the actionable one: "bar not closed" on a live bar means every other
 // requirement is already met and the daily close is all that is outstanding.
-gateReason = na(intState.trend) ? "no trend" : inRange ? "in range" : not gateTouch ? "no zone touch" : gateScore < minScore ? "score short" : not barstate.isconfirmed ? "bar not closed" : "READY"
+gateHtfOk  = gateLong ? htfLongOk : htfShortOk
+gateReason = na(intState.trend) ? "no trend" : inRange ? "in range" : not gateHtfOk ? "htf bias" : not gateTouch ? "no zone touch" : gateScore < minScore ? "score short" : not barstate.isconfirmed ? "bar not closed" : "READY"
 gateReady  = gateReason == "READY"
 
 plot(bullTouch.hit ? 1 : 0, "DBG Bull Zone Touch (1/0)", display = display.data_window)
