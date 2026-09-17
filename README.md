@@ -186,10 +186,17 @@ trade (`Log Closed Trades`, below) and reading it back showed that on two symbol
 over half of all trades never even reached 1R in their favor before failing — drifting against the
 position for several bars rather than failing instantly, the signature of a touch that fires before
 the reversal has actually started. Neither HTF Bias (which checks direction) nor Displacement (which
-checks the zone's formation) touches that mechanism; Confirmation targets it directly. See
-`docs/superpowers/plans/2026-09-17-trade-log-root-cause-diagnosis.md` for the data, and check the
-plans folder for a dated validation doc before trusting this filter at its defaults — it may not
-have one yet.
+checks the zone's formation) touches that mechanism; Confirmation targets it directly. Full data in
+`docs/superpowers/plans/2026-09-17-trade-log-root-cause-diagnosis.md`.
+
+**Tested, and it splits cleanly by market.** Across the same ten charts as the HTF/Displacement
+test: **all four EGX daily charts improved substantially** — Avg R roughly tripled on two of them,
+and one flipped from a small loss to solidly positive, with both B and C grades landing positive on
+every one of them. **Crypto 4H/1H was mixed to worse** — two charts improved marginally, four gave
+back real R, one by nearly nine-tenths. Read as one number the filter still roughly doubled pooled
+Avg R (+0.078 → +0.159), but that average hides the split. **Recommendation: turn this on for EGX
+daily equities; leave it off for crypto intraday, or test per symbol there.** Default stays off.
+Full readings in `docs/superpowers/plans/2026-09-18-confirmation-filter-validation.md`.
 
 **The score is out of however many points you switch on, not a fixed seven.** That is deliberate.
 Killzones mean nothing on a single-session market like EGX, so if killzone were a mandatory veto the
