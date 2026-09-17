@@ -904,8 +904,8 @@ gateReady  = gateReason == "READY"
 
 plot(bullTouch.hit ? 1 : 0, "DBG Bull Zone Touch (1/0)", display = display.data_window)
 plot(bearTouch.hit ? 1 : 0, "DBG Bear Zone Touch (1/0)", display = display.data_window)
-plot(inRange ? 1 : 0, "DBG In Range (1/0)", display = display.data_window)
-plot(intState.trend == "up" ? 1 : intState.trend == "down" ? -1 : 0, "DBG Internal Trend (1/-1/0)", display = display.data_window)
+// DBG In Range and DBG Internal Trend are plotted once, in the structure engine. They were
+// duplicated here, and Pine caps a script at 64 plots.
 plot(bullHardOk ? 1 : 0, "DBG Bull Hard Gate (1/0)", display = display.data_window)
 plot(bearHardOk ? 1 : 0, "DBG Bear Hard Gate (1/0)", display = display.data_window)
 // The live pair, published every bar — unlike DBG Setup Score/Of, which report only a setup that
