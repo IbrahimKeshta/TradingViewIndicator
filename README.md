@@ -172,6 +172,12 @@ real impulse candle is never drawn and never traded. They are filters rather tha
 purpose: the score's direction has not held up consistently across symbols, so these decide which
 setups exist instead of adding votes to it.
 
+**Tested, and not an improvement at their defaults.** Across ten charts (four EGX dailies; ETH, SOL
+and XRP on 4H and 1H), each filter raised average R on only four, and every filtered setting did
+worse than no filter when the charts were pooled. They helped weak baselines and hurt strong ones.
+Leave them off unless you are testing them on your own symbol. Full readings are in
+`docs/superpowers/plans/2026-09-17-htf-displacement-filter-validation.md`.
+
 **The score is out of however many points you switch on, not a fixed seven.** That is deliberate.
 Killzones mean nothing on a single-session market like EGX, so if killzone were a mandatory veto the
 indicator would go permanently silent there. Switch the killzone point off and the panel reads `5/6`
