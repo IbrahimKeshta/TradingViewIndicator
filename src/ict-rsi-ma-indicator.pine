@@ -99,6 +99,7 @@ requireDisplacement = input.bool(false, "Require Displacement", group = "Trade F
 dispMult           = input.float(1.0, "Displacement (x ATR)", minval = 0.1, step = 0.1, group = "Trade Filters", tooltip = "Minimum body of the impulse candle, in Structure ATR.")
 fvgMinAtr          = input.float(0.3, "Min FVG Size (x ATR)", minval = 0.0, step = 0.05, group = "Trade Filters", tooltip = "Minimum gap height, in Structure ATR.")
 
+logTrades          = input.bool(false, "Log Closed Trades", group = "Trade Engine", tooltip = "Writes one CSV line per closed trade to the Pine Logs panel: times, zone type, levels, result in R, best and worst excursion in R, bars held, and the seven confirmation points. For diagnosing losing trades one by one. Off by default.")
 showPointStats     = input.bool(false, "Show Confirmation Point Stats", group = "Trade Engine", tooltip = "Per-confirmation-point breakdown: average R on closed trades where that point was true at entry, versus where it was false — independent of whether the point currently counts toward the score, so it also shows what a disabled point would have correlated with.\n\nOff by default: adds up to 7 rows per model to the panel, and exists to answer one question (does this specific point actually track the trades that worked) rather than for everyday use.")
 tradeLongColor     = input.color(color.teal, "Long", group = "Trade Engine")
 tradeShortColor    = input.color(color.maroon, "Short", group = "Trade Engine")
@@ -1044,6 +1045,14 @@ type Trade
     bool   ptBreakStrength
     bool   ptParticipation
     bool   ptIchimoku
+    // Diagnostics for the trade log only; nothing in the engine reads them. Defaults let every
+    // existing positional Trade.new call stay as it is.
+    // Best and worst excursion from entry, in price, over the bars after the entry bar. On the
+    // exit bar the whole bar counts, since intrabar order is unknown.
+    float  mfe      = 0.0
+    float  mae      = 0.0
+    // Touch.tier of the zone that opened the trade: "" for an FVG, "MAJOR"/"INTERNAL" for an OB.
+    string zoneTier = na
 
 // Two independent slots, one per entry model, deliberately stored as two named vars rather than
 // an array: assigning one slot's object into the other would ALIAS them — Pine UDTs are
@@ -1194,6 +1203,8 @@ advanceTrade(Trade t) =>
     if barstate.isconfirmed
         if tradeLiveOf(t)
             isLong = t.side == "long"
+            t.mfe := math.max(t.mfe, isLong ? high - t.entry : t.entry - low)
+            t.mae := math.max(t.mae, isLong ? t.entry - low : high - t.entry)
             // Wick mode asks whether price REACHED the stop; close mode asks whether it HELD
             // there. The distinction only matters on the bars that wick through and close back —
             // which on a thin daily is most of them, and is the whole reason the toggle exists.
@@ -1307,6 +1318,29 @@ if pbClosed
 if trClosed
     trailClosedR := recordResult(trailTrade, MODEL_TRAIL)
 
+// One CSV line per closed trade in the Pine Logs panel — the raw material for diagnosing losses
+// trade by trade, which the aggregate panel cannot do. Header:
+// TRADE,model,symbol,tf,open,close,side,grade,score,of,zone,entry,stop,tp1,tp2,tp3,tpHit,reason,
+// exit,R,mfeR,maeR,bars,riskAtr,kz,mom,ma,maj,brk,part,ichi
+b2(bool v) =>
+    v ? "1" : "0"
+
+logTrade(Trade t, string model, float r) =>
+    rr = math.abs(t.entry - t.initialStop)
+    zone = na(t.zoneTier) ? "-" : t.zoneTier == "" ? "FVG" : "OB-" + t.zoneTier
+    tf = "yyyy-MM-dd HH:mm"
+    line = str.format("TRADE,{0},{1},{2},{3},{4},{5},{6},{7},{8},{9}", model, syminfo.ticker, timeframe.period, str.format_time(time[bar_index - t.openBar], tf, syminfo.timezone), str.format_time(time, tf, syminfo.timezone), t.side, t.grade, t.score, t.scoreOf, zone)
+    line += str.format(",{0},{1},{2},{3},{4},{5},{6},{7}", str.tostring(t.entry), str.tostring(t.initialStop), str.tostring(t.tp1), str.tostring(t.tp2), str.tostring(t.tp3), t.tpHit, t.closeReason, str.tostring(t.closePrice))
+    line += str.format(",{0},{1},{2},{3},{4}", str.tostring(r, "0.00"), str.tostring(rr > 0 ? t.mfe / rr : 0.0, "0.00"), str.tostring(rr > 0 ? t.mae / rr : 0.0, "0.00"), bar_index - t.openBar, str.tostring(structAtr > 0 ? rr / structAtr : 0.0, "0.00"))
+    line += "," + b2(t.ptKillzone) + "," + b2(t.ptMomentum) + "," + b2(t.ptMa) + "," + b2(t.ptMajorAgree) + "," + b2(t.ptBreakStrength) + "," + b2(t.ptParticipation) + "," + b2(t.ptIchimoku)
+    log.info(line)
+    line
+
+if logTrades and pbClosed
+    logTrade(activeTrade, "PB", closedR)
+if logTrades and trClosed
+    logTrade(trailTrade, "TR", trailClosedR)
+
 // ---- free each slot, never on its own closing bar ----
 // Nested rather than `and`-chained, for the same reason tradeLiveOf() is.
 if not na(activeTrade)
@@ -1358,6 +1392,7 @@ if canOpen and longSetup
             tg   = selectTargets(true, close, risk, minTargetR)
             [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(true)
             activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi)
+            activeTrade.zoneTier := bullTouch.tier
             tradeOpened := true
             openedSide  := "long"
 if na(activeTrade) and shortSetup and not longOnly
@@ -1370,6 +1405,7 @@ if na(activeTrade) and shortSetup and not longOnly
             tg   = selectTargets(false, close, risk, minTargetR)
             [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(false)
             activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi)
+            activeTrade.zoneTier := bearTouch.tier
             tradeOpened := true
             openedSide  := "short"
 
