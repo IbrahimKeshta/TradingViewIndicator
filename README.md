@@ -141,7 +141,7 @@ Two different kinds of condition, and the difference matters:
 flowchart LR
     subgraph H["HARD — all four, or no trade"]
         H1["Internal trend<br/>has a direction"]
-        H2["Price touched an unmitigated<br/>FVG or order block"]
+        H2["Price touched an unmitigated<br/>FVG or order block<br/><i>+ a confirming candle, only with<br/>Require Confirmation</i>"]
         H3["Not in a range"]
         H5["HTF bias agrees<br/><i>only with Require HTF Bias</i>"]
         H4["Bar is closed"]
@@ -164,19 +164,32 @@ flowchart LR
 The hard four are absolute because without them there is nothing to compute — no direction means no
 side, and no zone means no entry price and no stop.
 
-**Two optional trade filters** sit alongside them, both off by default (**Trade Filters** in
+**Three optional trade filters** sit alongside them, all off by default (**Trade Filters** in
 Settings). `Require HTF Bias` adds a fifth hard condition: the trade must agree with structure on a
 higher timeframe, read one closed HTF bar back so it never repaints. `Require Displacement` acts
 earlier — it stops weak zones being created at all, so a gap or order block that did not come from a
-real impulse candle is never drawn and never traded. They are filters rather than score points on
-purpose: the score's direction has not held up consistently across symbols, so these decide which
-setups exist instead of adding votes to it.
+real impulse candle is never drawn and never traded. `Require Confirmation` changes *when* a touch
+counts: instead of trading the touch bar itself, it remembers the touch and waits up to
+`Confirmation Max Wait` bars for a candle that closes in the trade's direction, using the original
+touch's zone and stop the whole time. They are filters rather than score points on purpose: the
+score's direction has not held up consistently across symbols, so these decide which setups exist
+instead of adding votes to it.
 
-**Tested, and not an improvement at their defaults.** Across ten charts (four EGX dailies; ETH, SOL
-and XRP on 4H and 1H), each filter raised average R on only four, and every filtered setting did
-worse than no filter when the charts were pooled. They helped weak baselines and hurt strong ones.
-Leave them off unless you are testing them on your own symbol. Full readings are in
-`docs/superpowers/plans/2026-09-17-htf-displacement-filter-validation.md`.
+**HTF Bias and Displacement: tested, and not an improvement at their defaults.** Across ten charts
+(four EGX dailies; ETH, SOL and XRP on 4H and 1H), each filter raised average R on only four, and
+every filtered setting did worse than no filter when the charts were pooled. They helped weak
+baselines and hurt strong ones. Leave them off unless you are testing them on your own symbol. Full
+readings are in `docs/superpowers/plans/2026-09-17-htf-displacement-filter-validation.md`.
+
+**Require Confirmation exists because of what those two tests ruled out.** Logging every closed
+trade (`Log Closed Trades`, below) and reading it back showed that on two symbols independently,
+over half of all trades never even reached 1R in their favor before failing — drifting against the
+position for several bars rather than failing instantly, the signature of a touch that fires before
+the reversal has actually started. Neither HTF Bias (which checks direction) nor Displacement (which
+checks the zone's formation) touches that mechanism; Confirmation targets it directly. See
+`docs/superpowers/plans/2026-09-17-trade-log-root-cause-diagnosis.md` for the data, and check the
+plans folder for a dated validation doc before trusting this filter at its defaults — it may not
+have one yet.
 
 **The score is out of however many points you switch on, not a fixed seven.** That is deliberate.
 Killzones mean nothing on a single-session market like EGX, so if killzone were a mandatory veto the
@@ -368,6 +381,7 @@ is the one thing to act on, in the order the gate applies its checks:
 | `no trend` | The internal tier has no direction yet |
 | `in range` | Price is inside a major range — the engine stands down |
 | `htf bias` | `Require HTF Bias` is on and higher-timeframe structure points the other way, or has no direction yet |
+| `awaiting confirmation` | `Require Confirmation` is on and a touch is being watched for a same-direction candle. Clears itself, one way or the other, within `Confirmation Max Wait` bars |
 | `no zone touch` | **The common one.** Price has not traded back into an FVG or order block. This is a hard requirement, not a scored point: no amount of score tuning produces a trade while it reads this |
 | `score short` | Everything structural is met and the score is below `Minimum Score` |
 | `bar not closed` | Everything is met and the bar is still live. On a daily chart this is what you see while waiting for the close |
@@ -476,7 +490,7 @@ claiming to quote a price or an R figure.
 | Show Performance Rows | on | Win rate, average R and a per-grade split over the loaded history. The counters run whether or not this is on |
 | Show Confirmation Point Stats | off | Avg R when each of the 7 confirmation points was true vs. false at entry — independent of whether the point currently counts toward the score. Off by default; adds up to 7 rows per model |
 
-**Trade Filters** — hard filters for the pullback model, both off by default. With both off, results
+**Trade Filters** — hard filters for the pullback model, all off by default. With all off, results
 are identical to running without them.
 
 | Setting | Default | What it does |
@@ -487,6 +501,8 @@ are identical to running without them.
 | Require Displacement | off | Only create FVGs and order blocks born from an impulse candle. Filtered zones are never drawn, alerted or traded |
 | Displacement (× ATR) | 1.0 | Minimum body of that impulse candle — the FVG's middle candle, or the candle that broke structure for an order block |
 | Min FVG Size (× ATR) | 0.3 | Minimum gap height for an FVG |
+| Require Confirmation | off | Don't trade the touch bar. Remember the touch and wait for a candle that closes in the trade's direction, up to Confirmation Max Wait bars later — using the original touch's zone and stop throughout |
+| Confirmation Max Wait (bars) | 3 | A touch with no confirming candle within this many bars is abandoned, not taken late |
 
 **Confirmations** — three more scored points, five indicators.
 

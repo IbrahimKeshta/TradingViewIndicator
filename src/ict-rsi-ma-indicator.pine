@@ -98,6 +98,8 @@ htfSwingLen        = input.int(5, "HTF Swing Lookback", minval = 2, maxval = 50,
 requireDisplacement = input.bool(false, "Require Displacement", group = "Trade Filters", tooltip = "Only create zones that were born from a real impulse. A fair value gap must be at least Min FVG Size wide and its middle candle's body at least Displacement in the gap's direction; an order block is only kept when the candle that broke structure has a body of at least Displacement.\n\nApplied when a zone is created, so a rejected zone is never drawn, never alerts and never trades.")
 dispMult           = input.float(1.0, "Displacement (x ATR)", minval = 0.1, step = 0.1, group = "Trade Filters", tooltip = "Minimum body of the impulse candle, in Structure ATR.")
 fvgMinAtr          = input.float(0.3, "Min FVG Size (x ATR)", minval = 0.0, step = 0.05, group = "Trade Filters", tooltip = "Minimum gap height, in Structure ATR.")
+requireConfirmation = input.bool(false, "Require Confirmation", group = "Trade Filters", tooltip = "Root-cause finding 2026-09-17: over half of all pullback trades never even reach 1R in their favor before failing, drifting adversely for several bars rather than failing instantly — the signature of a touch that fires before the reversal has actually started.\n\nWith this on, a zone touch is remembered rather than traded immediately. Entry only fires once a later bar (up to Confirmation Max Wait bars after the touch) closes in the trade's direction without the zone having invalidated first. The entry price, stop and targets still come from the ORIGINAL touch's zone, not the confirmation bar — only the timing of the decision moves.\n\nOff by default; with it off the engine enters on the touch bar exactly as it always has.")
+confirmMaxWait      = input.int(3, "Confirmation Max Wait (bars)", minval = 1, maxval = 20, group = "Trade Filters", tooltip = "A touch that hasn't produced a same-direction candle within this many bars is abandoned — that trade is never taken, not taken late.")
 
 logTrades          = input.bool(false, "Log Closed Trades", group = "Trade Engine", tooltip = "Writes one CSV line per closed trade to the Pine Logs panel: times, zone type, levels, result in R, best and worst excursion in R, bars held, and the seven confirmation points. For diagnosing losing trades one by one. Off by default.")
 showPointStats     = input.bool(false, "Show Confirmation Point Stats", group = "Trade Engine", tooltip = "Per-confirmation-point breakdown: average R on closed trades where that point was true at entry, versus where it was false — independent of whether the point currently counts toward the score, so it also shows what a disabled point would have correlated with.\n\nOff by default: adds up to 7 rows per model to the panel, and exists to answer one question (does this specific point actually track the trades that worked) rather than for everyday use.")
@@ -495,6 +497,78 @@ findOppositeCandle(isBullishBreak) =>
 bullishObTouched = mitigateZones(bullishObZones, true, bullTouch)
 bearishObTouched = mitigateZones(bearishObZones, false, bearTouch)
 
+// ============================================================
+// TOUCH CONFIRMATION (Require Confirmation)
+// ============================================================
+// bullTouch/bearTouch are now final for this bar — both FVG and OB mitigation have run. With
+// Require Confirmation off, none of this runs and the hard gate below reads bullTouch/bearTouch
+// directly, exactly as it always has.
+//
+// With it on: a touch is remembered rather than traded on its own bar. "First touch wins" the
+// same way mitigateZones already prioritises — a second touch cannot start a new pending entry
+// while one is already waiting. The pending zone's top/bottom/tier are snapshotted at the touch,
+// not re-read later, so a confirmed entry still prices off the zone that was actually touched.
+var bool   pendingBullActive = false
+var float  pendingBullTop    = na
+var float  pendingBullBot    = na
+var string pendingBullTier   = na
+var int    pendingBullBars   = 0
+
+var bool   pendingBearActive = false
+var float  pendingBearTop    = na
+var float  pendingBearBot    = na
+var string pendingBearTier   = na
+var int    pendingBearBars   = 0
+
+bullConfirmedNow = false
+bearConfirmedNow = false
+
+if requireConfirmation and barstate.isconfirmed
+    if not pendingBullActive and bullTouch.hit
+        pendingBullActive := true
+        pendingBullTop    := bullTouch.top
+        pendingBullBot    := bullTouch.bottom
+        pendingBullTier   := bullTouch.tier
+        pendingBullBars   := 0
+    else if pendingBullActive
+        pendingBullBars += 1
+        bullishCandle = close > open
+        // Same buffer the stop itself uses — a wick this far below the zone is the zone failing,
+        // not just a slow reversal, and no later candle should resurrect it.
+        invalidated   = close < pendingBullBot - stopBufferMult * structAtr
+        if invalidated or pendingBullBars > confirmMaxWait
+            pendingBullActive := false
+        else if bullishCandle
+            bullConfirmedNow := true
+            pendingBullActive := false
+
+    if not pendingBearActive and bearTouch.hit
+        pendingBearActive := true
+        pendingBearTop    := bearTouch.top
+        pendingBearBot    := bearTouch.bottom
+        pendingBearTier   := bearTouch.tier
+        pendingBearBars   := 0
+    else if pendingBearActive
+        pendingBearBars += 1
+        bearishCandle = close < open
+        invalidated   = close > pendingBearTop + stopBufferMult * structAtr
+        if invalidated or pendingBearBars > confirmMaxWait
+            pendingBearActive := false
+        else if bearishCandle
+            bearConfirmedNow := true
+            pendingBearActive := false
+
+// The hard gate and the entry block both read through these, so "confirmation off" and
+// "confirmation on but not yet confirmed" look identical to everything downstream.
+effBullHit  = requireConfirmation ? bullConfirmedNow : bullTouch.hit
+effBullTop  = requireConfirmation ? pendingBullTop    : bullTouch.top
+effBullBot  = requireConfirmation ? pendingBullBot    : bullTouch.bottom
+effBullTier = requireConfirmation ? pendingBullTier   : bullTouch.tier
+effBearHit  = requireConfirmation ? bearConfirmedNow : bearTouch.hit
+effBearTop  = requireConfirmation ? pendingBearTop    : bearTouch.top
+effBearBot  = requireConfirmation ? pendingBearBot    : bearTouch.bottom
+effBearTier = requireConfirmation ? pendingBearTier   : bearTouch.tier
+
 // The breaking bar is the current bar, so its body is the displacement. Same measure as the
 // tier's lastStrength, computed here so both tiers read it identically.
 obDispOk = not requireDisplacement or (structAtr > 0 and math.abs(close - open) >= dispMult * structAtr)
@@ -849,8 +923,8 @@ htfShortOk = not htfActive or htfBias == -1
 
 plot(htfBias, "DBG HTF Bias (1/-1/0)", display = display.data_window)
 
-bullHardOk = intState.trend == "up" and bullTouch.hit and not inRange and htfLongOk and barstate.isconfirmed
-bearHardOk = intState.trend == "down" and bearTouch.hit and not inRange and htfShortOk and barstate.isconfirmed
+bullHardOk = intState.trend == "up" and effBullHit and not inRange and htfLongOk and barstate.isconfirmed
+bearHardOk = intState.trend == "down" and effBearHit and not inRange and htfShortOk and barstate.isconfirmed
 
 var int    setupScoreVal = 0
 var int    setupOfVal    = 0
@@ -893,14 +967,15 @@ if shortSetup
 gateLong  = intState.trend != "down"
 gateScore = gateLong ? scoreLong : scoreShort
 gateOf    = gateLong ? ofPtsLong : ofPtsShort
-gateTouch = gateLong ? bullTouch.hit : bearTouch.hit
+gateTouch = gateLong ? effBullHit : effBearHit
 
 // First unmet condition in the order the gate applies them, so the row names the ONE thing to
 // act on rather than everything that happens to be false. Score is reported before the bar-close
 // check because it is the actionable one: "bar not closed" on a live bar means every other
 // requirement is already met and the daily close is all that is outstanding.
-gateHtfOk  = gateLong ? htfLongOk : htfShortOk
-gateReason = na(intState.trend) ? "no trend" : inRange ? "in range" : not gateHtfOk ? "htf bias" : not gateTouch ? "no zone touch" : gateScore < minScore ? "score short" : not barstate.isconfirmed ? "bar not closed" : "READY"
+gateHtfOk    = gateLong ? htfLongOk : htfShortOk
+gateAwaiting = requireConfirmation and (gateLong ? pendingBullActive : pendingBearActive)
+gateReason = na(intState.trend) ? "no trend" : inRange ? "in range" : not gateHtfOk ? "htf bias" : gateAwaiting ? "awaiting confirmation" : not gateTouch ? "no zone touch" : gateScore < minScore ? "score short" : not barstate.isconfirmed ? "bar not closed" : "READY"
 gateReady  = gateReason == "READY"
 
 plot(bullTouch.hit ? 1 : 0, "DBG Bull Zone Touch (1/0)", display = display.data_window)
@@ -1387,27 +1462,27 @@ pullbackRiskOk(float risk) =>
 
 canOpen = na(activeTrade)
 if canOpen and longSetup
-    zTop = bullTouch.top
-    zBot = bullTouch.bottom
+    zTop = effBullTop
+    zBot = effBullBot
     st   = zBot - stopBufferMult * structAtr
     if close > st
         risk = close - st
         if pullbackRiskOk(risk)
             tg   = selectTargets(true, close, risk, minTargetR)
             [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(true)
-            activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, bullTouch.tier)
+            activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, effBullTier)
             tradeOpened := true
             openedSide  := "long"
 if na(activeTrade) and shortSetup and not longOnly
-    zTop = bearTouch.top
-    zBot = bearTouch.bottom
+    zTop = effBearTop
+    zBot = effBearBot
     st   = zTop + stopBufferMult * structAtr
     if close < st
         risk = st - close
         if pullbackRiskOk(risk)
             tg   = selectTargets(false, close, risk, minTargetR)
             [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(false)
-            activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, bearTouch.tier)
+            activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, effBearTier)
             tradeOpened := true
             openedSide  := "short"
 
