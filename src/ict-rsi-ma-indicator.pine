@@ -1045,14 +1045,18 @@ type Trade
     bool   ptBreakStrength
     bool   ptParticipation
     bool   ptIchimoku
-    // Diagnostics for the trade log only; nothing in the engine reads them. Defaults let every
-    // existing positional Trade.new call stay as it is.
+    // Diagnostics for the trade log only; nothing in the engine reads them.
+    // Touch.tier of the zone that opened the trade: "" for an FVG, "MAJOR"/"INTERNAL" for an OB.
+    // Passed as a real constructor argument, not a default — a default value of `na` on a string
+    // field was found NOT to survive a later `t.zoneTier := ...` mutation the way a function-
+    // parameter mutation does (closeReason, mutated the same way inside advanceTrade(), works
+    // fine). Rather than chase that further, this sidesteps it.
+    string zoneTier
     // Best and worst excursion from entry, in price, over the bars after the entry bar. On the
-    // exit bar the whole bar counts, since intrabar order is unknown.
+    // exit bar the whole bar counts, since intrabar order is unknown. Defaults let every existing
+    // positional Trade.new call skip them.
     float  mfe      = 0.0
     float  mae      = 0.0
-    // Touch.tier of the zone that opened the trade: "" for an FVG, "MAJOR"/"INTERNAL" for an OB.
-    string zoneTier = na
 
 // Two independent slots, one per entry model, deliberately stored as two named vars rather than
 // an array: assigning one slot's object into the other would ALIAS them — Pine UDTs are
@@ -1327,7 +1331,7 @@ b2(bool v) =>
 
 logTrade(Trade t, string model, float r) =>
     rr = math.abs(t.entry - t.initialStop)
-    zone = na(t.zoneTier) ? "-" : t.zoneTier == "" ? "FVG" : "OB-" + t.zoneTier
+    zone = t.zoneTier == "NONE" ? "-" : t.zoneTier == "" ? "FVG" : "OB-" + t.zoneTier
     tf = "yyyy-MM-dd HH:mm"
     line = str.format("TRADE,{0},{1},{2},{3},{4},{5},{6},{7},{8},{9}", model, syminfo.ticker, timeframe.period, str.format_time(time[bar_index - t.openBar], tf, syminfo.timezone), str.format_time(time, tf, syminfo.timezone), t.side, t.grade, t.score, t.scoreOf, zone)
     line += str.format(",{0},{1},{2},{3},{4},{5},{6},{7}", str.tostring(t.entry), str.tostring(t.initialStop), str.tostring(t.tp1), str.tostring(t.tp2), str.tostring(t.tp3), t.tpHit, t.closeReason, str.tostring(t.closePrice))
@@ -1391,8 +1395,7 @@ if canOpen and longSetup
         if pullbackRiskOk(risk)
             tg   = selectTargets(true, close, risk, minTargetR)
             [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(true)
-            activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi)
-            activeTrade.zoneTier := bullTouch.tier
+            activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, bullTouch.tier)
             tradeOpened := true
             openedSide  := "long"
 if na(activeTrade) and shortSetup and not longOnly
@@ -1404,8 +1407,7 @@ if na(activeTrade) and shortSetup and not longOnly
         if pullbackRiskOk(risk)
             tg   = selectTargets(false, close, risk, minTargetR)
             [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(false)
-            activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi)
-            activeTrade.zoneTier := bearTouch.tier
+            activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, bearTouch.tier)
             tradeOpened := true
             openedSide  := "short"
 
@@ -1453,7 +1455,7 @@ if na(trailTrade) and trailLongEntry
         // zoneTop/zoneBottom carry entry and stop: this model has no zone, and those two fields
         // are what the trade box is drawn from.
         [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(true)
-        trailTrade := Trade.new("long", gradeFor(scoreLong, ofPtsLong), scoreLong, ofPtsLong, close, st, st, close, st, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi)
+        trailTrade := Trade.new("long", gradeFor(scoreLong, ofPtsLong), scoreLong, ofPtsLong, close, st, st, close, st, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, "NONE")
         tradeOpened := true
         if na(openedSide)
             openedSide := "long"
@@ -1463,7 +1465,7 @@ if na(trailTrade) and trailShortEntry
     if trailRiskOk(risk)
         tg   = selectTargets(false, close, risk, trailMinTargetR)
         [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(false)
-        trailTrade := Trade.new("short", gradeFor(scoreShort, ofPtsShort), scoreShort, ofPtsShort, close, st, st, st, close, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi)
+        trailTrade := Trade.new("short", gradeFor(scoreShort, ofPtsShort), scoreShort, ofPtsShort, close, st, st, st, close, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, "NONE")
         tradeOpened := true
         if na(openedSide)
             openedSide := "short"
