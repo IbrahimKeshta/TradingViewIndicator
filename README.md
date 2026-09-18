@@ -496,6 +496,7 @@ claiming to quote a price or an R figure.
 | Show Gate Panel Row | on | One row naming what is currently stopping a trade, with the live score |
 | Show Performance Rows | on | Win rate, average R and a per-grade split over the loaded history. The counters run whether or not this is on |
 | Show Confirmation Point Stats | off | Avg R when each of the 7 confirmation points was true vs. false at entry — independent of whether the point currently counts toward the score. Off by default; adds up to 7 rows per model |
+| Log Closed Trades | off | Writes one CSV line per closed trade to TradingView's Pine Logs panel (chart legend → indicator's **···** menu → **Pine logs…**): times, zone type, entry/stop/targets, result in R, best and worst excursion in R (MFE/MAE), bars held, and the 7 confirmation points. Only works on a personal, unpublished script — TradingView disables `log.*()` on published or invite-only ones. The panel's own **···** menu → **Download logs** exports the full history as a CSV in one shot |
 
 **Trade Filters** — hard filters for the pullback model, all off by default. With all off, results
 are identical to running without them.
