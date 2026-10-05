@@ -4,11 +4,13 @@
 
 Two Pine Script v6 indicators for TradingView, written to be read as much as used. Both are single
 self-contained files — no libraries, no external data, nothing to install beyond pasting the script
-into TradingView.
+into TradingView. The confluence indicator also has a generated strategy twin, for running its
+trades through TradingView's Strategy Tester.
 
 | Script | What it does | Pane |
 |---|---|---|
 | [`src/ict-rsi-ma-indicator.pine`](src/ict-rsi-ma-indicator.pine) | Market structure, order blocks, fair value gaps and session killzones, scored into graded trade setups with an entry zone, a stop, targets and a trailing stop | On the price chart |
+| [`src/ict-rsi-ma-strategy.pine`](src/ict-rsi-ma-strategy.pine) | The same script as a strategy — identical engine, plus orders — for the Strategy Tester. Generated; see [Backtesting](#backtesting-in-the-strategy-tester) | On the price chart |
 | [`src/gann-angles.pine`](src/gann-angles.pine) | Gann price levels (three modes) projected from an automatic or manual anchor, plus Gann time cycles | On the price chart |
 
 They are independent. Run either on its own, or both together.
@@ -443,6 +445,85 @@ panel a way to compare settings, not a fixed track record.
 > **On cash-equity markets where you can't short**, set `Long Trades Only`. Bearish setups still mark
 > and still alert, so you keep the information — they just don't open a trade.
 
+## Backtesting in the Strategy Tester
+
+The PERFORMANCE rows report in R and stop there. `src/ict-rsi-ma-strategy.pine` is the same script
+declared as a strategy, so TradingView's Strategy Tester can add what the panel cannot: an equity
+curve, drawdown, commission, slippage and position sizing in money.
+
+It is also a check on the panel. Every number in PERFORMANCE is the engine grading its own work; the
+Tester is a second accounting of the same trades by TradingView's broker emulator.
+
+Install it the same way as the indicator — paste, **Add to chart** — and open the **Strategy Tester**
+tab. It counts as one of your chart's indicators. It has no alerts; keep the indicator for those.
+
+**The order layer decides nothing.** It reports the engine's trades as orders: a market entry at the
+close of the bar a trade opens, three exits of one third each at the three targets, and a resting
+stop moved every bar to wherever the engine's stop is. The scale-out in thirds is the same convention
+the PERFORMANCE rows already use — here the thirds are real orders.
+
+**One model per run.** A strategy holds one net position per symbol, and the two entry models can be
+open at once and in opposite directions. `Backtest Model` picks which one sends orders. The other
+still draws and still reports in the panel.
+
+### Two ways to run it
+
+**To check the Tester against the panel** — leave everything at its default. `Sizing` is
+`Fixed Cash Risk`, so every trade risks the same amount and *Net Profit ÷ Risk per Trade* is the
+result in R. The **BACKTEST** table does the division for you and sets the two side by side:
+
+| Row | Meaning |
+|---|---|
+| Entries sent | Orders the layer has placed. Should equal `Engine n` |
+| Engine n | The selected model's closed trades, as in PERFORMANCE |
+| Tester R | Strategy Tester net profit ÷ `Risk per Trade (cash)` |
+| Engine Total R | The selected model's Total R, as in PERFORMANCE |
+| Capped trades | Trades shrunk by `Max Position` |
+| Comparable | The two sides only agree exactly while no trade is open |
+
+**To see realistic results** — set `Sizing` to `% of Equity Risk`, set `Max Position (% of equity)`
+to 100 on a cash-equity market, and enter your broker's real commission and slippage in the
+strategy's **Properties** tab. Turn `Long Trades Only` on where you cannot short.
+
+### Where the Tester and the panel will differ
+
+These are expected. Anything else is a bug.
+
+- **A stop and a target inside one bar.** The engine always books the stop first. The Tester infers
+  the path from the bar's shape and may fill the target first.
+- **A gap through a target.** The engine books the target price; the Tester fills at the better open.
+- **Quantity rounding.** Thirds of a rounded position are not exact thirds.
+- **Trade count.** The Tester lists each one-third exit as its own trade, so its count runs up to
+  three times the panel's n. Compare `Entries sent`, not the Tester's trade count.
+- **A trade still open.** It is in `Entries sent` but not yet in n, and thirds it has banked are in
+  net profit but not yet in Total R.
+- **Capped trades**, and **costs** once you set commission or slippage.
+
+### Settings
+
+| Setting | Default | What it does |
+|---|---|---|
+| Backtest Model | Pullback | Which entry model sends orders. Selecting Trail does not switch the trail model on — `Enable Trailing Stop Model` does |
+| Sizing | Fixed Cash Risk | `Fixed Cash Risk` for the cross-check, `% of Equity Risk` for compounding |
+| Risk per Trade (cash) | 1000 | Cash lost if the initial stop is hit |
+| Risk per Trade (% of equity) | 1.0 | Share of current equity lost if the initial stop is hit |
+| Max Position (% of equity) | 0 | Caps position value; 0 is no cap. Sizing by risk with a tight stop can ask for more than the account holds |
+| Show Backtest Panel | on | The BACKTEST table |
+| Backtest Panel Position | Bottom Left | If it matches `Panel Position`, one table hides the other |
+
+### The strategy file is generated
+
+Never edit `src/ict-rsi-ma-strategy.pine`. It is built from the indicator plus
+`src/strategy-layer.pine`, so the two scripts cannot drift apart:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-strategy.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-strategy.ps1 -Check
+```
+
+The first rebuilds it; run it after any change to the indicator or the layer. The second changes
+nothing and reports whether the committed file is stale — run it before trusting a Tester number.
+
 ## Alerts
 
 Set these up with the alarm-clock icon → *Condition: ICT + RSI/MA Confluence*.
@@ -687,17 +768,21 @@ than move it to a bar that never made the high, and starts a ray, break line or 
 of the buffer instead of at its true origin. The price levels themselves are unaffected. You will
 only meet this on a very long intraday chart.
 
-**These are decision-support tools, not a strategy.** Neither script backtests, sizes a position, or
-places an order. The trade engine computes levels and records what would have happened; it does not
-size a position and it has no idea what your account can absorb. No indicator knows the future, and
-confluence between several lagging measurements is still lagging. Nothing here is financial advice.
+**These are decision-support tools, not a trading system.** Neither indicator sizes a position or
+places an order. The trade engine computes levels and records what would have happened. The strategy
+twin runs those same trades through TradingView's Strategy Tester with a position size, but a
+backtest is still a record of the past under assumed fills — it has no idea what your account can
+absorb, and it places no live orders. No indicator knows the future, and confluence between several
+lagging measurements is still lagging. Nothing here is financial advice.
 
 ---
 
 ## Repository layout
 
 ```
-src/                    the two Pine scripts
+src/                    the two indicators, the order layer fragment (strategy-layer.pine)
+                        and the generated strategy (ict-rsi-ma-strategy.pine — never edit)
+tools/                  build-strategy.ps1, which generates the strategy, and its tests
 docs/img/               diagrams used by this README
 docs/superpowers/
   specs/                design documents — what each feature does and why
