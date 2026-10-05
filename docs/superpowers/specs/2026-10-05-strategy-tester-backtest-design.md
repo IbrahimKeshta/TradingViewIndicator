@@ -32,7 +32,7 @@ named list.
 ## Architecture
 
 The Strategy Tester only runs `strategy()` scripts, and a script cannot be both. The user chose a
-**generated** strategy file over converting in place (which would kill the 13 `alertcondition()`
+**generated** strategy file over converting in place (which would kill the 11 `alertcondition()`
 alerts) or a hand-maintained copy (which would drift and silently invalidate the cross-check).
 
 Three pieces, each with one job:
@@ -64,7 +64,13 @@ shape under it). Files are read and written as UTF-8 without a BOM — the sourc
 non-ASCII characters and PowerShell 5.1's defaults would corrupt them.
 
 A `-Check` switch builds in memory and exits non-zero if the committed strategy file differs.
-That is the drift guard: run it before trusting any Tester number.
+That is the drift guard: run it before trusting any Tester number. The comparison ignores line
+endings, since git may check the file out as LF or CRLF.
+
+The script is the one part of this work that can be tested off TradingView, so it is:
+`tools/test-build-strategy.ps1` runs it against fixture files in a temp folder (the three paths
+are parameters with the real files as defaults) and asserts the transform, each failure mode, the
+encoding round trip and `-Check`.
 
 Why the declaration defaults are what they are: zero costs and unlimited margin make the
 out-of-the-box run the cross-check run. All of them are editable in the Tester's Properties tab,
@@ -91,10 +97,19 @@ reports in the panel; it sends no orders. Selecting Trail does not switch the tr
 
 `qty = riskCash / |entry − initialStop|`, where `riskCash` is the fixed amount or the percentage
 of `strategy.equity` at entry. If the cap is on and `qty × entry` exceeds it, `qty` is reduced to
-fit and a counter of capped trades is incremented (shown as a Data Window plot), because a capped
-trade no longer risks 1R and would otherwise be an untraceable cross-check mismatch.
+fit and a counter of capped trades is incremented, because a capped trade no longer risks 1R and
+would otherwise be an untraceable cross-check mismatch.
 
 The position is split into three legs: two of `qty / 3` and a third holding the remainder.
+
+### The BACKTEST table
+
+The layer draws its own small table (position selectable, default Bottom Left; `Show Backtest
+Panel` turns it off) rather than adding Data Window plots: the indicator already sits at Pine's
+64-plot cap, and a 65th is a runtime error that only appears on the chart. Rows: the selected
+model, entries sent, the engine's closed n for that model, Tester R (`strategy.netprofit ÷ Risk
+per Trade`, Fixed Cash Risk mode only), the engine's Total R, and capped trades. It puts the two
+sides of the cross-check next to each other so nobody has to do the division by hand.
 
 ### Orders, bar by bar
 
@@ -132,10 +147,13 @@ These are expected and will be documented in the README. Anything outside this l
    open.
 3. **Quantity rounding.** Three legs of a rounded position are not exact thirds.
 4. **Trade count.** The Tester lists each partial exit as its own trade, so its count runs up to
-   three times the panel's n. The layer plots its own count of entries sent in the Data Window;
-   that is the number to compare with n.
-5. **Capped trades**, when the cap is on.
-6. **Costs**, when commission or slippage are set.
+   three times the panel's n. The BACKTEST table's count of entries sent is the number to
+   compare with n.
+5. **A trade still open.** Entries sent counts it and n does not, and thirds it has already
+   banked are in the Tester's net profit but not yet in Total R. The comparison is exact only
+   when the selected model is flat.
+6. **Capped trades**, when the cap is on.
+7. **Costs**, when commission or slippage are set.
 
 ## Using it
 
