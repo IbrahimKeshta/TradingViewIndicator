@@ -38,8 +38,29 @@ else
 
 var int   btEntries = 0
 var int   btCapped  = 0
+var int   btSkipped = 0
 var float btLegQty  = na   // the first two thirds
 var float btLastQty = na   // the remainder, so the three legs sum to the position exactly
+
+// The engine tests raw, unrounded levels against the bar's high and low; the broker emulator
+// works in whole ticks. Rounding each order price to the tick on the far side of the level makes
+// the two trigger on exactly the same bars: a long target at 10.337 on a 0.01 tick is reached
+// when the high prints 10.34, and so is a limit at 10.34. Left to the emulator's own rounding
+// the direction is not ours to choose, and a level rounded the near way fills on a bar the
+// engine never counted.
+//
+// The 1e-6 keeps a level that is already on a tick from being pushed a whole tick by float noise.
+btTickUp(float p) =>
+    math.ceil(p / syminfo.mintick - 1e-6) * syminfo.mintick
+
+btTickDown(float p) =>
+    math.floor(p / syminfo.mintick + 1e-6) * syminfo.mintick
+
+// Whole multiples of the smallest tradable amount, rounded down. The emulator truncates a
+// fractional quantity anyway; doing it here keeps the three legs summing to the position the
+// entry actually opens, instead of leaving a sliver for the close sweep to mop up.
+btLots(float q) =>
+    math.floor(q / syminfo.mincontract + 1e-9) * syminfo.mincontract
 
 // Nested, not `and`-chained: Pine does not guarantee short-circuit evaluation, and reading a
 // field of a `na` object is a runtime error.
@@ -52,9 +73,9 @@ if not na(bt)
 // A market order on the bar the engine opened the trade. process_orders_on_close fills it at
 // this bar's close, which is the entry price the engine recorded.
 //
-// Sized from initialStop, the same denominator the engine's R uses. With non-positive equity in
-// % mode the quantity is not positive and no order is sent; the engine's trade then has no
-// counterpart, which shows as entries sent falling behind n.
+// Sized from initialStop, the same denominator the engine's R uses, then rounded down to whole
+// minimum contracts. A trade that rounds to nothing sends no order and is counted as skipped;
+// the engine's trade then has no counterpart, which shows as entries sent falling behind n.
 if btOpenedNow
     btRiskPer = math.abs(bt.entry - bt.initialStop)
     btCash    = btFixedCash ? btRiskCash : strategy.equity * btRiskPct / 100.0
@@ -65,11 +86,20 @@ if btOpenedNow
             if btQty > btMaxQty
                 btQty    := btMaxQty
                 btCapped += 1
+    btQty := btLots(btQty)
     if btQty > 0
-        btLegQty  := btQty / 3.0
+        // A position under three minimum contracts cannot be split in thirds: the first two
+        // legs come out as zero and the last leg carries all of it.
+        btLegQty  := btLots(btQty / 3.0)
         btLastQty := btQty - 2.0 * btLegQty
         strategy.entry("BT", bt.side == "long" ? strategy.long : strategy.short, qty = btQty)
         btEntries += 1
+    else
+        // Too small to trade one contract (or no equity left in % mode). No order exists, so it
+        // must not be counted as sent — it is counted here instead, where the table shows it.
+        btLegQty  := 0.0
+        btLastQty := 0.0
+        btSkipped += 1
 
 // ---- exits while the trade is live ----
 // One exit order per third, re-issued every bar so the resting stop follows the engine's. The
@@ -86,15 +116,27 @@ if btOpenedNow
 // Runner: the last third has no limit at TP3 and leaves by the stop or the close. Read from the
 // trade's own snapshot, as the engine does. With both modes on that leg has neither a limit nor
 // a stop, and strategy.exit with neither is a runtime error, so the call is skipped.
+//
+// One case no resting order can reproduce: a stop the engine has just moved to a price the
+// market is already through (TP1 touched, then a close back beyond entry). The engine waits for
+// the next bar to trade down to it; the emulator treats the order as already triggered. The
+// trade ends either way, but the bar and the price can differ. Documented as a known difference.
 if tradeLiveOf(bt)
-    btStopPx = stopOnCloseOnly ? float(na) : bt.stop
-    btLimit3 = bt.runner ? float(na) : bt.tp3
-    if bt.tpHit < 1
-        strategy.exit("TP1", from_entry = "BT", qty = btLegQty, limit = bt.tp1, stop = btStopPx)
-    if bt.tpHit < 2
-        strategy.exit("TP2", from_entry = "BT", qty = btLegQty, limit = bt.tp2, stop = btStopPx)
-    if not (na(btLimit3) and na(btStopPx))
-        strategy.exit("TP3", from_entry = "BT", qty = btLastQty, limit = btLimit3, stop = btStopPx)
+    btLong   = bt.side == "long"
+    // Far side of each level: a long's targets round up and its stop rounds down, a short's the
+    // other way. See btTickUp above.
+    btStopPx = stopOnCloseOnly ? float(na) : (btLong ? btTickDown(bt.stop) : btTickUp(bt.stop))
+    btLimit1 = btLong ? btTickUp(bt.tp1) : btTickDown(bt.tp1)
+    btLimit2 = btLong ? btTickUp(bt.tp2) : btTickDown(bt.tp2)
+    btLimit3 = bt.runner ? float(na) : (btLong ? btTickUp(bt.tp3) : btTickDown(bt.tp3))
+    if btLegQty > 0
+        if bt.tpHit < 1
+            strategy.exit("TP1", from_entry = "BT", qty = btLegQty, limit = btLimit1, stop = btStopPx)
+        if bt.tpHit < 2
+            strategy.exit("TP2", from_entry = "BT", qty = btLegQty, limit = btLimit2, stop = btStopPx)
+    if btLastQty > 0
+        if not (na(btLimit3) and na(btStopPx))
+            strategy.exit("TP3", from_entry = "BT", qty = btLastQty, limit = btLimit3, stop = btStopPx)
 
 // ---- the bar the engine closes the trade ----
 // For a wick-mode stop or a TP3 exit the resting order has already filled and this closes
@@ -122,7 +164,7 @@ if barstate.islast
         btEngineN = array.get(statTrades, btModelIdx)
         btEngineR = array.get(statSumR,   btModelIdx)
         btIsOpen  = tradeLiveOf(bt)
-        btPanel := table.new(btPanelPos, 2, 7, bgcolor = panelBgColor, border_width = 1)
+        btPanel := table.new(btPanelPos, 2, 8, bgcolor = panelBgColor, border_width = 1)
         table.cell(btPanel, 0, 0, "BACKTEST", text_color = color.white, bgcolor = color.new(color.gray, 50))
         table.cell(btPanel, 1, 0, btModelInput, text_color = color.silver, bgcolor = color.new(color.gray, 50))
         table.cell(btPanel, 0, 1, "Entries sent", text_color = color.silver)
@@ -135,5 +177,7 @@ if barstate.islast
         table.cell(btPanel, 1, 4, str.tostring(btEngineR, "0.00") + "R", text_color = color.white)
         table.cell(btPanel, 0, 5, "Capped trades", text_color = color.silver)
         table.cell(btPanel, 1, 5, str.tostring(btCapped), text_color = btCapped > 0 ? color.orange : color.white)
-        table.cell(btPanel, 0, 6, "Comparable", text_color = color.silver)
-        table.cell(btPanel, 1, 6, btIsOpen ? "trade open — wait for flat" : "yes — flat", text_color = btIsOpen ? color.orange : color.white)
+        table.cell(btPanel, 0, 6, "Skipped trades", text_color = color.silver)
+        table.cell(btPanel, 1, 6, str.tostring(btSkipped), text_color = btSkipped > 0 ? color.orange : color.white)
+        table.cell(btPanel, 0, 7, "Comparable", text_color = color.silver)
+        table.cell(btPanel, 1, 7, not btFixedCash ? "n/a (% sizing)" : btIsOpen ? "trade open — wait for flat" : "yes — flat", text_color = btFixedCash and not btIsOpen ? color.white : color.orange)

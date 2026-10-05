@@ -462,6 +462,15 @@ close of the bar a trade opens, three exits of one third each at the three targe
 stop moved every bar to wherever the engine's stop is. The scale-out in thirds is the same convention
 the PERFORMANCE rows already use — here the thirds are real orders.
 
+Two exit modes change the shape of those orders. With `Stop on Close Only` there is no resting
+stop at all — it would fill on a wick, which is what the mode exists to ignore — and the trade
+leaves at the close of the bar the engine stops it. With `Runner (no exit at TP3)` the last third
+has no order at the third target and leaves by the stop.
+
+Order prices are rounded to the symbol's tick and quantities down to its minimum tradable size,
+so the Tester triggers on the same bars the engine does. As a strategy the script recalculates
+once per bar close; its panels and drawings do not update mid-bar the way the indicator's do.
+
 **One model per run.** A strategy holds one net position per symbol, and the two entry models can be
 open at once and in opposite directions. `Backtest Model` picks which one sends orders. The other
 still draws and still reports in the panel.
@@ -479,7 +488,8 @@ result in R. The **BACKTEST** table does the division for you and sets the two s
 | Tester R | Strategy Tester net profit ÷ `Risk per Trade (cash)` |
 | Engine Total R | The selected model's Total R, as in PERFORMANCE |
 | Capped trades | Trades shrunk by `Max Position` |
-| Comparable | The two sides only agree exactly while no trade is open |
+| Skipped trades | Trades too small to buy one minimum unit at the chosen risk — no order was sent |
+| Comparable | The two sides only agree exactly while no trade is open, and only under `Fixed Cash Risk` |
 
 **To see realistic results** — set `Sizing` to `% of Equity Risk`, set `Max Position (% of equity)`
 to 100 on a cash-equity market, and enter your broker's real commission and slippage in the
@@ -490,14 +500,23 @@ strategy's **Properties** tab. Turn `Long Trades Only` on where you cannot short
 These are expected. Anything else is a bug.
 
 - **A stop and a target inside one bar.** The engine always books the stop first. The Tester infers
-  the path from the bar's shape and may fill the target first.
+  the path from the bar's shape and may fill the target first. With `Stop on Close Only` this stops
+  being occasional: any bar that wicks to a target and then closes through the stop is a full stop
+  to the engine and a banked third to the Tester, so expect the Tester to read better in that mode.
+- **A stop moved to a price the market is already through.** After the first target the stop jumps
+  to entry; if that bar closes back beyond entry, the engine waits for the next bar to trade down
+  to the stop, while the Tester treats the order as already triggered. The trade ends either way,
+  but the bar and the price can differ.
 - **A gap through a target.** The engine books the target price; the Tester fills at the better open.
-- **Quantity rounding.** Thirds of a rounded position are not exact thirds.
+- **Quantity rounding.** The position is rounded down to whole tradable units, so it risks slightly
+  less than `Risk per Trade` and `Tester R` reads slightly small. Negligible at hundreds of units,
+  material at a handful — if the Tester's trade list shows single-digit quantities, raise
+  `Risk per Trade`. A position under three units cannot be split in thirds and leaves in one piece.
 - **Trade count.** The Tester lists each one-third exit as its own trade, so its count runs up to
   three times the panel's n. Compare `Entries sent`, not the Tester's trade count.
 - **A trade still open.** It is in `Entries sent` but not yet in n, and thirds it has banked are in
   net profit but not yet in Total R.
-- **Capped trades**, and **costs** once you set commission or slippage.
+- **Capped and skipped trades**, and **costs** once you set commission or slippage.
 
 ### Settings
 

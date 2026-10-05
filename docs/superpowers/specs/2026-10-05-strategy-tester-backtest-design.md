@@ -55,8 +55,9 @@ three things to a copy of the indicator:
 2. **Remove every `alertcondition(` line.**
 3. **Append** `src/strategy-layer.pine`.
 
-It prepends a "GENERATED — do not edit, run tools/build-strategy.ps1" header after the
-`//@version` line.
+It prepends a "GENERATED FILE -- do not edit" header as the first lines of the file, above the
+`//@version` line (comments may precede the version annotation, as TradingView's own licence
+header does).
 
 Failure behaviour: the script stops with an error and writes nothing if it does not find exactly
 one `indicator(` line, or finds no `alertcondition(` lines (either means the indicator changed
@@ -100,7 +101,14 @@ of `strategy.equity` at entry. If the cap is on and `qty × entry` exceeds it, `
 fit and a counter of capped trades is incremented, because a capped trade no longer risks 1R and
 would otherwise be an untraceable cross-check mismatch.
 
-The position is split into three legs: two of `qty / 3` and a third holding the remainder.
+The quantity is rounded down to whole multiples of `syminfo.mincontract`. The position is split
+into three legs: two of `qty / 3` (rounded down the same way) and a third holding the remainder,
+so the legs always sum to the position. A position under three minimum contracts leaves in one
+piece. A trade that rounds to zero sends no order and is counted as skipped.
+
+Order prices are rounded to the tick on the far side of each level — a long's targets up and its
+stop down, a short's the reverse — so the emulator triggers on exactly the bars where the engine's
+raw-float comparison does.
 
 ### The BACKTEST table
 
@@ -108,7 +116,7 @@ The layer draws its own small table (position selectable, default Bottom Left; `
 Panel` turns it off) rather than adding Data Window plots: the indicator already sits at Pine's
 64-plot cap, and a 65th is a runtime error that only appears on the chart. Rows: the selected
 model, entries sent, the engine's closed n for that model, Tester R (`strategy.netprofit ÷ Risk
-per Trade`, Fixed Cash Risk mode only), the engine's Total R, and capped trades. It puts the two
+per Trade`, Fixed Cash Risk mode only), the engine's Total R, capped trades, skipped trades, and whether the two sides are currently comparable. It puts the two
 sides of the cross-check next to each other so nobody has to do the division by hand.
 
 ### Orders, bar by bar
@@ -142,18 +150,26 @@ open, which is the engine's `min(stop, open)` rule.
 These are expected and will be documented in the README. Anything outside this list is a bug.
 
 1. **Stop and target inside one bar.** The engine books the stop first, always. The Tester infers
-   the intrabar path from the bar's shape and may fill a target before the stop.
+   the intrabar path from the bar's shape and may fill a target before the stop. Under Stop on
+   Close Only this is systematic rather than occasional: a bar that wicks to a target and closes
+   through the stop is a full stop to the engine and a banked third to the Tester.
 2. **Gap through a target.** The engine books the target price; a limit order fills at the better
    open.
-3. **Quantity rounding.** Three legs of a rounded position are not exact thirds.
+3. **Quantity rounding.** The position is rounded down to whole minimum contracts, so it risks
+   slightly less than Risk per Trade and Tester R reads slightly small — negligible at hundreds
+   of units, material at a handful.
 4. **Trade count.** The Tester lists each partial exit as its own trade, so its count runs up to
    three times the panel's n. The BACKTEST table's count of entries sent is the number to
    compare with n.
 5. **A trade still open.** Entries sent counts it and n does not, and thirds it has already
    banked are in the Tester's net profit but not yet in Total R. The comparison is exact only
    when the selected model is flat.
-6. **Capped trades**, when the cap is on.
+6. **Capped trades**, when the cap is on, and **skipped trades**, when a position rounds to zero.
 7. **Costs**, when commission or slippage are set.
+8. **A stop moved to a price the market is already through.** After TP1 the stop jumps to entry;
+   if that bar closes back beyond entry the engine waits for the next bar to trade down to the
+   stop, while the emulator treats the order as already triggered. The trade ends either way, but
+   the bar and price can differ. No resting order can reproduce the engine's rule here.
 
 ## Using it
 
