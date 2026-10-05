@@ -1,7 +1,8 @@
 # Strategy Tester Backtest — Design
 
 **Date:** 2026-10-05
-**Status:** Design drafted, awaiting review
+**Status:** Design approved 2026-10-05, implementation not yet started
+**Implementation:** by subagent on Sonnet 5.5, at the user's request
 **Source of truth:** `src/ict-rsi-ma-indicator.pine` (not modified by this work)
 **New files:** `src/strategy-layer.pine`, `tools/build-strategy.ps1`, `src/ict-rsi-ma-strategy.pine` (generated)
 **Depends on:** [[trade-system-roadmap]], [[pine-has-no-test-framework]], [[tradingview-plan-blocks-footprint]]
@@ -158,12 +159,14 @@ compiled it.
    [[tradingview-plan-blocks-footprint]]). The strategy's own panel must show the same n and
    Total R as the indicator on the same chart and settings; that proves the engine survived the
    build untouched.
-4. **Cross-check**, pass rule fixed now: on ELEC 1D and ABUK 4H (the two symbols whose trade logs
-   were already reconciled with the panel), default settings, entries sent equals n exactly, and
-   Net Profit ÷ Risk per Trade is within the larger of 2% or 0.5R of Total R. A miss is traced
-   trade by trade — `Log Closed Trades` CSV against the Tester's exported list — and each
-   difference must land on the list above.
-5. **Realistic run** recorded for the same two charts, as a first reading, not a pass/fail.
+4. **Cross-check**, pass rule fixed now, on four charts: ELEC 1D and ABUK 4H (the two symbols
+   whose trade logs were already reconciled with the panel), plus MASR 1D and XRP 1H (added by
+   the user; XRP 1H is the only crypto intraday chart and the only one where shorts and
+   killzones are live). Default settings, entries sent equals n exactly, and Net Profit ÷ Risk
+   per Trade is within the larger of 2% or 0.5R of Total R. The rule applies per chart — all
+   four must pass, not an average. A miss is traced trade by trade — `Log Closed Trades` CSV
+   against the Tester's exported list — and each difference must land on the list above.
+5. **Realistic run** recorded for the same four charts, as a first reading, not a pass/fail.
 
 ## Documentation
 
