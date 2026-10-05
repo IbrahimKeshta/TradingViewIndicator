@@ -193,8 +193,10 @@ folded silently into the sections above, because the original pass rule was writ
    few ticks in total (MASR at 0.09, ELEC at 0.015, both with a 0.01 tick), so a one-tick rounding
    is a large part of 1R — on MASR 1D one trade the engine booked at +2.30R came out at −1.69R.
    A trade whose entry-to-stop distance is under the floor sends no order and is counted as
-   skipped. Measured before the floor existed: under 2 ticks, up to 4R apart on one trade; 20
-   ticks or more, at most 0.05R.
+   skipped. Measured before the floor existed: under 2 ticks, up to 4R apart on one trade; from
+   10 ticks up, typically a few hundredths of an R, with one 0.64R exception that is a different
+   effect (amendment 4). The default of 10 is a coverage/accuracy compromise, not a measured
+   optimum: between 10 and 20 ticks the Tester reads about 0.016R per trade low.
 2. **"Engine R, sent trades" row.** With trades skipped, `Engine Total R` is no longer the right
    comparison. The layer accumulates the engine's own blended R over exactly the trades it sent,
    and the table shows that figure and its count beside `Tester R`. The identity to check is
@@ -202,8 +204,15 @@ folded silently into the sections above, because the original pass rule was writ
 3. **Target catch-up.** Bars on adjusted history are not tick-aligned either, so a high can pass
    the engine's raw target without reaching the limit rounded up to the next tick. The engine
    then counts the target and the layer stops re-issuing that leg, which would leave a third of
-   the position with no order. When the position is larger than the engine's `tpHit` implies,
+   the position resting on a stale order. When the position is larger than the engine's `tpHit` implies,
    the stale order is cancelled and the excess is closed at that bar's close.
+
+4. **Diverged trades counter.** The emulator rounds each bar to the nearest tick before testing
+   an order, so on off-tick bars it can fill a limit or trigger a stop the engine's raw comparison
+   did not count. No rounding of the order price closes both this gap and the one in amendment 3.
+   A fill cannot be undone, so when the position is smaller than the engine's `tpHit` implies the
+   trade is counted once as diverged and shown in the table. Found by an independent review of
+   the first write-up, whose per-trade analysis had a sign bug that hid it.
 
 The pass rule as originally written — entries sent equals n, Tester R against Engine Total R — is
 therefore only meaningful where nothing is skipped. The rule the results are judged on is the

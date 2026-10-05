@@ -468,7 +468,9 @@ leaves at the close of the bar the engine stops it. With `Runner (no exit at TP3
 has no order at the third target and leaves by the stop.
 
 Order prices are rounded to the symbol's tick and quantities down to its minimum tradable size,
-so the Tester triggers on the same bars the engine does. As a strategy the script recalculates
+so that on data whose bars sit on ticks (crypto, unadjusted prices) the Tester triggers on the same
+bars the engine does. On adjusted history it mostly does, not always — see the differences below.
+As a strategy the script recalculates
 once per bar close; its panels and drawings do not update mid-bar the way the indicator's do.
 
 **One model per run.** A strategy holds one net position per symbol, and the two entry models can be
@@ -489,7 +491,8 @@ result in R. The **BACKTEST** table does the division for you and sets the two s
 | Tester R | Strategy Tester net profit ÷ `Risk per Trade (cash)` |
 | Engine R, sent trades | The engine's own result over exactly the trades that were sent, with their count. **This is the number `Tester R` should match** |
 | Engine Total R | The selected model's Total R over every trade, as in PERFORMANCE |
-| Capped trades | Trades shrunk by `Max Position` |
+| Capped trades | Trades shrunk by `Max Position`. They risk less than 1R in the Tester but count at full R in `Engine R, sent trades`, so a run with capped trades is not like for like |
+| Diverged trades | Trades where the Tester filled a target or a stop the engine had not counted. Each can differ from the engine by a whole third of the position or more |
 | Comparable | The two sides only agree exactly while no trade is open, and only under `Fixed Cash Risk` |
 
 ### Why some trades are skipped: price granularity
@@ -504,7 +507,11 @@ that trade.
 `Minimum Risk (ticks)` (default 10) keeps such trades out of the Tester and counts them as skipped,
 and `Engine R, sent trades` gives the engine's figure for the remainder, so the comparison is like
 for like. Measured on MASR 1D with every trade sent: under 2 ticks of risk the two sides disagreed
-by up to 4R on a single trade; at 20 ticks or more, by at most 0.05R.
+by up to 4R on a single trade; from 10 ticks up they typically differed by a few hundredths of an R,
+with the Tester reading about 0.016R per trade lower between 10 and 20 ticks. That lean is the cost
+of each stop filling up to a tick worse, and it adds up over many trades. The floor of 10 is a
+compromise between coverage and accuracy, not a measured optimum: raise it to 20 for a stricter
+comparison on fewer trades.
 
 Expect many skips on an EGX daily chart with a long history, and almost none on crypto. A large gap
 between `Engine Total R` and `Engine R, sent trades` is worth noticing in its own right: it means
@@ -539,6 +546,11 @@ These are expected. Anything else is a bug.
   three times the panel's n. Compare `Entries sent`, not the Tester's trade count.
 - **A trade still open.** It is in `Entries sent` but not yet in n, and thirds it has banked are in
   net profit but not yet in Total R.
+- **A fill the engine never counted.** On adjusted history the Tester rounds each bar to the nearest
+  tick before testing an order, so a high just short of a target can still fill the limit, and a
+  low just short of a stop can still trigger it — sometimes a bar before the engine. A fill cannot
+  be undone; the trade is counted under `Diverged trades`. Seen on MASR 1D: a first target filled
+  that the engine never reached, leaving that trade 0.64R better in the Tester than in the engine.
 - **Capped and skipped trades**, and **costs** once you set commission or slippage.
 
 ### Settings

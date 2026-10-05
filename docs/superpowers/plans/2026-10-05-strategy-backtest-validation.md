@@ -4,12 +4,17 @@
 **Script under test:** `src/ict-rsi-ma-strategy.pine`, generated from `src/ict-rsi-ma-indicator.pine` + `src/strategy-layer.pine`
 **Spec:** `docs/superpowers/specs/2026-10-05-strategy-tester-backtest-design.md`
 **Plan:** `docs/superpowers/plans/2026-10-05-strategy-tester-backtest.md` (Task 4)
-**Method:** driven on the user's TradingView account with Playwright; Autosave off for the session,
-layout restored by discard-reload afterwards, Autosave back on. Every figure below was read from
-Pine Logs exported by a throwaway copy of the strategy with `Log Closed Trades` on and one extra
-block that dumps `strategy.closedtrades.*` per leg, joined to the engine's own `TRADE` lines by
-entry time. `Tester R` is `strategy.netprofit` ÷ 1000 (the fixed cash risk); per-trade figures come
-from the joined legs.
+**Method:** driven on the user's TradingView account with Playwright; Autosave off for each
+session, layout restored by discard-reload afterwards, Autosave back on. Every figure below was
+read from Pine Logs exported by a throwaway copy of the strategy with `Log Closed Trades` on and
+one extra block that dumps `strategy.closedtrades.*` per leg, joined to the engine's own `TRADE`
+lines by entry time. `Tester R` is `strategy.netprofit` ÷ 1000 (the fixed cash risk); per-trade
+figures come from the joined legs.
+
+**This document was corrected after an independent review.** Its first version understated the
+worst per-trade differences: the analysis script compared a signed difference as a string, so
+every positive difference was dropped from the "worst trade" columns. That hid one 0.64R mismatch
+which is a different effect from tick size. The figures below are the reviewed ones.
 
 ## The pass rule, as declared before any number was read
 
@@ -21,20 +26,27 @@ from the joined legs.
 
 **As declared: 1 of 4 passed.** XRP 1H passed. MASR 1D, ELEC 1D and ABUK 4H failed.
 
-**The order layer itself is faithful.** On every trade whose risk is at least 20 ticks, on all
-four charts, the Tester and the engine agree to within 0.08R per trade, and on XRP 1H — where
-every trade is hundreds of ticks wide — to within 0.01R per trade and 0.09R in total over 76
-trades.
+**On tick-aligned data the order layer mirrors the engine closely.** XRP 1H: 77 trades, every one
+within 0.01R, 0.10R apart in total, and equally close in all four exit-mode combinations.
 
-**The failures have one cause, and it is not a bug in either side:** the engine measures in R and
-is scale-free; the Tester fills in whole ticks. EGX history is split- and dividend-adjusted, so old
-prices are tiny against the 0.01 tick (MASR 0.09 in 2003, ELEC 0.015 in 2001). A trade whose whole
-entry-to-stop distance is under a tick cannot be represented by the Tester at all.
+**On split- and dividend-adjusted EGX history it does not, for two separate reasons**, neither of
+which is fixable from inside the script:
 
-The design was amended (spec, "Amendments from the live pass") and the charts re-run. **On the
-amended, like-for-like rule — Tester R against the engine's R over the trades actually sent — all
-four pass.** That rule was written after the first failure was seen. It is reported as what it is:
-a diagnosis-driven correction, not the pre-registered test.
+1. **Price granularity.** The engine measures in R and is scale-free; the Tester fills in whole
+   ticks. Old EGX prices are tiny against the 0.01 tick (MASR 0.09 in 2003, ELEC 0.015 in 2001),
+   and a trade whose whole entry-to-stop distance is under a tick cannot be represented at all.
+   This is most of the gap.
+2. **Rounded-bar triggers.** Adjusted bars are off-tick, and the emulator rounds each bar to the
+   nearest tick before testing an order. It can therefore fill a target or trigger a stop that
+   the engine's raw comparison did not count, or miss one it did. This is rare, but when it
+   happens the error is a whole third of the position, and it does not shrink as the tick floor
+   rises.
+
+The design was amended (spec, "Amendments from the live pass") and the charts re-run against a
+like-for-like rule: Tester R against the engine's R over the trades actually sent. **That rule was
+written after the first failure was seen.** On it, XRP 1H and ABUK 4H pass; ELEC 1D passes on only
+10 trades, which validates little; **MASR 1D passes numerically only because two errors cancel**
+(below). MASR should be read as not passing.
 
 ## First run — MASR 1D, original design
 
@@ -47,41 +59,70 @@ Traced trade by trade (126 engine trades, 342 Tester legs), bucketed by risk in 
 |---|---|---|---|---|---|
 | under 2 | 20 | +8.80 | +3.23 | −5.57 | 3.99R |
 | 2–5 | 25 | +5.58 | +4.65 | −0.93 | 0.46R |
-| 5–10 | 17 | −0.85 | −0.68 | +0.17 | 0.58R |
+| 5–10 | 17 | −0.85 | −0.68 | +0.17 | 0.69R |
 | 10–20 | 47 | +2.57 | +1.61 | −0.96 | 0.41R |
-| 20–50 | 14 | −7.55 | −7.07 | +0.48 | 0.05R |
+| 20–50 | 14 | −7.55 | −7.07 | +0.48 | 0.64R |
 | 50+ | 3 | −2.52 | −2.53 | −0.01 | 0.01R |
 
 5.57R of the 6.79R gap sits in 20 trades with under 2 ticks of risk. The worst: opened 2003-06-01
 at an adjusted 0.0881 with the stop at 0.0821. The engine ran it to its third target for +2.30R;
 the Tester entered at 0.09, stopped at 0.08, −1.69R.
 
-The 10–20 bucket's 0.41R outlier was a second, smaller effect: opened 2022-01-03, the engine
-counted the first target, the Tester's limit (rounded up one tick) was not reached by an
-off-tick high, and that third was left with no order. That is what the target catch-up fixes.
+Two smaller effects showed in the wider buckets, both from rounded-bar triggers:
+
+- **A target the engine counted and the Tester missed** (2022-01-03, 11 ticks, 0.41R). The
+  target catch-up was added for this.
+- **A target the Tester filled and the engine never counted** (2023-12-07, 26 ticks, 0.64R). The
+  engine's first target was 3.8864; the bar's high fell just short and the engine stopped the
+  trade out for −1.00R. The Tester's limit at 3.89 filled, and it finished −0.36R. This one was
+  missed in the first version of this document and found by the review. It cannot be repaired
+  after the fill; it is now counted.
 
 ## Changes made in response
 
-In `src/strategy-layer.pine` (details and reasoning in the spec's amendments section):
+In `src/strategy-layer.pine` (reasoning in the spec's amendments section):
 
 1. `Minimum Risk (ticks)`, default 10 — trades under it send no order and are counted as skipped.
 2. An `Engine R, sent trades` row — the engine's blended R over exactly the trades sent.
 3. Target catch-up — closes a third the engine has counted and the Tester has not filled.
+4. A `Diverged trades` counter — trades where the Tester filled something the engine had not.
 
-## Cross-check after the changes, default settings
+Items 1–3 were made after the first run; item 4 after the review. The script was recompiled and
+re-run on all four charts after each.
 
-| Chart | Engine n | Sent (closed) | Skipped | Engine R, sent | Tester R | Difference | Worst trade | Like-for-like rule |
+## Cross-check after the changes, default settings (final run)
+
+| Chart | Engine n | Sent | Skipped | Engine R, sent | Tester R | Difference | Worst trade | Diverged |
 |---|---|---|---|---|---|---|---|---|
-| MASR 1D | 126 | 64 | 62 | −7.51 | −7.78 | −0.27 | 0.13R | pass |
-| ELEC 1D | 128 (+1 open) | 10 | 118 | −1.60 | −1.69 | −0.09 | 0.06R | pass |
-| ABUK 4H | 141 | 136 | 5 | +9.56 | +9.21 | −0.35 | 0.08R | pass |
-| XRP 1H | 76 (+1 open) | 76 | 0 | +10.71 | +10.62 | −0.09 | 0.01R | pass |
+| MASR 1D | 126 | 64 | 62 | −7.51 | −7.78 | −0.27 | 0.64R | 2 |
+| ELEC 1D | 128 (+1 open) | 10 | 118 | −1.60 | −1.69 | −0.09 | 0.06R | 0 |
+| ABUK 4H | 141 | 136 | 5 | +9.56 | +9.21 | −0.35 | 0.11R | 1 |
+| XRP 1H | 77 | 77 | 0 | +9.71 | +9.61 | −0.10 | 0.01R | 0 |
 
-Entries sent + skipped = engine n (plus the open trade) on all four. The Tester reads slightly
-low on all four. That direction is expected: order prices are rounded to the tick on the far side
-of each level, so a stop fills up to a tick worse than the engine's raw level.
+Entries sent + skipped = engine n (plus the open trade on ELEC) on all four. XRP 1H was flat for
+this run; in the earlier runs it had one trade open, which has since closed for −1.00R.
 
-`Engine Total R` over all trades, for reference: MASR +6.03, ELEC +19.47, ABUK −1.98, XRP +10.71.
+**MASR 1D, taken apart.** The −0.27R difference is +0.64R from the one diverged trade above plus
+−0.92R of steady drift across the other 63 (−0.75R of it in the 47 trades with 10–20 ticks of
+risk, about −0.016R each). Without the trade that is itself an error, −0.92R is outside the 0.5R
+tolerance. The drift is a bias, not noise: order prices are rounded to the far side of each level,
+so every stop fills up to a tick worse than the engine's raw level, and at 10–20 ticks of risk a
+tick is 5–10% of R. It grows with the number of trades. The same lean shows on ABUK 4H (−0.35R
+over 136 trades), inside the tolerance there but not far inside.
+
+MASR's second diverged trade (2022-06-12) had its stop triggered a bar before the engine's. It
+cost nothing in R because the engine stopped out the next day anyway; had price recovered it
+would have cost a full loss against whatever the engine went on to make.
+
+ABUK 4H's worst trade (2025-10-15, 0.11R, 52 ticks) is the documented gap-through-a-target case:
+all three targets were reached on a bar that opened beyond them, and the Tester filled at the open.
+ABUK's one diverged trade was not individually traced.
+
+`Engine Total R` over all trades, for reference: MASR +6.03, ELEC +19.47, ABUK −1.98, XRP +9.71.
+
+**On the default of 10 ticks.** It is a compromise between coverage and accuracy, not a measured
+optimum — the data here does not bracket anything between 2 and 20. At 10, MASR sends 64 trades
+and carries the drift above. At 20 it would send 17. The README and the input's tooltip say so.
 
 **Something this surfaced that is worth the user's attention, separate from the Tester.** On the
 EGX charts most of the recorded R comes from trades with a very small price distance to the stop:
@@ -109,7 +150,8 @@ a second time to the user's already crowded layout.
 
 ## Exit-mode combinations, XRP 1H
 
-None produced a compile or runtime error.
+None produced a compile or runtime error. (Run before the divergence counter was added, with one
+trade open and nothing banked on it.)
 
 | Runner | Stop on Close Only | Trades | Engine R, sent | Tester R | Worst trade |
 |---|---|---|---|---|---|
@@ -119,23 +161,22 @@ None produced a compile or runtime error.
 | on | on | 71 | −7.34 | −7.34 | 0.01R |
 
 The spec predicted `Stop on Close Only` would make the Tester read systematically better than the
-engine. On XRP 1H it did not show: the two agree to within 0.01R. The prediction is not
-withdrawn — it needs a bar that wicks to a target and closes through the stop, and this sample
-evidently has few — but it is not confirmed either.
+engine. On XRP 1H it did not show. The prediction is not withdrawn — it needs a bar that wicks to
+a target and closes through the stop, and this sample evidently has few — but it is not confirmed.
 
 ## What the live pass confirmed from the final review's list
 
 | # | Item | Result |
 |---|---|---|
-| 1 | Compiles and loads; Runner, Stop on Close Only, both | Confirmed, first paste, no errors |
-| 2 | Entry fills at the entry bar's close, no exit on that bar | Confirmed — every Tester entry time and price matches the engine's |
-| 3 | Wick stop fills at the stop, or the open on a gap, on the engine's bar | Confirmed on sampled trades (e.g. MASR 2026-02-17: engine 5.1326, Tester 5.13, same bar) |
-| 4 | Where a stop already through the market fills | Not isolated. No trade on these charts differed by more than 0.13R after the changes, so it is not material here, but the specific case was not found and inspected |
+| 1 | Compiles and loads; Runner, Stop on Close Only, both | Confirmed, no errors on any paste |
+| 2 | Entry fills at the entry bar's close, no exit on that bar | Confirmed after the tick floor. Before it, four trades with under half a tick of risk entered and exited on one bar |
+| 3 | Wick stop fills at the stop, or the open on a gap, on the engine's bar | Usually (e.g. MASR 2026-02-17: engine 5.1326, Tester 5.13, same bar). **Not always on adjusted data:** MASR 2022-06-12 stopped in the Tester a bar before the engine |
+| 4 | Where a stop already through the market fills | Found: XRP 2026-01-30 short. The Tester's remaining legs fill at that bar's close, 1.7731; the engine exits on the next bar's open, 1.7731. One bar early, same price, 0.00R |
 | 5 | After TP1, two legs remain and no second "TP1" appears | Confirmed — no trade has more than three legs |
 | 6 | Quantities sum, no sliver | Confirmed — e.g. 1051 + 1051 + 1053 |
 | 7 | Flat after every engine close; next-bar entry taken | Confirmed — position 0 at the end of every flat run |
 | 8 | Invalidated exit at the close, with the reason as comment | Confirmed (MASR 2026-06-11: engine 6.62, Tester 6.62, comment `Invalidated`) |
-| 9 | XRP 1H shorts symmetric; order limit not reached | Confirmed — shorts present throughout, 213 closed legs |
+| 9 | XRP 1H shorts symmetric; order limit not reached | Confirmed — shorts present throughout, 216 closed legs |
 | 10 | Strategy's PERFORMANCE equals the indicator's | Confirmed against recorded figures, above |
 
 `syminfo.mincontract` compiles and reads 1 on all four symbols.
@@ -154,17 +195,29 @@ and will be worse with them.
 | ABUK 4H | 79 | 3 | +30,006 (+30.0%) | 11,111 | 1.70 | 0 |
 | XRP 1H | 76 | 0 | +10,298 (+10.3%) | 6,818 | 1.25 | 0 |
 
-The EGX daily figures cover only the recent part of each chart's history, because the earlier
-trades are the ones skipped. ELEC's 7 trades are too few to read anything into. XRP 1H spans
-roughly January–October 2026 only (the 1H history the plan loads).
+Caveats that matter:
+
+- The EGX daily figures cover only the recent part of each chart's history, because the earlier
+  trades are the ones skipped. ELEC's 7 trades are too few to read anything into.
+- **XRP 1H was run with no position cap and is leveraged**: at the end it held about 95,000 XRP on
+  roughly 110,000 of equity, and with a tighter stop it would have held more. `margin_long` and
+  `margin_short` are 0, so the Tester never refuses a size. Set `Max Position` to match what the
+  account can actually carry before trusting this row.
+- XRP 1H spans roughly January–October 2026 only (the 1H history this plan loads).
+- These runs predate the divergence counter. MASR's includes the 2023-12-07 trade.
 
 ## Not done, and why
 
 - **Costs.** The realistic run needs the user's commission and slippage.
 - **The Trail model.** Every run used `Backtest Model` = Pullback with the trail model off, as
   the defaults are. The Trail path through the layer compiled but was not exercised.
-- **A stop already through the market** (item 4 above) was not isolated.
+- **Target catch-up is lightly tested.** It fired on two trades in all the logs, both long, both
+  non-runner, both in wick mode. It helped one (−0.41R → −0.09R) and slightly hurt the other
+  (+0.07R → −0.04R); the price it exits at is that bar's close, which can be anywhere in the bar.
+- **What was compiled.** Every run used a debug copy: the generated strategy with
+  `Log Closed Trades` defaulted on and a logging block appended. The committed
+  `src/ict-rsi-ma-strategy.pine` is line-for-line that text without those two changes (checked by
+  diff), but that exact file was not itself pasted for the final version.
 - **The Tester's own List of Trades export** was not used: on this plan the Strategy report is
   partly locked ("Upgrade to get full access"). Pine Logs served instead and gave per-leg data.
-- **Compile errors met:** none. The strategy compiled on the first paste, and each of the seven
-  later variants compiled first time.
+- **Compile errors met:** none, on any of the variants pasted.
