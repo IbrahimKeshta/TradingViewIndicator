@@ -483,13 +483,32 @@ result in R. The **BACKTEST** table does the division for you and sets the two s
 
 | Row | Meaning |
 |---|---|
-| Entries sent | Orders the layer has placed. Should equal `Engine n` |
+| Entries sent | Orders the layer has placed |
+| Skipped trades | Engine trades that sent no order: risk under `Minimum Risk (ticks)`, or too small to buy one minimum unit. `Entries sent` + `Skipped trades` should equal `Engine n` (plus one while a trade is open) |
 | Engine n | The selected model's closed trades, as in PERFORMANCE |
 | Tester R | Strategy Tester net profit ÷ `Risk per Trade (cash)` |
-| Engine Total R | The selected model's Total R, as in PERFORMANCE |
+| Engine R, sent trades | The engine's own result over exactly the trades that were sent, with their count. **This is the number `Tester R` should match** |
+| Engine Total R | The selected model's Total R over every trade, as in PERFORMANCE |
 | Capped trades | Trades shrunk by `Max Position` |
-| Skipped trades | Trades too small to buy one minimum unit at the chosen risk — no order was sent |
 | Comparable | The two sides only agree exactly while no trade is open, and only under `Fixed Cash Risk` |
+
+### Why some trades are skipped: price granularity
+
+The engine measures everything in R, so it is indifferent to price scale. The Tester fills in whole
+ticks. On split- and dividend-adjusted history those two part company: a stock at 8.00 today can be
+shown at 0.09 twenty years back, where the whole entry-to-stop distance is less than one 0.01 tick.
+The Tester then enters at 0.09 and stops at 0.08 for a loss of 1.7R on a trade the engine recorded
+as a 2.3R winner. Neither is wrong about its own arithmetic — the Tester simply cannot represent
+that trade.
+
+`Minimum Risk (ticks)` (default 10) keeps such trades out of the Tester and counts them as skipped,
+and `Engine R, sent trades` gives the engine's figure for the remainder, so the comparison is like
+for like. Measured on MASR 1D with every trade sent: under 2 ticks of risk the two sides disagreed
+by up to 4R on a single trade; at 20 ticks or more, by at most 0.05R.
+
+Expect many skips on an EGX daily chart with a long history, and almost none on crypto. A large gap
+between `Engine Total R` and `Engine R, sent trades` is worth noticing in its own right: it means
+much of that chart's recorded R comes from trades with a very small price distance to the stop.
 
 **To see realistic results** — set `Sizing` to `% of Equity Risk`, set `Max Position (% of equity)`
 to 100 on a cash-equity market, and enter your broker's real commission and slippage in the
@@ -508,6 +527,10 @@ These are expected. Anything else is a bug.
   to the stop, while the Tester treats the order as already triggered. The trade ends either way,
   but the bar and the price can differ.
 - **A gap through a target.** The engine books the target price; the Tester fills at the better open.
+- **A target reached by less than a tick.** On adjusted history a bar's high can sit between the
+  engine's target and the next whole tick. The engine counts the target; the Tester's limit is not
+  reached, so that third is closed at the bar's close instead (marked `Target catch-up` in the
+  trade list) — a slightly different price for the same exit.
 - **Quantity rounding.** The position is rounded down to whole tradable units, so it risks slightly
   less than `Risk per Trade` and `Tester R` reads slightly small. Negligible at hundreds of units,
   material at a handful — if the Tester's trade list shows single-digit quantities, raise
@@ -527,6 +550,7 @@ These are expected. Anything else is a bug.
 | Risk per Trade (cash) | 1000 | Cash lost if the initial stop is hit |
 | Risk per Trade (% of equity) | 1.0 | Share of current equity lost if the initial stop is hit |
 | Max Position (% of equity) | 0 | Caps position value; 0 is no cap. Sizing by risk with a tight stop can ask for more than the account holds |
+| Minimum Risk (ticks) | 10 | Trades whose entry-to-stop distance is under this many ticks send no order. 0 sends everything. See *price granularity* above |
 | Show Backtest Panel | on | The BACKTEST table |
 | Backtest Panel Position | Bottom Left | If it matches `Panel Position`, one table hides the other |
 

@@ -1,7 +1,10 @@
 # Strategy Tester Backtest — Design
 
 **Date:** 2026-10-05
-**Status:** Design approved 2026-10-05, implementation not yet started
+**Status:** Implemented and run on TradingView 2026-10-05. The cross-check as originally declared
+failed on the three EGX charts and passed on XRP 1H; the cause was price granularity, not the order
+layer, and the design was amended (see "Amendments from the live pass"). Results:
+`docs/superpowers/plans/2026-10-05-strategy-backtest-validation.md`
 **Implementation:** by subagent on Sonnet 5.5, at the user's request
 **Source of truth:** `src/ict-rsi-ma-indicator.pine` (not modified by this work)
 **New files:** `src/strategy-layer.pine`, `tools/build-strategy.ps1`, `src/ict-rsi-ma-strategy.pine` (generated)
@@ -179,6 +182,33 @@ Total R; entries sent should equal its n.
 **Realistic run:** Sizing = % of Equity Risk, Max Position = 100 on cash equities, and commission
 and slippage set in the Properties tab to the broker's real figures. `Long Trades Only` on where
 shorting is unavailable.
+
+## Amendments from the live pass
+
+Three things changed after the strategy first ran on a chart. They are recorded here rather than
+folded silently into the sections above, because the original pass rule was written before them.
+
+1. **Minimum Risk (ticks), default 10.** The engine works in R and is scale-free; the broker
+   emulator fills in whole ticks. On split- and dividend-adjusted history an old price can be a
+   few ticks in total (MASR at 0.09, ELEC at 0.015, both with a 0.01 tick), so a one-tick rounding
+   is a large part of 1R — on MASR 1D one trade the engine booked at +2.30R came out at −1.69R.
+   A trade whose entry-to-stop distance is under the floor sends no order and is counted as
+   skipped. Measured before the floor existed: under 2 ticks, up to 4R apart on one trade; 20
+   ticks or more, at most 0.05R.
+2. **"Engine R, sent trades" row.** With trades skipped, `Engine Total R` is no longer the right
+   comparison. The layer accumulates the engine's own blended R over exactly the trades it sent,
+   and the table shows that figure and its count beside `Tester R`. The identity to check is
+   entries sent + skipped = engine n (plus one while a trade is open).
+3. **Target catch-up.** Bars on adjusted history are not tick-aligned either, so a high can pass
+   the engine's raw target without reaching the limit rounded up to the next tick. The engine
+   then counts the target and the layer stops re-issuing that leg, which would leave a third of
+   the position with no order. When the position is larger than the engine's `tpHit` implies,
+   the stale order is cancelled and the excess is closed at that bar's close.
+
+The pass rule as originally written — entries sent equals n, Tester R against Engine Total R — is
+therefore only meaningful where nothing is skipped. The rule the results are judged on is the
+like-for-like one: Tester R within the larger of 2% or 0.5R of `Engine R, sent trades`, per chart.
+That rule was written after seeing the first failure, and the validation document says so.
 
 ## Verification
 

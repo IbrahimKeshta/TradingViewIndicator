@@ -1969,6 +1969,7 @@ btSizingInput   = input.string("Fixed Cash Risk", "Sizing", options = ["Fixed Ca
 btRiskCash      = input.float(1000.0, "Risk per Trade (cash)", minval = 0.01, group = "Strategy Tester", tooltip = "Cash lost if the initial stop is hit. Used in Fixed Cash Risk mode.")
 btRiskPct       = input.float(1.0, "Risk per Trade (% of equity)", minval = 0.01, maxval = 100.0, step = 0.1, group = "Strategy Tester", tooltip = "Share of current equity lost if the initial stop is hit. Used in % of Equity Risk mode.")
 btMaxPosPct     = input.float(0.0, "Max Position (% of equity)", minval = 0.0, step = 10.0, group = "Strategy Tester", tooltip = "Caps the position's value. 0 = no cap. Sizing by risk with a tight stop can ask for a position larger than the account; on a cash-equity market set this to 100. A capped trade risks less than 1R, so the Tester and the PERFORMANCE rows will differ on it — the BACKTEST table counts how many were capped.")
+btMinRiskTicks  = input.float(10.0, "Minimum Risk (ticks)", minval = 0.0, step = 1.0, group = "Strategy Tester", tooltip = "Trades whose entry-to-stop distance is under this many ticks send no order and are counted as skipped. The engine measures in R and is indifferent to price scale; the Tester fills in whole ticks. On split- and dividend-adjusted history an old price can be a few ticks in total — a stock now at 8.00 shown at 0.09 — and there a one-tick rounding is a large part of 1R, so the Tester's result for that trade is noise. Measured on MASR 1D: under 2 ticks of risk the two disagreed by up to 4R on one trade, at 20 ticks or more by at most 0.05R. 0 = send everything.")
 showBtPanel     = input.bool(true, "Show Backtest Panel", group = "Strategy Tester")
 btPanelPosInput = input.string("Bottom Left", "Backtest Panel Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Strategy Tester", tooltip = "TradingView draws one table per position, so if this matches Panel Position one hides the other.")
 
@@ -1992,6 +1993,11 @@ var int   btCapped  = 0
 var int   btSkipped = 0
 var float btLegQty  = na   // the first two thirds
 var float btLastQty = na   // the remainder, so the three legs sum to the position exactly
+var float btPosQty  = 0.0  // the whole position the current trade opened; 0 if it was skipped
+// The engine's own result over exactly the trades that were sent, so the table can compare the
+// Tester against the same population rather than against a total that includes skipped trades.
+var int   btSentN   = 0
+var float btSentR   = 0.0
 
 // The engine tests raw, unrounded levels against the bar's high and low; the broker emulator
 // works in whole ticks. Rounding each order price to the tick on the far side of the level makes
@@ -2025,12 +2031,15 @@ if not na(bt)
 // this bar's close, which is the entry price the engine recorded.
 //
 // Sized from initialStop, the same denominator the engine's R uses, then rounded down to whole
-// minimum contracts. A trade that rounds to nothing sends no order and is counted as skipped;
-// the engine's trade then has no counterpart, which shows as entries sent falling behind n.
+// minimum contracts. A trade that rounds to nothing, or whose risk is under Minimum Risk (ticks),
+// sends no order and is counted as skipped; the engine's trade then has no counterpart, which
+// shows as entries sent falling behind n.
 if btOpenedNow
     btRiskPer = math.abs(bt.entry - bt.initialStop)
     btCash    = btFixedCash ? btRiskCash : strategy.equity * btRiskPct / 100.0
     btQty     = btRiskPer > 0 ? btCash / btRiskPer : 0.0
+    if btRiskPer < btMinRiskTicks * syminfo.mintick
+        btQty := 0.0
     if btMaxPosPct > 0
         if bt.entry > 0
             btMaxQty = strategy.equity * btMaxPosPct / 100.0 / bt.entry
@@ -2043,13 +2052,16 @@ if btOpenedNow
         // legs come out as zero and the last leg carries all of it.
         btLegQty  := btLots(btQty / 3.0)
         btLastQty := btQty - 2.0 * btLegQty
+        btPosQty  := btQty
         strategy.entry("BT", bt.side == "long" ? strategy.long : strategy.short, qty = btQty)
         btEntries += 1
     else
-        // Too small to trade one contract (or no equity left in % mode). No order exists, so it
-        // must not be counted as sent — it is counted here instead, where the table shows it.
+        // Under the tick floor, too small to trade one contract, or no equity left in % mode. No
+        // order exists, so it must not be counted as sent — it is counted here instead, where
+        // the table shows it.
         btLegQty  := 0.0
         btLastQty := 0.0
+        btPosQty  := 0.0
         btSkipped += 1
 
 // ---- exits while the trade is live ----
@@ -2088,6 +2100,22 @@ if tradeLiveOf(bt)
     if btLastQty > 0
         if not (na(btLimit3) and na(btStopPx))
             strategy.exit("TP3", from_entry = "BT", qty = btLastQty, limit = btLimit3, stop = btStopPx)
+    // Catch-up for a target the engine counted and the Tester did not fill. On adjusted history
+    // the bar's own high and low are not on a tick either, so a high of 1.915 reaches the
+    // engine's 1.9126 target but not a limit at 1.92. Left alone that third would sit with no
+    // order at all — its exit is no longer re-issued — until the engine's close. Its stale order
+    // is cancelled and the third leaves at this bar's close instead: a slightly different price,
+    // the same trade shape. Skipped on the opening bar, where the entry has not filled yet.
+    if not btOpenedNow
+        if btLegQty > 0
+            btExpected = btPosQty - (bt.tpHit >= 1 ? btLegQty : 0.0) - (bt.tpHit >= 2 ? btLegQty : 0.0)
+            btExcess   = math.abs(strategy.position_size) - btExpected
+            if btExcess >= 0.5 * syminfo.mincontract
+                if bt.tpHit >= 1
+                    strategy.cancel("TP1")
+                if bt.tpHit >= 2
+                    strategy.cancel("TP2")
+                strategy.close("BT", qty = btExcess, comment = "Target catch-up")
 
 // ---- the bar the engine closes the trade ----
 // For a wick-mode stop or a TP3 exit the resting order has already filled and this closes
@@ -2098,6 +2126,9 @@ if btClosedNow
     strategy.cancel_all()
     if not na(bt)
         strategy.close("BT", comment = bt.closeReason)
+    if btPosQty > 0
+        btSentN += 1
+        btSentR += btIsTrail ? trailClosedR : closedR
 
 // ---- BACKTEST table ----
 // Puts both sides of the cross-check next to each other. Tester R is only meaningful under Fixed
@@ -2115,20 +2146,22 @@ if barstate.islast
         btEngineN = array.get(statTrades, btModelIdx)
         btEngineR = array.get(statSumR,   btModelIdx)
         btIsOpen  = tradeLiveOf(bt)
-        btPanel := table.new(btPanelPos, 2, 8, bgcolor = panelBgColor, border_width = 1)
+        btPanel := table.new(btPanelPos, 2, 9, bgcolor = panelBgColor, border_width = 1)
         table.cell(btPanel, 0, 0, "BACKTEST", text_color = color.white, bgcolor = color.new(color.gray, 50))
         table.cell(btPanel, 1, 0, btModelInput, text_color = color.silver, bgcolor = color.new(color.gray, 50))
         table.cell(btPanel, 0, 1, "Entries sent", text_color = color.silver)
         table.cell(btPanel, 1, 1, str.tostring(btEntries), text_color = color.white)
-        table.cell(btPanel, 0, 2, "Engine n", text_color = color.silver)
-        table.cell(btPanel, 1, 2, str.tostring(btEngineN) + (btIsOpen ? "  (+1 open)" : ""), text_color = color.white)
-        table.cell(btPanel, 0, 3, "Tester R", text_color = color.silver)
-        table.cell(btPanel, 1, 3, btFixedCash ? str.tostring(strategy.netprofit / btRiskCash, "0.00") + "R" : "n/a (% sizing)", text_color = color.white)
-        table.cell(btPanel, 0, 4, "Engine Total R", text_color = color.silver)
-        table.cell(btPanel, 1, 4, str.tostring(btEngineR, "0.00") + "R", text_color = color.white)
-        table.cell(btPanel, 0, 5, "Capped trades", text_color = color.silver)
-        table.cell(btPanel, 1, 5, str.tostring(btCapped), text_color = btCapped > 0 ? color.orange : color.white)
-        table.cell(btPanel, 0, 6, "Skipped trades", text_color = color.silver)
-        table.cell(btPanel, 1, 6, str.tostring(btSkipped), text_color = btSkipped > 0 ? color.orange : color.white)
-        table.cell(btPanel, 0, 7, "Comparable", text_color = color.silver)
-        table.cell(btPanel, 1, 7, not btFixedCash ? "n/a (% sizing)" : btIsOpen ? "trade open — wait for flat" : "yes — flat", text_color = btFixedCash and not btIsOpen ? color.white : color.orange)
+        table.cell(btPanel, 0, 2, "Skipped trades", text_color = color.silver)
+        table.cell(btPanel, 1, 2, str.tostring(btSkipped), text_color = btSkipped > 0 ? color.orange : color.white)
+        table.cell(btPanel, 0, 3, "Engine n", text_color = color.silver)
+        table.cell(btPanel, 1, 3, str.tostring(btEngineN) + (btIsOpen ? "  (+1 open)" : ""), text_color = color.white)
+        table.cell(btPanel, 0, 4, "Tester R", text_color = color.silver)
+        table.cell(btPanel, 1, 4, btFixedCash ? str.tostring(strategy.netprofit / btRiskCash, "0.00") + "R" : "n/a (% sizing)", text_color = color.white)
+        table.cell(btPanel, 0, 5, "Engine R, sent trades", text_color = color.silver)
+        table.cell(btPanel, 1, 5, str.tostring(btSentR, "0.00") + "R  (" + str.tostring(btSentN) + ")", text_color = color.white)
+        table.cell(btPanel, 0, 6, "Engine Total R", text_color = color.silver)
+        table.cell(btPanel, 1, 6, str.tostring(btEngineR, "0.00") + "R", text_color = color.white)
+        table.cell(btPanel, 0, 7, "Capped trades", text_color = color.silver)
+        table.cell(btPanel, 1, 7, str.tostring(btCapped), text_color = btCapped > 0 ? color.orange : color.white)
+        table.cell(btPanel, 0, 8, "Comparable", text_color = color.silver)
+        table.cell(btPanel, 1, 8, not btFixedCash ? "n/a (% sizing)" : btIsOpen ? "trade open — wait for flat" : "yes — flat", text_color = btFixedCash and not btIsOpen ? color.white : color.orange)
