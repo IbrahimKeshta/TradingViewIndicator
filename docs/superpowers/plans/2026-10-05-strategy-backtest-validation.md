@@ -206,9 +206,53 @@ Caveats that matter:
 - XRP 1H spans roughly January–October 2026 only (the 1H history this plan loads).
 - These runs predate the divergence counter. MASR's includes the 2023-12-07 trade.
 
+## Realistic run with the user's costs (added 2026-10-06)
+
+The user gave: commission 2 EGP, slippage 0.1%. Same settings as the table above, plus costs.
+
+How they were modelled, and where that is approximate:
+
+- **Commission:** 2 EGP **per order** (`strategy.commission.cash_per_order`), so a trade that
+  scales out in thirds pays 8 EGP — one entry and three exits. Applied to the three EGX charts
+  only; a fee in EGP has no meaning on XRPUSDT, which ran with slippage alone.
+- **Slippage:** TradingView takes it in whole ticks, not percent, and applies it to market and
+  stop fills, not to limit fills at targets. 0.1% was converted at each chart's current price:
+  MASR 7.7 → 1 tick (0.13%), ABUK 87 → 9 ticks (0.10%), XRP 1.52 → 15 ticks (0.10%). **ELEC at
+  1.9 needs 0.19 of a tick; the smallest setting is 1 tick, which is 0.5% — five times what was
+  asked.** ELEC's row overstates slippage and should not be read as the answer for ELEC.
+- A fixed tick count is a larger percentage on older, lower prices. The trades that remain after
+  the tick floor are mostly recent, so the distortion is limited, but it is not zero.
+
+| Chart | Trades | Net profit, no costs | Net profit, with costs | Max drawdown | Profit factor |
+|---|---|---|---|---|---|
+| ABUK 4H | 79 | +30,006 (+30.0%) | +4,782 (+4.8%) | 12,831 | 1.09 |
+| MASR 1D | 40 | −281 (−0.3%) | −5,024 (−5.0%) | 9,039 | 0.79 |
+| ELEC 1D | 7 | −623 (−0.6%) | −1,396 (−1.4%) | 3,555 | 0.70 |
+| XRP 1H | 78 | (see note) | −5,437 (−5.4%) | 10,719 | 0.90 |
+
+XRP's no-cost figure from the earlier table (+10,298 on 76 trades) is not the right comparison:
+two more trades have closed since, both losses, taking the engine's total from +10.71R to +8.71R.
+At 1% risk that is roughly 2,000 of the difference; the rest, about 13,700, is slippage.
+
+**Slippage is the whole story; the 2 EGP commission is negligible** (79 trades × 8 EGP = 632 EGP on
+ABUK, against a 25,000 swing). The reason 0.1% bites this hard is the stop distance. Position
+size is set so that the stop costs 1% of equity, and the stops here are often 0.5–1.5% away from
+entry, so a position is commonly worth about as much as the whole account. 0.1% of that, paid on
+the entry and again on a stopped exit, is 0.1–0.2% of equity per trade — a tenth to a fifth of
+the 1% at risk. A system whose average trade is a few hundredths of an R does not survive that.
+
+What this does and does not show:
+
+- It shows the results are highly sensitive to execution cost, and that at 0.1% per side only
+  ABUK 4H stays positive, barely.
+- It does not show the strategy loses money in practice. 0.1% on every market and stop fill may
+  be pessimistic for a liquid name and optimistic for a thin one, and the engine enters at the
+  bar's close, where a real order could be a limit instead of a market order.
+- The run is still long-only on EGX, zero-cost on the financing side, and on the trades the tick
+  floor lets through.
+
 ## Not done, and why
 
-- **Costs.** The realistic run needs the user's commission and slippage.
 - **The Trail model.** Every run used `Backtest Model` = Pullback with the trail model off, as
   the defaults are. The Trail path through the layer compiled but was not exercised.
 - **Target catch-up is lightly tested.** It fired on two trades in all the logs, both long, both
