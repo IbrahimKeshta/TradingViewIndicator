@@ -1,0 +1,139 @@
+// ============================================================
+// STRATEGY TESTER ORDER LAYER
+// ============================================================
+// Appended to the indicator by tools/build-strategy.ps1. This file is a fragment: it reads the
+// engine's globals and does not compile alone.
+//
+// It decides nothing. Every entry, stop, target and exit is the engine's; this layer only tells
+// TradingView's broker emulator what the engine already did, so the Strategy Tester becomes a
+// second, independent accounting of the same trades.
+//
+// Every identifier declared here starts with `bt` or `showBt`. The indicator has none with that
+// prefix, so nothing here can shadow or collide with engine state.
+//
+// No plot is added: the indicator sits at Pine's 64-plot cap, and a 65th is a runtime error that
+// only appears on the chart. The readouts go in a table instead.
+btModelInput    = input.string("Pullback", "Backtest Model", options = ["Pullback", "Trail"], group = "Strategy Tester", tooltip = "Which entry model sends orders to the Strategy Tester. A strategy holds one net position per symbol, while the two models can be open at once and in opposite directions, so one run tests one model. The other still draws and still reports in the panel. Selecting Trail does not switch the trail model on — Enable Trailing Stop Model does.")
+btSizingInput   = input.string("Fixed Cash Risk", "Sizing", options = ["Fixed Cash Risk", "% of Equity Risk"], group = "Strategy Tester", tooltip = "Fixed Cash Risk puts the same cash amount at risk on every trade, so Net Profit divided by that amount is the result in R — use it to check the Tester against the PERFORMANCE rows. % of Equity Risk compounds, which is the realistic view.")
+btRiskCash      = input.float(1000.0, "Risk per Trade (cash)", minval = 0.01, group = "Strategy Tester", tooltip = "Cash lost if the initial stop is hit. Used in Fixed Cash Risk mode.")
+btRiskPct       = input.float(1.0, "Risk per Trade (% of equity)", minval = 0.01, maxval = 100.0, step = 0.1, group = "Strategy Tester", tooltip = "Share of current equity lost if the initial stop is hit. Used in % of Equity Risk mode.")
+btMaxPosPct     = input.float(0.0, "Max Position (% of equity)", minval = 0.0, step = 10.0, group = "Strategy Tester", tooltip = "Caps the position's value. 0 = no cap. Sizing by risk with a tight stop can ask for a position larger than the account; on a cash-equity market set this to 100. A capped trade risks less than 1R, so the Tester and the PERFORMANCE rows will differ on it — the BACKTEST table counts how many were capped.")
+showBtPanel     = input.bool(true, "Show Backtest Panel", group = "Strategy Tester")
+btPanelPosInput = input.string("Bottom Left", "Backtest Panel Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Strategy Tester", tooltip = "TradingView draws one table per position, so if this matches Panel Position one hides the other.")
+
+btIsTrail   = btModelInput == "Trail"
+btFixedCash = btSizingInput == "Fixed Cash Risk"
+btModelIdx  = btIsTrail ? MODEL_TRAIL : MODEL_PULLBACK
+// The slot's own close flag, never the shared tradeClosed — the other model closing must not
+// flatten this one's position.
+btClosedNow = btIsTrail ? trClosed : pbClosed
+
+// A second reference to the selected slot's trade, for reading only. UDTs are references, so
+// this is the same object the engine holds; nothing below assigns to a field of it.
+Trade bt = na
+if btIsTrail
+    bt := trailTrade
+else
+    bt := activeTrade
+
+var int   btEntries = 0
+var int   btCapped  = 0
+var float btLegQty  = na   // the first two thirds
+var float btLastQty = na   // the remainder, so the three legs sum to the position exactly
+
+// Nested, not `and`-chained: Pine does not guarantee short-circuit evaluation, and reading a
+// field of a `na` object is a runtime error.
+btOpenedNow = false
+if not na(bt)
+    if bt.openBar == bar_index
+        btOpenedNow := true
+
+// ---- entry ----
+// A market order on the bar the engine opened the trade. process_orders_on_close fills it at
+// this bar's close, which is the entry price the engine recorded.
+//
+// Sized from initialStop, the same denominator the engine's R uses. With non-positive equity in
+// % mode the quantity is not positive and no order is sent; the engine's trade then has no
+// counterpart, which shows as entries sent falling behind n.
+if btOpenedNow
+    btRiskPer = math.abs(bt.entry - bt.initialStop)
+    btCash    = btFixedCash ? btRiskCash : strategy.equity * btRiskPct / 100.0
+    btQty     = btRiskPer > 0 ? btCash / btRiskPer : 0.0
+    if btMaxPosPct > 0
+        if bt.entry > 0
+            btMaxQty = strategy.equity * btMaxPosPct / 100.0 / bt.entry
+            if btQty > btMaxQty
+                btQty    := btMaxQty
+                btCapped += 1
+    if btQty > 0
+        btLegQty  := btQty / 3.0
+        btLastQty := btQty - 2.0 * btLegQty
+        strategy.entry("BT", bt.side == "long" ? strategy.long : strategy.short, qty = btQty)
+        btEntries += 1
+
+// ---- exits while the trade is live ----
+// One exit order per third, re-issued every bar so the resting stop follows the engine's. The
+// engine moves its stop at this bar's close and tests it on the next bar; a stop order placed
+// now and evaluated over the next bar is the same thing. A stop that opens beyond its price
+// fills at the open, which is the engine's own gap rule.
+//
+// A leg whose target the engine has already counted is NOT re-issued: its order has filled, and
+// calling strategy.exit again under the same id would open a fresh exit against the remainder.
+//
+// Stop on Close Only: no resting stop at all. A resting stop fills on a wick, which is exactly
+// what that mode exists to ignore; the close block below exits at the bar's close instead.
+//
+// Runner: the last third has no limit at TP3 and leaves by the stop or the close. Read from the
+// trade's own snapshot, as the engine does. With both modes on that leg has neither a limit nor
+// a stop, and strategy.exit with neither is a runtime error, so the call is skipped.
+if tradeLiveOf(bt)
+    btStopPx = stopOnCloseOnly ? float(na) : bt.stop
+    btLimit3 = bt.runner ? float(na) : bt.tp3
+    if bt.tpHit < 1
+        strategy.exit("TP1", from_entry = "BT", qty = btLegQty, limit = bt.tp1, stop = btStopPx)
+    if bt.tpHit < 2
+        strategy.exit("TP2", from_entry = "BT", qty = btLegQty, limit = bt.tp2, stop = btStopPx)
+    if not (na(btLimit3) and na(btStopPx))
+        strategy.exit("TP3", from_entry = "BT", qty = btLastQty, limit = btLimit3, stop = btStopPx)
+
+// ---- the bar the engine closes the trade ----
+// For a wick-mode stop or a TP3 exit the resting order has already filled and this closes
+// nothing. For an Invalidated exit, and for every stop under Stop on Close Only, this IS the
+// exit, at this bar's close — the price the engine books. It also sweeps up whatever quantity
+// rounding left behind, so the Tester is never still in a trade the engine has finished.
+if btClosedNow
+    strategy.cancel_all()
+    if not na(bt)
+        strategy.close("BT", comment = bt.closeReason)
+
+// ---- BACKTEST table ----
+// Puts both sides of the cross-check next to each other. Tester R is only meaningful under Fixed
+// Cash Risk, and the two only agree exactly while flat: an open trade is in entries sent but not
+// in n, and thirds it has already banked are in net profit but not yet in Total R.
+var table btPanel = na
+if barstate.islast
+    table.delete(btPanel)
+    if showBtPanel
+        btPanelPos = switch btPanelPosInput
+            "Top Right"    => position.top_right
+            "Top Left"     => position.top_left
+            "Bottom Right" => position.bottom_right
+            => position.bottom_left
+        btEngineN = array.get(statTrades, btModelIdx)
+        btEngineR = array.get(statSumR,   btModelIdx)
+        btIsOpen  = tradeLiveOf(bt)
+        btPanel := table.new(btPanelPos, 2, 7, bgcolor = panelBgColor, border_width = 1)
+        table.cell(btPanel, 0, 0, "BACKTEST", text_color = color.white, bgcolor = color.new(color.gray, 50))
+        table.cell(btPanel, 1, 0, btModelInput, text_color = color.silver, bgcolor = color.new(color.gray, 50))
+        table.cell(btPanel, 0, 1, "Entries sent", text_color = color.silver)
+        table.cell(btPanel, 1, 1, str.tostring(btEntries), text_color = color.white)
+        table.cell(btPanel, 0, 2, "Engine n", text_color = color.silver)
+        table.cell(btPanel, 1, 2, str.tostring(btEngineN) + (btIsOpen ? "  (+1 open)" : ""), text_color = color.white)
+        table.cell(btPanel, 0, 3, "Tester R", text_color = color.silver)
+        table.cell(btPanel, 1, 3, btFixedCash ? str.tostring(strategy.netprofit / btRiskCash, "0.00") + "R" : "n/a (% sizing)", text_color = color.white)
+        table.cell(btPanel, 0, 4, "Engine Total R", text_color = color.silver)
+        table.cell(btPanel, 1, 4, str.tostring(btEngineR, "0.00") + "R", text_color = color.white)
+        table.cell(btPanel, 0, 5, "Capped trades", text_color = color.silver)
+        table.cell(btPanel, 1, 5, str.tostring(btCapped), text_color = btCapped > 0 ? color.orange : color.white)
+        table.cell(btPanel, 0, 6, "Comparable", text_color = color.silver)
+        table.cell(btPanel, 1, 6, btIsOpen ? "trade open — wait for flat" : "yes — flat", text_color = btIsOpen ? color.orange : color.white)
