@@ -906,7 +906,7 @@ into a second tuning set.
 
 `Log Trades` (off by default, in `Display`) writes one CSV line per closed trade to TradingView's
 Pine Logs: symbol, entry and exit date and price, R, win flag, close reason, trust score and band, the
-six factor values, best and worst excursion in R, bars held, and the period (`Tuning` or `Test`).
+six factor values, best and worst excursion in R, bars held, and the period (`Tuning`, `Test` or `Straddle`, the last for a trade entered before `Test Start` that closed after it).
 Pine Logs only work on a **personal, unpublished copy** of the script; TradingView disables
 `log.*()` on published or invite-only scripts. The log is what lets you recompute the panel's totals
 outside TradingView and check that they match.
@@ -948,7 +948,7 @@ chart rather than quoting a price.
 | Setting | Default | What it does |
 |---|---|---|
 | RSI Length | 2 | A very short RSI, so it only reaches extremes on real dips |
-| RSI Oversold Below | 10 | RSI under this arms a setup |
+| RSI Oversold Below | 15 | RSI(2) falling below this arms a setup |
 | Confirmation Window (bars) | 3 | How long after the latest oversold bar a confirming candle can still count |
 | Setup Expiry (bars) | 5 | Hard cap counted from the first oversold bar |
 | Cancel Below Setup Low (x ATR) | 0.5 | A close this far below the latest oversold low cancels the setup |
@@ -1012,11 +1012,27 @@ heavily adjusted names, results on old bars are less reliable than on recent one
 **Long only.** There are no short entries and no short-side exit logic. The index regime being Down
 simply stops new trades and ends open ones.
 
-**Built, not yet validated out of sample.** The indicator is implemented and its panel reports on
-whatever history is loaded, but live out-of-sample validation is still pending. No accuracy or
-win-rate figure is claimed anywhere in this README, because none has been measured yet. Until it has,
-treat the trust score and the track record as a way to measure the setup on your own charts, not as
-a promise.
+### Validation results
+
+The indicator was validated live on TradingView, daily charts, with the settings `RSI Oversold Below`
+15 and `Target 1 (R)` 0.75. Those settings were chosen on the 15 tuning charts (trades before
+2024-01-01) and then read once out of sample: the same 15 charts from 2024-01-01 onward, plus 10
+charts never looked at before.
+
+- **Out-of-sample, 25 charts, 973 trades:** win rate **55.2%**, total **+18.43R** after costs (about
+  +0.02R per trade), positive on 13 of the 25 charts.
+- **The 80% win-rate target was not met.**
+- **No trust band reached 80%.** The High band won 56.9%. On the tuning data the trust score did not
+  separate winners from losers: every factor sat between 52% and 58%.
+- **80% is not reachable with this design.** An 80% win rate would need Target 1 near 0.2R, where
+  the losses outweigh the wins after costs.
+- Validation stopped after round 1, because nothing in the tuning evidence justified a rule change.
+
+Read plainly: this is a decision-support tool whose measured edge is about breakeven. It finds a
+reasonable pullback entry and measures it honestly; it does not predict which entries will win. Use
+the trust score and the track record to see how the setup behaves on your own charts, not as a
+promise. The full record, including the tuning grid and the biases above, is in
+`docs/superpowers/plans/2026-11-02-egx-trust-validation.md`.
 
 ---
 
@@ -1042,8 +1058,9 @@ of the buffer instead of at its true origin. The price levels themselves are una
 only meet this on a very long intraday chart.
 
 **The EGX Trust Score has limits of its own** — survivorship bias in the constituent lists, coarse
-ticks on split-adjusted history, long only, and no out-of-sample validation yet. They are set out
-under *Known limits* in its section above, and they matter before you rely on its trust score.
+ticks on split-adjusted history, and long only. Its measured out-of-sample edge is about breakeven
+(55.2% win rate, +0.02R per trade). They are set out under *Known limits* and *Validation results*
+in its section above, and they matter before you rely on its trust score.
 
 **These are decision-support tools, not a strategy.** None of these scripts backtests, sizes a position, or
 places an order. The trade engine computes levels and records what would have happened; it does not

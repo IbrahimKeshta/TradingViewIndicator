@@ -18,7 +18,7 @@ minValueTraded = input.float(2000000, "Min Avg Value Traded (EGP)", minval = 0, 
 
 // ---------------- Setup ----------------
 rsiLen       = input.int(2, "RSI Length", minval = 1, group = "Setup")
-rsiThreshold = input.float(10, "RSI Oversold Below", minval = 1, maxval = 50, group = "Setup")
+rsiThreshold = input.float(15, "RSI Oversold Below", minval = 1, maxval = 50, group = "Setup")
 confirmBars  = input.int(3, "Confirmation Window (bars)", minval = 1, group = "Setup", tooltip = "A confirmation candle must close within this many bars of the most recent oversold bar.")
 setupExpiry  = input.int(5, "Setup Expiry (bars)", minval = 1, group = "Setup", tooltip = "Hard cap counted from the first oversold bar. Repeated oversold bars refresh the confirmation window but cannot keep a setup alive past this.")
 cancelAtr    = input.float(0.5, "Cancel Below Setup Low (x ATR)", minval = 0, step = 0.1, group = "Setup", tooltip = "A close this far below the latest oversold bar's low cancels the setup.")
@@ -49,7 +49,7 @@ useFConf    = input.bool(true, "Score: Confirmation Strength", group = "Trust Sc
 minHistory  = input.int(10, "Track Record Minimum Trades", minval = 1, group = "Trust Score", tooltip = "Below this many closed trades in a band, the entry label says 'building history' instead of quoting a win rate.")
 
 // ---------------- Validation ----------------
-testStart = input.time(timestamp("01 Jan 2024 00:00 +0200"), "Test Start", group = "Validation", tooltip = "Trades entered before this time count under Tuning, from it onward under Test. Tune settings by the Tuning column only.")
+testStart = input.time(timestamp("01 Jan 2024 00:00 +0200"), "Test Start", group = "Validation", tooltip = "Trades entered before this time count under Tuning, trades entered from it onward count under Test. A trade entered before it that closes after it counts in neither (only in the panel footer's straddle count). Tune settings by the Tuning column only.")
 
 // ---------------- Display ----------------
 showPanel  = input.bool(true, "Show Panel", group = "Display")
