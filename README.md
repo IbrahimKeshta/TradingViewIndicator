@@ -708,6 +708,10 @@ The index is read from `EGX_DLY:EGX30` or `EGX_DLY:EGX70EWI`, on the chart's own
 without lookahead, so on a historical bar the index value is the one that bar could actually have
 seen.
 
+TradingView's EGX 70 EWI history starts in mid-2020. Before that, an EGX70 stock is gated by EGX30's
+trend instead. The Index row in STATUS then reads `· EGX30 proxy to <date>` (in orange). This is a
+stand-in for history TradingView doesn't have, not a claim that EGX30 and EGX70 move together.
+
 ## The index regime and the three gates
 
 The index is classified on every bar:

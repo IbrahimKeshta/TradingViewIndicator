@@ -80,7 +80,21 @@ indexSym  = indexName == "EGX70" ? "EGX_DLY:EGX70EWI" : "EGX_DLY:EGX30"
 // ============================================================
 // Same timeframe as the chart, no lookahead: on a historical bar the index value is the one
 // that bar could actually have seen.
-[idxClose, idxMa, idxMaPast] = request.security(indexSym, timeframe.period, [close, ta.sma(close, regimeLen), ta.sma(close, regimeLen)[slopeLen]], lookahead = barmerge.lookahead_off)
+[ownClose, ownMa, ownMaPast] = request.security(indexSym, timeframe.period, [close, ta.sma(close, regimeLen), ta.sma(close, regimeLen)[slopeLen]], lookahead = barmerge.lookahead_off)
+[c30, ma30, past30]          = request.security("EGX_DLY:EGX30", timeframe.period, [close, ta.sma(close, regimeLen), ta.sma(close, regimeLen)[slopeLen]], lookahead = barmerge.lookahead_off)
+
+// EGX 70 EWI only has history on TradingView from mid-2020. Until it can give a full regime
+// reading, an EGX70 stock falls back to EGX30 as the market trend (flagged in STATUS) instead of
+// losing every earlier bar to "No data".
+ownReady  = not na(ownClose) and not na(ownMa) and not na(ownMaPast)
+useProxy  = indexName == "EGX70" and not ownReady
+idxClose  = useProxy ? c30 : ownClose
+idxMa     = useProxy ? ma30 : ownMa
+idxMaPast = useProxy ? past30 : ownMaPast
+
+var int proxyUntil = na
+if useProxy and not na(c30)
+    proxyUntil := time
 
 int regime = na(idxMa) or na(idxMaPast) or na(idxClose) ? na : idxClose > idxMa and idxMa > idxMaPast ? 1 : idxClose < idxMa and idxMa < idxMaPast ? -1 : 0
 
@@ -460,7 +474,7 @@ regimeColor(int r) =>
 if showPanel and barstate.islast
     table.cell(panel, 0, 0, "EGX TRUST", text_color = color.white, text_size = size.small, text_halign = text.align_left)
     table.cell(panel, 1, 0, "lists " + LIST_DATE, text_color = color.gray, text_size = size.tiny, text_halign = text.align_left)
-    cellStatus(1, "Index", indexName + " (" + indexHow + ")", indexHow == "Unlisted" ? color.orange : color.white)
+    cellStatus(1, "Index", indexName + " (" + indexHow + ")" + (na(proxyUntil) ? "" : " · EGX30 proxy to " + str.format_time(proxyUntil, "yyyy-MM-dd")), indexHow == "Unlisted" or not na(proxyUntil) ? color.orange : color.white)
     cellStatus(2, "Regime", regimeText(regime), regimeColor(regime))
     cellStatus(3, "Trend gate", longKnown ? (gateTrend ? "Above " + str.tostring(longLen) + " MA" : "Below " + str.tostring(longLen) + " MA") : "skipped (<" + str.tostring(longLen) + " bars)", longKnown ? (gateTrend ? color.lime : color.red) : color.orange)
     cellStatus(4, "Liquidity", na(valueTraded) or valueTraded == 0 ? "no volume" : str.tostring(valueTraded / 1000000, "0.0") + "M EGP/bar", gateLiq ? color.lime : color.red)
@@ -521,6 +535,7 @@ alertcondition(tradeClosedNow, "EGX Trade Closed", "Trade closed on {{ticker}} {
 // ============================================================
 plot(idxClose, "DBG Index Close", display = display.data_window)
 plot(idxMa, "DBG Index MA", display = display.data_window)
+plot(useProxy ? 1 : 0, "DBG Index Proxy (1/0)", display = display.data_window)
 plot(nz(regime, -9), "DBG Regime (1 Up, 0 Neutral, -1 Down, -9 none)", display = display.data_window)
 plot(gatesOpen ? 1 : 0, "DBG Gates Open", display = display.data_window)
 
