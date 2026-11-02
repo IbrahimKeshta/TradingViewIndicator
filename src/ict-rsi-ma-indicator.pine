@@ -960,8 +960,9 @@ indexSym  = indexName == "EGX70" ? "EGX_DLY:EGX70EWI" : "EGX_DLY:EGX30"
 // Same timeframe as the chart, no lookahead: on a historical bar the index value is the one
 // that bar could actually have seen. Both requests are unconditional and at global scope, so
 // the filter's on/off state can never change what they do.
-[ownClose, ownMa, ownMaPast] = request.security(indexSym, timeframe.period, [close, ta.sma(close, idxRegimeLen), ta.sma(close, idxRegimeLen)[idxSlopeLen]], lookahead = barmerge.lookahead_off)
-[c30, ma30, past30]          = request.security("EGX_DLY:EGX30", timeframe.period, [close, ta.sma(close, idxRegimeLen), ta.sma(close, idxRegimeLen)[idxSlopeLen]], lookahead = barmerge.lookahead_off)
+// ignore_invalid_symbol: the gate is inactive off EGX, so a failed lookup must never break a non-EGX chart.
+[ownClose, ownMa, ownMaPast] = request.security(indexSym, timeframe.period, [close, ta.sma(close, idxRegimeLen), ta.sma(close, idxRegimeLen)[idxSlopeLen]], lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+[c30, ma30, past30]          = request.security("EGX_DLY:EGX30", timeframe.period, [close, ta.sma(close, idxRegimeLen), ta.sma(close, idxRegimeLen)[idxSlopeLen]], lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
 
 // EGX 70 EWI only has history on TradingView from mid-2020. Until it can give a full regime
 // reading, an EGX70 stock falls back to EGX30 as the market trend instead of losing every
@@ -1184,6 +1185,10 @@ type Trade
     // parameter mutation does (closeReason, mutated the same way inside advanceTrade(), works
     // fine). Rather than chase that further, this sidesteps it.
     string zoneTier
+    // Entry bar time, snapshotted at open so the log never has to index history by bar offset.
+    // Declared before the defaulted fields below: positional Trade.new calls cannot skip a
+    // defaulted field and still fill a later one.
+    int    openTime
     // Best and worst excursion from entry, in price, over the bars after the entry bar. On the
     // exit bar the whole bar counts, since intrabar order is unknown. Defaults let every existing
     // positional Trade.new call skip them.
@@ -1459,7 +1464,7 @@ recordResult(Trade t, int model) =>
     gi = model * 3 + gradeIndex(t.grade)
     // Period by ENTRY time. Entered from Test Start on: Test. Entered earlier but closing on or
     // after it: straddle, in neither column. Otherwise: Tuning. A win is net R above zero.
-    openTime = time[bar_index - t.openBar]
+    openTime = t.openTime
     if openTime >= testStart
         array.set(splitTestN, model, array.get(splitTestN, model) + 1)
         array.set(splitTestR, model, array.get(splitTestR, model) + r)
@@ -1518,12 +1523,12 @@ logTrade(Trade t, string model, float r) =>
     rr = math.abs(t.entry - t.initialStop)
     zone = t.zoneTier == "NONE" ? "-" : t.zoneTier == "" ? "FVG" : "OB-" + t.zoneTier
     tf = "yyyy-MM-dd HH:mm"
-    line = str.format("TRADE,{0},{1},{2},{3},{4},{5},{6},{7},{8},{9}", model, syminfo.ticker, timeframe.period, str.format_time(time[bar_index - t.openBar], tf, syminfo.timezone), str.format_time(time, tf, syminfo.timezone), t.side, t.grade, t.score, t.scoreOf, zone)
+    line = str.format("TRADE,{0},{1},{2},{3},{4},{5},{6},{7},{8},{9}", model, syminfo.ticker, timeframe.period, str.format_time(t.openTime, tf, syminfo.timezone), str.format_time(time, tf, syminfo.timezone), t.side, t.grade, t.score, t.scoreOf, zone)
     line += str.format(",{0},{1},{2},{3},{4},{5},{6},{7}", str.tostring(t.entry), str.tostring(t.initialStop), str.tostring(t.tp1), str.tostring(t.tp2), str.tostring(t.tp3), t.tpHit, t.closeReason, str.tostring(t.closePrice))
     line += str.format(",{0},{1},{2},{3},{4}", str.tostring(r, "0.00"), str.tostring(rr > 0 ? t.mfe / rr : 0.0, "0.00"), str.tostring(rr > 0 ? t.mae / rr : 0.0, "0.00"), bar_index - t.openBar, str.tostring(structAtr > 0 ? rr / structAtr : 0.0, "0.00"))
     line += "," + b2(t.ptKillzone) + "," + b2(t.ptMomentum) + "," + b2(t.ptMa) + "," + b2(t.ptMajorAgree) + "," + b2(t.ptBreakStrength) + "," + b2(t.ptParticipation) + "," + b2(t.ptIchimoku)
     // Same placement rule as recordResult: by entry time, straddle when it closes past Test Start.
-    period = time[bar_index - t.openBar] >= testStart ? "Test" : time >= testStart ? "Straddle" : "Tuning"
+    period = t.openTime >= testStart ? "Test" : time >= testStart ? "Straddle" : "Tuning"
     line += "," + period
     log.info(line)
     line
@@ -1586,7 +1591,7 @@ if canOpen and longSetup
         if pullbackRiskOk(risk)
             tg   = selectTargets(true, close, risk, minTargetR)
             [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(true)
-            activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, effBullTier)
+            activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, effBullTier, time)
             tradeOpened := true
             openedSide  := "long"
 if na(activeTrade) and shortSetup and not longOnly
@@ -1598,7 +1603,7 @@ if na(activeTrade) and shortSetup and not longOnly
         if pullbackRiskOk(risk)
             tg   = selectTargets(false, close, risk, minTargetR)
             [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(false)
-            activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, effBearTier)
+            activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, effBearTier, time)
             tradeOpened := true
             openedSide  := "short"
 
@@ -1649,7 +1654,7 @@ if na(trailTrade) and trailLongEntry
         // zoneTop/zoneBottom carry entry and stop: this model has no zone, and those two fields
         // are what the trade box is drawn from.
         [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(true)
-        trailTrade := Trade.new("long", gradeFor(scoreLong, ofPtsLong), scoreLong, ofPtsLong, close, st, st, close, st, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, "NONE")
+        trailTrade := Trade.new("long", gradeFor(scoreLong, ofPtsLong), scoreLong, ofPtsLong, close, st, st, close, st, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, "NONE", time)
         tradeOpened := true
         if na(openedSide)
             openedSide := "long"
@@ -1659,7 +1664,7 @@ if na(trailTrade) and trailShortEntry
     if trailRiskOk(risk)
         tg   = selectTargets(false, close, risk, trailMinTargetR)
         [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(false)
-        trailTrade := Trade.new("short", gradeFor(scoreShort, ofPtsShort), scoreShort, ofPtsShort, close, st, st, st, close, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, "NONE")
+        trailTrade := Trade.new("short", gradeFor(scoreShort, ofPtsShort), scoreShort, ofPtsShort, close, st, st, st, close, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, "NONE", time)
         tradeOpened := true
         if na(openedSide)
             openedSide := "short"
