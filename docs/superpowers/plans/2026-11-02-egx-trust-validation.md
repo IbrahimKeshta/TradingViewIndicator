@@ -79,3 +79,47 @@ Test-A = the 15 tuning charts, bars from 2024-01-01. Test-B = 10 never-viewed ch
 | Fallback: a trust band ≥ 80% on n ≥ 30 | High 56.9% | ✗ |
 
 **Round 1: FAIL.** The out-of-sample win rate (55.2%) matches the Tuning one (56.0%), so the settings did not overfit. The system is simply a ~55% system, with an edge per trade close to zero after costs.
+
+## Correctness check: trade log vs panel
+
+With `Log Trades` on (settings c8), the Pine Logs CSV for all 15 tuning charts was exported. Summing the `Tuning` rows per chart reproduces the panel's `DBG Tune N / Wins / R` exactly on **15 of 15** charts (e.g. COMI 89 / 49 / +12.08R, ABUK 29 / 17 / −0.76R, ELEC 5 / 2 / −0.51R). Every row carries the chart's own ticker. (Spec correctness check 2: passed. Check 1, the Bar Replay hand trace, was not run.)
+
+## Round 2 — evidence from the Tuning trade log (762 trades; no Test rows read)
+
+**Factors.** Win rate by factor value spans only 51.7%–58.4%:
+
+| Factor | 0 | 0.5 | 1.0 |
+|---|---|---|---|
+| Index regime (I) | — | 52.5% (198) | 57.3% (564) |
+| Stock trend (T) | 57.9% (19) | 56.2% (256) | 55.9% (487) |
+| Relative strength (R) | 55.9% (363) | 53.7% (54) | 56.5% (345) |
+| Support (S) | 51.7% (116) | 57.0% (186) | 56.7% (460) |
+| Participation (P) | 55.4% (101) | 56.3% (455) | 55.8% (206) |
+| Confirmation (C) | — | 58.4% (279) | 54.7% (483) |
+
+No factor, at any value, separates winners from losers by more than a few points. A strong confirmation candle is slightly *worse* than a weak one. Bands: High 56.9%, Mid 54.3%, Low 56.8%. **The trust score has no predictive power on this data**, the same finding this repo recorded for the ICT script's confluence score.
+
+**Exits.** Stop 213 (28%), Exit: Trend 105 (17% of them wins), Exit: Index 37, Time 9. On the win side: Breakeven 270, Trail 128.
+
+**How far trades get (MFE).** Share of Tuning trades whose favourable excursion reached x R, which is an upper bound on the win rate at Target 1 = x before costs and exits:
+
+| x (R) | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 | 0.6 | 0.7 | 0.8 |
+|---|---|---|---|---|---|---|---|---|
+| reached | 88.6% | 82.9% | 76.6% | 70.9% | 65.4% | 61.5% | 58.3% | 52.0% |
+
+Of the 335 non-wins, 44% never got 0.25R in their favour, 34% reached 0.25–0.5R, and 21% reached 0.5R or more.
+
+**Conclusion.** For this entry family, an 80% win rate requires Target 1 at about 0.2R or closer. At that target, the ~20% of trades that lose about 1R each outweigh the wins, which are about 0.1R on the T1 half with the rest mostly exiting at breakeven, especially after costs of roughly 0.05–0.1R per trade. **An 80% win rate and positive R are not jointly reachable with this design on EGX daily data.** No factor offers a filter that would change that.
+
+**Ruling: stop after round 1.** The protocol allows a round-2 rule change only when a pattern in the Tuning log justifies it, and none does. Spending batches C and D on unjustified changes would be the curve-fitting the protocol exists to prevent. Batches C (EFID, HELI, ORHD, ISPH, CLHO, ATQA, KABO, EHDR, PHAR, TAQA) and D (MCQE, EGAL, GBCO, BTFH, RMDA, ISMQ, ENGC, OIH, SCEM, ZMID) remain unviewed and available for a future redesign.
+
+## Final result
+
+- **Best honest out-of-sample numbers** (c8, 25 charts, 973 trades): **55.2% win rate, +18.43R total (+0.02R per trade) after costs, positive on 52% of charts.**
+- **No trust band reaches 80%** (High 56.9%, n = 529).
+- **Known biases:**
+  - Constituent lists are as of 2026-11-01 and are applied to all history (survivorship flatters older results).
+  - EGX70 stocks before mid-2020 are gated by EGX30.
+  - Costs are modelled as 0.1% per side plus 2 EGP per order.
+  - Straddling trades (at most 1 per chart) are excluded.
+- **Recommended defaults:** RSI Oversold Below 15, Target 1 0.75R (the round-1 pick). The higher-T1 combos (c9: 48.6% win rate, +91.6R Tuning) earn more R but sit further from the win-rate goal.
