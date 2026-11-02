@@ -1,0 +1,168 @@
+//@version=6
+indicator("EGX Trust Score", shorttitle = "EGX-TRUST", overlay = true, max_labels_count = 500)
+
+// ============================================================
+// INPUTS
+// ============================================================
+
+// ---------------- Index ----------------
+indexMode = input.string("Auto", "Index", options = ["Auto", "EGX30", "EGX70"], group = "Index", tooltip = "Auto looks the stock up in the built-in constituent lists (date in the STATUS panel). Pick EGX30 or EGX70 to override when the lists are stale after a rebalance. A stock in neither list falls back to EGX30 and reads Unlisted.")
+regimeLen = input.int(50, "Index MA Length", minval = 2, group = "Index")
+slopeLen  = input.int(10, "Slope Lookback (bars)", minval = 1, group = "Index", tooltip = "An average counts as rising when it is above its own value this many bars ago. Shared by the index regime and the relative-strength trend.")
+
+// ---------------- Stock Trend ----------------
+longLen        = input.int(200, "Long MA Length", minval = 2, group = "Stock Trend")
+midLen         = input.int(50, "Medium MA Length", minval = 2, group = "Stock Trend")
+rsLen          = input.int(50, "Relative Strength MA Length", minval = 2, group = "Stock Trend")
+minValueTraded = input.float(2000000, "Min Avg Value Traded (EGP)", minval = 0, step = 100000, group = "Stock Trend", tooltip = "20-bar average of close x volume, per bar. Setups below it are ignored: thin EGX70 names do not fill anywhere near their chart prices.")
+
+// ---------------- Setup ----------------
+rsiLen       = input.int(2, "RSI Length", minval = 1, group = "Setup")
+rsiThreshold = input.float(10, "RSI Oversold Below", minval = 1, maxval = 50, group = "Setup")
+confirmBars  = input.int(3, "Confirmation Window (bars)", minval = 1, group = "Setup", tooltip = "A confirmation candle must close within this many bars of the most recent oversold bar.")
+setupExpiry  = input.int(5, "Setup Expiry (bars)", minval = 1, group = "Setup", tooltip = "Hard cap counted from the first oversold bar. Repeated oversold bars refresh the confirmation window but cannot keep a setup alive past this.")
+cancelAtr    = input.float(0.5, "Cancel Below Setup Low (x ATR)", minval = 0, step = 0.1, group = "Setup", tooltip = "A close this far below the latest oversold bar's low cancels the setup.")
+swingLen     = input.int(5, "Swing Pivot Length", minval = 1, group = "Setup", tooltip = "Bars either side for the swing lows and highs used as support and for the retracement zone.")
+
+// ---------------- Trade ----------------
+atrLen       = input.int(14, "ATR Length", minval = 1, group = "Trade")
+stopBufAtr   = input.float(0.25, "Stop Buffer (x ATR)", minval = 0, step = 0.05, group = "Trade")
+minRiskAtr   = input.float(0.5, "Min Risk (x ATR)", minval = 0, step = 0.1, group = "Trade")
+minRiskTicks = input.int(10, "Min Risk (ticks)", minval = 0, group = "Trade", tooltip = "Split-adjusted EGX history can put a whole stop inside one tick. The risk floor is the larger of this and Min Risk (x ATR).")
+maxRiskAtr   = input.float(3.0, "Max Risk (x ATR)", minval = 0.1, step = 0.1, group = "Trade", tooltip = "Setups whose stop would sit further than this are skipped, not taken with a wide stop.")
+t1R          = input.float(0.75, "Target 1 (R)", minval = 0.1, step = 0.05, group = "Trade", tooltip = "Half the position exits here and the stop moves to breakeven. A trade counts as a win when it reaches Target 1 before any exit.")
+trailAtr     = input.float(2.5, "Trail (x ATR)", minval = 0.1, step = 0.1, group = "Trade", tooltip = "Chandelier trail for the second half: highest high since entry minus this many ATR, never below breakeven.")
+timeStopBars = input.int(20, "Time Stop (bars)", minval = 1, group = "Trade", tooltip = "A trade that has not reached Target 1 after this many bars exits at the close.")
+
+// ---------------- Costs ----------------
+slippagePct   = input.float(0.1, "Slippage per Side (%)", minval = 0, step = 0.05, group = "Costs")
+commissionEgp = input.float(2.0, "Commission per Order (EGP)", minval = 0, step = 0.5, group = "Costs")
+positionEgp   = input.float(100000, "Position Size (EGP)", minval = 1, step = 10000, group = "Costs", tooltip = "Only used to convert the per-order commission into R.")
+
+// ---------------- Trust Score ----------------
+useFIndex   = input.bool(true, "Score: Index Regime", group = "Trust Score")
+useFTrend   = input.bool(true, "Score: Stock Trend", group = "Trust Score")
+useFRs      = input.bool(true, "Score: Relative Strength", group = "Trust Score")
+useFSupport = input.bool(true, "Score: Support Location", group = "Trust Score")
+useFPart    = input.bool(true, "Score: Participation", group = "Trust Score")
+useFConf    = input.bool(true, "Score: Confirmation Strength", group = "Trust Score")
+minHistory  = input.int(10, "Track Record Minimum Trades", minval = 1, group = "Trust Score", tooltip = "Below this many closed trades in a band, the entry label says 'building history' instead of quoting a win rate.")
+
+// ---------------- Validation ----------------
+testStart = input.time(timestamp("01 Jan 2024 00:00 +0200"), "Test Start", group = "Validation", tooltip = "Trades entered before this time count under Tuning, from it onward under Test. Tune settings by the Tuning column only.")
+
+// ---------------- Display ----------------
+showPanel  = input.bool(true, "Show Panel", group = "Display")
+panelPosIn = input.string("Top Right", "Panel Position", options = ["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group = "Display")
+showLabels = input.bool(true, "Show Trade Labels", group = "Display")
+logTrades  = input.bool(false, "Log Trades", group = "Display", tooltip = "Writes one CSV line per closed trade to Pine Logs. Pine Logs only work on a personal, unpublished copy of the script.")
+
+// ============================================================
+// INDEX MAP
+// ============================================================
+// Pine cannot fetch index membership, so the constituents live here and go stale at every
+// semi-annual EGX rebalance. Refresh both strings from egx.com.eg (Current Constituents for
+// EGX 30 and EGX 70 EWI) and bump LIST_DATE together. The commas on both ends make the
+// substring test exact: ",VLMR," cannot match inside ",VLMRA,".
+LIST_DATE  = "2026-11-01"
+EGX30_LIST = ",ABUK,ADIB,ALCN,AMOC,BTFH,CLHO,COMI,EAST,EFID,HRHO,EFIH,EGAL,EMFD,FWRY,GBCO,HELI,ISPH,JUFO,MCQE,MFPC,ORAS,ORHD,PHDC,CCAP,RAYA,SKPC,TMGH,ETEL,RMDA,VLMR,VLMRA,"
+EGX70_LIST = ",ACTF,ATLC,AMER,ARAB,AMIA,AIDC,AIHC,ARCC,ASCM,ASPI,AIFI,BONY,COSG,POUL,CSAG,PRCL,CNFN,CIEB,DAPH,DSCW,EGCH,EGTS,PHAR,MPRC,ETRS,EHDR,ELKA,KABO,OBRI,ELSH,ELEC,NIPH,UEGC,SWDY,ENGC,EXPA,ZEOT,GDWA,GOUR,GPIM,HDBK,IEEC,ICFC,ISMQ,IDRE,ISMA,LCSW,MCRO,MASR,MPCO,MEPA,MPCI,MBSC,ATQA,MTIE,NCCW,OFH,OIH,ORWE,PRDC,SIPC,SDTI,SCEM,OCDI,SVCE,TAQA,MOED,VALU,UNIP,ZMID,"
+
+tickerKey = "," + syminfo.ticker + ","
+inEgx30   = str.contains(EGX30_LIST, tickerKey)
+inEgx70   = str.contains(EGX70_LIST, tickerKey)
+indexName = indexMode != "Auto" ? indexMode : inEgx70 and not inEgx30 ? "EGX70" : "EGX30"
+indexHow  = indexMode != "Auto" ? "Override" : inEgx30 or inEgx70 ? "Auto" : "Unlisted"
+indexSym  = indexName == "EGX70" ? "EGX_DLY:EGX70EWI" : "EGX_DLY:EGX30"
+
+// ============================================================
+// INDEX REGIME
+// ============================================================
+// Same timeframe as the chart, no lookahead: on a historical bar the index value is the one
+// that bar could actually have seen.
+[idxClose, idxMa, idxMaPast] = request.security(indexSym, timeframe.period, [close, ta.sma(close, regimeLen), ta.sma(close, regimeLen)[slopeLen]], lookahead = barmerge.lookahead_off)
+
+int regime = na(idxMa) or na(idxMaPast) or na(idxClose) ? na : idxClose > idxMa and idxMa > idxMaPast ? 1 : idxClose < idxMa and idxMa < idxMaPast ? -1 : 0
+
+// ============================================================
+// STOCK TREND
+// ============================================================
+atr         = ta.atr(atrLen)
+smaLong     = ta.sma(close, longLen)
+smaMid      = ta.sma(close, midLen)
+sma20       = ta.sma(close, 20)
+rsi         = ta.rsi(close, rsiLen)
+volAvg      = ta.sma(volume, 20)
+valueTraded = ta.sma(close * volume, 20)
+rsRatio     = close / idxClose
+rsMa        = ta.sma(rsRatio, rsLen)
+rsAbove     = not na(rsMa) and rsRatio > rsMa
+rsRising    = not na(rsMa[slopeLen]) and rsMa > rsMa[slopeLen]
+longKnown   = not na(smaLong)
+trendBreak  = ta.crossunder(close, smaMid)
+
+// A regime with no data blocks entries rather than passing as "not Down".
+gateRegime = not na(regime) and regime != -1
+gateTrend  = longKnown ? close > smaLong : true
+gateLiq    = not na(valueTraded) and valueTraded >= minValueTraded
+gatesOpen  = gateRegime and gateTrend and gateLiq
+
+pl = ta.pivotlow(low, swingLen, swingLen)
+ph = ta.pivothigh(high, swingLen, swingLen)
+var float lastSwingLow     = na
+var float lastSwingHigh    = na
+var int   lastSwingLowBar  = na
+var int   lastSwingHighBar = na
+if not na(pl)
+    lastSwingLow    := pl
+    lastSwingLowBar := bar_index - swingLen
+if not na(ph)
+    lastSwingHigh    := ph
+    lastSwingHighBar := bar_index - swingLen
+
+// @@SETUP@@
+
+// @@ENGINE@@
+
+// ============================================================
+// PANEL
+// ============================================================
+panelPos() =>
+    switch panelPosIn
+        "Bottom Right" => position.bottom_right
+        "Top Left"     => position.top_left
+        "Bottom Left"  => position.bottom_left
+        => position.top_right
+
+PANEL_ROWS = 16
+var table panel = showPanel ? table.new(panelPos(), 3, PANEL_ROWS, bgcolor = color.new(color.black, 15), border_width = 1) : na
+
+cellStatus(int row, string key, string val, color valColor) =>
+    table.cell(panel, 0, row, key, text_color = color.silver, text_size = size.small, text_halign = text.align_left)
+    table.cell(panel, 1, row, val, text_color = valColor, text_size = size.small, text_halign = text.align_left)
+    table.merge_cells(panel, 1, row, 2, row)
+
+regimeText(int r) =>
+    na(r) ? "No data" : r == 1 ? "Up" : r == -1 ? "Down" : "Neutral"
+
+regimeColor(int r) =>
+    na(r) ? color.gray : r == 1 ? color.lime : r == -1 ? color.red : color.yellow
+
+if showPanel and barstate.islast
+    table.cell(panel, 0, 0, "EGX TRUST", text_color = color.white, text_size = size.small, text_halign = text.align_left)
+    table.cell(panel, 1, 0, "lists " + LIST_DATE, text_color = color.gray, text_size = size.tiny, text_halign = text.align_left)
+    table.merge_cells(panel, 1, 0, 2, 0)
+    cellStatus(1, "Index", indexName + " (" + indexHow + ")", indexHow == "Unlisted" ? color.orange : color.white)
+    cellStatus(2, "Regime", regimeText(regime), regimeColor(regime))
+    cellStatus(3, "Trend gate", longKnown ? (gateTrend ? "Above " + str.tostring(longLen) + " MA" : "Below " + str.tostring(longLen) + " MA") : "skipped (<" + str.tostring(longLen) + " bars)", longKnown ? (gateTrend ? color.lime : color.red) : color.orange)
+    cellStatus(4, "Liquidity", na(valueTraded) or valueTraded == 0 ? "no volume" : str.tostring(valueTraded / 1000000, "0.0") + "M EGP/bar", gateLiq ? color.lime : color.red)
+
+// @@OUTPUT@@
+
+// ============================================================
+// DATA WINDOW (verification readouts)
+// ============================================================
+plot(idxClose, "DBG Index Close", display = display.data_window)
+plot(idxMa, "DBG Index MA", display = display.data_window)
+plot(nz(regime, -9), "DBG Regime (1 Up, 0 Neutral, -1 Down, -9 none)", display = display.data_window)
+plot(gatesOpen ? 1 : 0, "DBG Gates Open", display = display.data_window)
