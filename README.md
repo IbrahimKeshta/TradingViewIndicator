@@ -733,6 +733,18 @@ liquidity gate closes while it waits:
    Thin EGX70 names do not fill anywhere near their chart prices, so a setup in one is ignored rather
    than recorded as a trade nobody could have made.
 
+### Optional filters
+
+Three more hard filters sit in the `Filters` input group. Each one that is switched on must also pass
+on the setup bar, as part of the same gate. **All three are off by default**, and with all three off
+the trade selection is exactly the three gates above.
+
+| Filter | Requires | Why |
+|---|---|---|
+| `Require Index Up` | The regime is **Up**, not merely "not Down" | In v1 tuning, trades taken in a Neutral regime won less often than those taken in an Up regime |
+| `Weekly Trend Filter` | The last **completed** weekly close is above its `Weekly MA Length` (default 30) week average | The daily dip should sit inside a weekly uptrend. It reads only the previous finished week (`close[1]` with `lookahead_on`, the standard non-repainting form) and is ignored on weekly and longer charts |
+| `ADX Filter` | ADX (`ADX Length`, default 14) is at or above `ADX Minimum` (default 20) | The stock must actually be trending, not just drifting |
+
 ## Setup and confirmation
 
 With the gates open, a **setup** arms on the first bar where RSI (length `RSI Length`) falls below
@@ -770,12 +782,14 @@ open, setups are not armed.
 Stops are rounded to a tick because a stop between ticks only fills at the tick below it, so booking
 the unrounded price would understate losses on low-priced names.
 
-**What counts as a win.** A trade is a win when it reaches Target 1 before any exit. That is the only
-definition used anywhere in the panel and the track record. A high win rate is easy to reach with a
-tiny target and a wide stop, which is why **Avg R** and **Total R**, after costs, sit beside it.
+**What counts as a win.** A trade is a win when its **net R after costs is greater than 0**, however it
+ended. Target 1 still drives the half exit and the move to breakeven, but reaching it does not by
+itself make a win. That is the only definition used anywhere in the panel, the band rows, the track
+record, the result label colour and the trade log. A high win rate is easy to reach with a tiny
+target and a wide stop, which is why **Avg R** and **Total R**, after costs, sit beside it.
 
-**Exit warnings.** Two conditions end an open trade at that bar's close, and a trade that ends this
-way before Target 1 counts as a non-win:
+**Exit warnings.** Two conditions end an open trade at that bar's close, and the trade is booked at
+whatever R that close gives, after costs:
 
 - the index regime turns **Down**; or
 - the stock **closes below its `Medium MA Length` average after having been above it**, at the entry
@@ -853,6 +867,7 @@ The panel has a STATUS block and a RESULTS block, and a costs footer.
 | `Trend gate` | `Above 200 MA`, `Below 200 MA`, or `skipped (<200 bars)` |
 | `Liquidity` | The 20-bar average value traded, in millions of EGP per bar, green when the gate is open |
 | `Setup` | `Watching`, `Armed (n bars)` or `In trade` |
+| `Filters` | `off` when no optional filter is enabled; otherwise each enabled filter with its state on the last bar, for example `Idx↑ ✓ · Wk ✗ · ADX ✓`. Green when every enabled filter passes, red when any fails, gray when off |
 
 **RESULTS** — two columns. **Tuning** counts trades entered before `Test Start`; **Test** counts
 trades entered from that time onward.
@@ -860,7 +875,7 @@ trades entered from that time onward.
 | Row | Meaning |
 |---|---|
 | `Trades` | Closed trades |
-| `Win %` | Share that reached Target 1, with the number of wins in brackets |
+| `Win %` | Share of trades with net R above 0 after costs, with the number of wins in brackets |
 | `Avg R` | Average result per trade, in R, after costs |
 | `Total R` | Sum of results, in R, after costs |
 | `Max loss run` | The longest run of consecutive non-wins |
@@ -963,7 +978,7 @@ chart rather than quoting a price.
 | Min Risk (x ATR) | 0.5 | Risk floor in ATRs |
 | Min Risk (ticks) | 10 | Risk floor in ticks. The effective floor is the larger of the two |
 | Max Risk (x ATR) | 3.0 | Setups needing a wider stop than this are skipped |
-| Target 1 (R) | 0.75 | Where half the position exits and the stop moves to breakeven |
+| Target 1 (R) | 0.75 | Where half the position exits and the stop moves to breakeven. It does not define a win |
 | Trail (x ATR) | 2.5 | Chandelier trail for the second half |
 | Time Stop (bars) | 20 | Exit at the close if Target 1 has not been reached by then |
 
@@ -981,6 +996,17 @@ chart rather than quoting a price.
 |---|---|---|
 | Score: Index Regime / Stock Trend / Relative Strength / Support Location / Participation / Confirmation Strength | on | One switch per factor. A factor switched off leaves both the sum and the denominator, so the score is still out of 100 |
 | Track Record Minimum Trades | 10 | Below this many closed trades in a band, the label says `building history` |
+
+**Filters**
+
+| Setting | Default | What it does |
+|---|---|---|
+| Require Index Up | off | Setups need the regime to be Up, not merely not Down |
+| Weekly Trend Filter | off | Setups need the last completed weekly close above its weekly average. Ignored on weekly and longer charts |
+| Weekly MA Length | 30 | The weekly average, in weeks |
+| ADX Filter | off | Setups need ADX at or above `ADX Minimum` |
+| ADX Length | 14 | Length for ADX and its directional movement |
+| ADX Minimum | 20 | The ADX threshold |
 
 **Validation**
 
@@ -1027,6 +1053,8 @@ charts never looked at before.
 - **80% is not reachable with this design.** An 80% win rate would need Target 1 near 0.2R, where
   the losses outweigh the wins after costs.
 - Validation stopped after round 1, because nothing in the tuning evidence justified a rule change.
+
+Those results used v1's win definition (Target 1 reached); v2 counts a win as net R > 0.
 
 Read plainly: this is a decision-support tool whose measured edge is about breakeven. It finds a
 reasonable pullback entry and measures it honestly; it does not predict which entries will win. Use

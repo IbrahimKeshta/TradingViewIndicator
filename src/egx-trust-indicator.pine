@@ -30,7 +30,7 @@ stopBufAtr   = input.float(0.25, "Stop Buffer (x ATR)", minval = 0, step = 0.05,
 minRiskAtr   = input.float(0.5, "Min Risk (x ATR)", minval = 0, step = 0.1, group = "Trade")
 minRiskTicks = input.int(10, "Min Risk (ticks)", minval = 0, group = "Trade", tooltip = "Split-adjusted EGX history can put a whole stop inside one tick. The risk floor is the larger of this and Min Risk (x ATR).")
 maxRiskAtr   = input.float(3.0, "Max Risk (x ATR)", minval = 0.1, step = 0.1, group = "Trade", tooltip = "Setups whose stop would sit further than this are skipped, not taken with a wide stop.")
-t1R          = input.float(0.75, "Target 1 (R)", minval = 0.1, step = 0.05, group = "Trade", tooltip = "Half the position exits here and the stop moves to breakeven. A trade counts as a win when it reaches Target 1 before any exit.")
+t1R          = input.float(0.75, "Target 1 (R)", minval = 0.1, step = 0.05, group = "Trade", tooltip = "Half the position exits here and the stop moves to breakeven.")
 trailAtr     = input.float(2.5, "Trail (x ATR)", minval = 0.1, step = 0.1, group = "Trade", tooltip = "Chandelier trail for the second half: highest high since entry minus this many ATR, never below breakeven.")
 timeStopBars = input.int(20, "Time Stop (bars)", minval = 1, group = "Trade", tooltip = "A trade that has not reached Target 1 after this many bars exits at the close.")
 
@@ -47,6 +47,14 @@ useFSupport = input.bool(true, "Score: Support Location", group = "Trust Score")
 useFPart    = input.bool(true, "Score: Participation", group = "Trust Score")
 useFConf    = input.bool(true, "Score: Confirmation Strength", group = "Trust Score")
 minHistory  = input.int(10, "Track Record Minimum Trades", minval = 1, group = "Trust Score", tooltip = "Below this many closed trades in a band, the entry label says 'building history' instead of quoting a win rate.")
+
+// ---------------- Filters ----------------
+requireIdxUp = input.bool(false, "Require Index Up", group = "Filters", tooltip = "Setups need the index regime to be Up, not merely not Down.")
+useWeekly    = input.bool(false, "Weekly Trend Filter", group = "Filters", tooltip = "Setups need the last completed weekly close above its weekly SMA. Ignored on weekly and longer charts.")
+weeklyLen    = input.int(30, "Weekly MA Length", minval = 2, group = "Filters")
+useAdx       = input.bool(false, "ADX Filter", group = "Filters", tooltip = "Setups need ADX at or above the threshold: the stock must actually be trending.")
+adxLen       = input.int(14, "ADX Length", minval = 1, group = "Filters")
+adxMin       = input.float(20, "ADX Minimum", minval = 0, step = 1, group = "Filters")
 
 // ---------------- Validation ----------------
 testStart = input.time(timestamp("01 Jan 2024 00:00 +0200"), "Test Start", group = "Validation", tooltip = "Trades entered before this time count under Tuning, trades entered from it onward count under Test. A trade entered before it that closes after it counts in neither (only in the panel footer's straddle count). Tune settings by the Tuning column only.")
@@ -116,11 +124,19 @@ rsRising    = not na(rsMa[slopeLen]) and rsMa > rsMa[slopeLen]
 longKnown   = not na(smaLong)
 trendBreak  = ta.crossunder(close, smaMid)
 
+// Weekly trend from the last completed week only: close[1] with lookahead_on is the standard
+// non-repainting way to read a higher timeframe.
+[wkClose, wkMa] = request.security(syminfo.tickerid, "W", [close[1], ta.sma(close, weeklyLen)[1]], lookahead = barmerge.lookahead_on)
+weeklyApplies   = timeframe.in_seconds(timeframe.period) < timeframe.in_seconds("W")
+weeklyUp        = not weeklyApplies or (not na(wkMa) and wkClose > wkMa)
+[diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
+gateFilters = (not requireIdxUp or regime == 1) and (not useWeekly or weeklyUp) and (not useAdx or (not na(adxVal) and adxVal >= adxMin))
+
 // A regime with no data blocks entries rather than passing as "not Down".
 gateRegime = not na(regime) and regime != -1
 gateTrend  = longKnown ? close > smaLong : true
 gateLiq    = not na(valueTraded) and valueTraded > 0 and valueTraded >= minValueTraded
-gatesOpen  = gateRegime and gateTrend and gateLiq
+gatesOpen  = gateRegime and gateTrend and gateLiq and gateFilters
 
 pl = ta.pivotlow(low, swingLen, swingLen)
 ph = ta.pivothigh(high, swingLen, swingLen)
@@ -365,10 +381,11 @@ var array<int>   statStraddle  = array.new<int>(1, 0)
 
 // A trade entered before Test Start that closes after it was decided partly on Test bars: it is
 // counted in neither column (only in the straddle count), so tuning never sees Test-period prices.
+// A win is a trade whose net R after costs is > 0, whatever route it took; Target 1 only drives the half exit.
 recordTrade(Trade t, float r) =>
     int  p        = t.inTest ? 1 : 0
     int  bi       = p * 3 + t.band
-    bool win      = t.t1Hit
+    bool win      = r > 0
     bool straddle = not t.inTest and time >= testStart
     array.set(trackN, t.band, array.get(trackN, t.band) + 1)
     if win
@@ -458,7 +475,7 @@ panelPos() =>
         "Bottom Left"  => position.bottom_left
         => position.top_right
 
-PANEL_ROWS = 16
+PANEL_ROWS = 17
 var table panel = showPanel ? table.new(panelPos(), 3, PANEL_ROWS, bgcolor = color.new(color.black, 15), border_width = 1) : na
 
 cellStatus(int row, string key, string val, color valColor) =>
@@ -470,6 +487,20 @@ regimeText(int r) =>
 
 regimeColor(int r) =>
     na(r) ? color.gray : r == 1 ? color.lime : r == -1 ? color.red : color.yellow
+
+// Enabled filters with their state on the last bar, e.g. "Idx↑ ✓ · Wk ✗ · ADX ✓"; "off" when none is enabled.
+filterText() =>
+    string txt = ""
+    if requireIdxUp
+        txt += "Idx↑ " + (regime == 1 ? "✓" : "✗")
+    if useWeekly
+        txt += (txt == "" ? "" : " · ") + "Wk " + (weeklyUp ? "✓" : "✗")
+    if useAdx
+        txt += (txt == "" ? "" : " · ") + "ADX " + (not na(adxVal) and adxVal >= adxMin ? "✓" : "✗")
+    txt == "" ? "off" : txt
+
+filterColor() =>
+    requireIdxUp or useWeekly or useAdx ? (gateFilters ? color.lime : color.red) : color.gray
 
 if showPanel and barstate.islast
     table.cell(panel, 0, 0, "EGX TRUST", text_color = color.white, text_size = size.small, text_halign = text.align_left)
@@ -499,26 +530,27 @@ bandText(int p, int band) =>
 
 if showPanel and barstate.islast
     cellStatus(5, "Setup", not na(trade) ? "In trade" : ss.active ? "Armed (" + str.tostring(bar_index - ss.startBar) + " bars)" : "Watching", not na(trade) ? color.aqua : ss.active ? color.yellow : color.gray)
-    table.cell(panel, 0, 6, "RESULTS", text_color = color.white, text_size = size.small, text_halign = text.align_left)
-    table.cell(panel, 1, 6, "Tuning", text_color = color.gray, text_size = size.small)
-    table.cell(panel, 2, 6, "Test", text_color = color.gray, text_size = size.small)
-    cellResult(7, "Trades", str.tostring(array.get(statN, 0)), str.tostring(array.get(statN, 1)))
-    cellResult(8, "Win %", winText(0), winText(1))
-    cellResult(9, "Avg R", avgText(0), avgText(1))
-    cellResult(10, "Total R", str.tostring(array.get(statR, 0), "0.00"), str.tostring(array.get(statR, 1), "0.00"))
-    cellResult(11, "Max loss run", str.tostring(array.get(statMaxStreak, 0)), str.tostring(array.get(statMaxStreak, 1)))
-    cellResult(12, "High (n·win·avg·tot)", bandText(0, 2), bandText(1, 2))
-    cellResult(13, "Mid", bandText(0, 1), bandText(1, 1))
-    cellResult(14, "Low", bandText(0, 0), bandText(1, 0))
-    table.cell(panel, 0, 15, "costs " + str.tostring(slippagePct, "0.00") + "%/side + " + str.tostring(commissionEgp, "0.0") + " EGP/order" + " · straddle " + str.tostring(array.get(statStraddle, 0)), text_color = color.gray, text_size = size.tiny, text_halign = text.align_left)
+    cellStatus(6, "Filters", filterText(), filterColor())
+    table.cell(panel, 0, 7, "RESULTS", text_color = color.white, text_size = size.small, text_halign = text.align_left)
+    table.cell(panel, 1, 7, "Tuning", text_color = color.gray, text_size = size.small)
+    table.cell(panel, 2, 7, "Test", text_color = color.gray, text_size = size.small)
+    cellResult(8, "Trades", str.tostring(array.get(statN, 0)), str.tostring(array.get(statN, 1)))
+    cellResult(9, "Win %", winText(0), winText(1))
+    cellResult(10, "Avg R", avgText(0), avgText(1))
+    cellResult(11, "Total R", str.tostring(array.get(statR, 0), "0.00"), str.tostring(array.get(statR, 1), "0.00"))
+    cellResult(12, "Max loss run", str.tostring(array.get(statMaxStreak, 0)), str.tostring(array.get(statMaxStreak, 1)))
+    cellResult(13, "High (n·win·avg·tot)", bandText(0, 2), bandText(1, 2))
+    cellResult(14, "Mid", bandText(0, 1), bandText(1, 1))
+    cellResult(15, "Low", bandText(0, 0), bandText(1, 0))
+    table.cell(panel, 0, 16, "costs " + str.tostring(slippagePct, "0.00") + "%/side + " + str.tostring(commissionEgp, "0.0") + " EGP/order" + " · straddle " + str.tostring(array.get(statStraddle, 0)), text_color = color.gray, text_size = size.tiny, text_halign = text.align_left)
 
 // Merge once. Repeating table.merge_cells on every realtime tick is untested territory.
 var bool panelMerged = false
 if showPanel and barstate.islast and not panelMerged
     table.merge_cells(panel, 1, 0, 2, 0)
-    for row = 1 to 5
+    for row = 1 to 6
         table.merge_cells(panel, 1, row, 2, row)
-    table.merge_cells(panel, 0, 15, 2, 15)
+    table.merge_cells(panel, 0, 16, 2, 16)
     panelMerged := true
 
 plot(plotEntry, "Entry", color = color.new(color.white, 30), style = plot.style_linebr)
