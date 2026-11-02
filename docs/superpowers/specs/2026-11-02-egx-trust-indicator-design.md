@@ -94,7 +94,8 @@ itself never confirms), that is any of:
 
 One trade at a time per chart.
 
-- **Stop:** lowest low from setup to entry − 0.25 ATR. Risk floor = max(0.5 ATR, 10 ticks). Skip
+- **Stop:** lowest low from setup to entry − 0.25 ATR, rounded down to a whole tick (trail
+  levels too). Risk floor = max(0.5 ATR, 10 ticks). Skip
   the setup if risk > 3 ATR.
 - **Target 1:** entry + `T1 (R)` × risk, default 0.75R. Half the position exits at T1; the stop on
   the remainder moves to breakeven.
@@ -102,7 +103,9 @@ One trade at a time per chart.
 - **Time stop:** 20 bars without T1 → exit at close.
 - **Exit warnings** (plotted as `EXIT`; they close whatever is still open, so the whole trade if T1
   has not been hit, which then counts as a non-win): index regime turns Down, or the stock closes
-  below SMA(50).
+  below SMA(50) after the trade has been above it (at entry or on any bar since). A dip bought
+  below SMA(50) is not exited on its next bar merely for being there. The chart's EXIT marker
+  for holders marks the cross below SMA(50) once, rather than every bar under it.
 - **Same-bar ambiguity:** a bar touching both stop and T1 counts the stop first (loss).
 - **Costs:** 0.1% slippage per side plus 2 EGP per order, converted to R per trade and deducted.
   Each result is blended across the two halves.
@@ -135,8 +138,8 @@ the band, `High — building history`.
 
 - **STATUS:** index, how it was chosen (Auto / Override / Unlisted), `LIST_DATE`, regime, each gate's state.
 - **RESULTS:** columns **Tuning** (bars before the `Test Start` input, default 2024-01-01) and
-  **Test** (from then on). Rows: n, win %, Avg R, Total R, max consecutive losses; the same rows per
-  trust band.
+  **Test** (from then on). Rows: n, win %, Avg R, Total R, max consecutive losses; per trust band:
+  n, win %, Avg R and Total R.
 - **Trade log:** input `Log Trades` (off by default) writes one `log.info()` line per closed trade:
   entry/exit time and price, R, MFE/MAE in R, trust score, factor flags, close reason.
 
