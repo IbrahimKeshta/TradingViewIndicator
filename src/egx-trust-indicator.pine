@@ -104,7 +104,7 @@ trendBreak  = ta.crossunder(close, smaMid)
 // A regime with no data blocks entries rather than passing as "not Down".
 gateRegime = not na(regime) and regime != -1
 gateTrend  = longKnown ? close > smaLong : true
-gateLiq    = not na(valueTraded) and valueTraded >= minValueTraded
+gateLiq    = not na(valueTraded) and valueTraded > 0 and valueTraded >= minValueTraded
 gatesOpen  = gateRegime and gateTrend and gateLiq
 
 pl = ta.pivotlow(low, swingLen, swingLen)
@@ -226,7 +226,181 @@ stepSetup(SetupState s) =>
         s.volN   += 1
     fire
 
-// @@ENGINE@@
+// ============================================================
+// TRADE ENGINE
+// ============================================================
+// One trade at a time. Fields that change after entry are only ever mutated inside
+// advanceTrade, which receives the object; top-level := on UDT fields is not trusted here.
+type Trade
+    int    entryBar
+    int    entryTime
+    float  entry
+    float  stop
+    float  risk
+    float  t1
+    float  score
+    int    band
+    string flags
+    bool   inTest
+    bool   t1Hit
+    float  t1Exit
+    float  highest
+    float  mfe
+    float  mae
+
+var Trade trade = na
+
+// R for one leg, after slippage on both sides.
+legR(float entry, float exitPx, float risk) =>
+    (exitPx - entry - slippagePct / 100.0 * (entry + exitPx)) / risk
+
+// Blended R: half at Target 1 and half at the final exit when Target 1 was reached, otherwise
+// the whole position at the exit. Commission: 2 orders, or 3 when Target 1 split the exit.
+tradeR(Trade t, float exitPx) =>
+    float gross  = t.t1Hit ? 0.5 * legR(t.entry, t.t1Exit, t.risk) + 0.5 * legR(t.entry, exitPx, t.risk) : legR(t.entry, exitPx, t.risk)
+    int   orders = t.t1Hit ? 3 : 2
+    float shares = positionEgp / t.entry
+    gross - orders * commissionEgp / (shares * t.risk)
+
+// Exit warnings: the index regime is Down, or the stock just closed back under its medium MA.
+// A crossunder, not a level test, because a dip entry can legitimately sit below SMA(50).
+idxDown   = regime == -1
+exitWarn  = trendBreak or (idxDown and nz(regime[1], 0) != -1)
+
+// Advances an open trade by one bar (never on its entry bar). Gaps fill at the open: a stop
+// gapped through fills worse, a target gapped through fills better. A bar that touches both
+// the stop and Target 1 counts the stop first.
+advanceTrade(Trade t) =>
+    bool   closed = false
+    float  exitPx = na
+    string reason = ""
+    if not t.t1Hit
+        if low <= t.stop
+            closed := true
+            exitPx := math.min(open, t.stop)
+            reason := "Stop"
+        else if high >= t.t1
+            t.t1Hit  := true
+            t.t1Exit := math.max(open, t.t1)
+            t.stop   := t.entry
+            if idxDown or trendBreak
+                closed := true
+                exitPx := close
+                reason := idxDown ? "Exit: Index" : "Exit: Trend"
+        else if idxDown or trendBreak
+            closed := true
+            exitPx := close
+            reason := idxDown ? "Exit: Index" : "Exit: Trend"
+        else if bar_index - t.entryBar >= timeStopBars
+            closed := true
+            exitPx := close
+            reason := "Time"
+    else
+        // The trail uses the highest high of earlier bars only. Raising it with this bar's own
+        // high and then testing this bar's low would assume the high printed first.
+        float remStop = math.max(t.stop, t.highest - trailAtr * atr)
+        if low <= remStop
+            closed := true
+            exitPx := math.min(open, remStop)
+            reason := remStop > t.entry ? "Trail" : "Breakeven"
+        else if idxDown or trendBreak
+            closed := true
+            exitPx := close
+            reason := idxDown ? "Exit: Index" : "Exit: Trend"
+        else
+            t.stop := remStop
+    t.highest := math.max(t.highest, high)
+    t.mfe     := math.max(t.mfe, (high - t.entry) / t.risk)
+    t.mae     := math.max(t.mae, (t.entry - low) / t.risk)
+    [closed, exitPx, reason]
+
+// Stats. Period index: 0 Tuning, 1 Test. Band arrays are indexed period * 3 + band.
+// trackN / trackW pool both periods and feed the live track record on entry labels.
+var array<int>   statN         = array.new<int>(2, 0)
+var array<int>   statW         = array.new<int>(2, 0)
+var array<float> statR         = array.new<float>(2, 0.0)
+var array<int>   statStreak    = array.new<int>(2, 0)
+var array<int>   statMaxStreak = array.new<int>(2, 0)
+var array<int>   bandN         = array.new<int>(6, 0)
+var array<int>   bandW         = array.new<int>(6, 0)
+var array<float> bandR         = array.new<float>(6, 0.0)
+var array<int>   trackN        = array.new<int>(3, 0)
+var array<int>   trackW        = array.new<int>(3, 0)
+
+recordTrade(Trade t, float r) =>
+    int  p   = t.inTest ? 1 : 0
+    int  bi  = p * 3 + t.band
+    bool win = t.t1Hit
+    array.set(statN, p, array.get(statN, p) + 1)
+    array.set(statR, p, array.get(statR, p) + r)
+    array.set(bandN, bi, array.get(bandN, bi) + 1)
+    array.set(bandR, bi, array.get(bandR, bi) + r)
+    array.set(trackN, t.band, array.get(trackN, t.band) + 1)
+    if win
+        array.set(statW, p, array.get(statW, p) + 1)
+        array.set(bandW, bi, array.get(bandW, bi) + 1)
+        array.set(trackW, t.band, array.get(trackW, t.band) + 1)
+        array.set(statStreak, p, 0)
+    else
+        int s = array.get(statStreak, p) + 1
+        array.set(statStreak, p, s)
+        array.set(statMaxStreak, p, math.max(array.get(statMaxStreak, p), s))
+    win
+
+trackText(int band) =>
+    int n = array.get(trackN, band)
+    int w = array.get(trackW, band)
+    n >= minHistory ? bandName(band) + " " + str.tostring(w) + "/" + str.tostring(n) + " (" + str.tostring(100.0 * w / n, "0") + "%)" : bandName(band) + " — building history"
+
+var float plotEntry = na
+var float plotStop  = na
+var float plotT1    = na
+
+bool tradeClosedNow = false
+bool entrySignal    = false
+
+// 1. Manage the open trade.
+if not na(trade) and bar_index > trade.entryBar
+    [closed, exitPx, reason] = advanceTrade(trade)
+    if closed
+        float r   = tradeR(trade, exitPx)
+        bool  win = recordTrade(trade, r)
+        tradeClosedNow := true
+        if showLabels
+            label.new(bar_index, high, (r >= 0 ? "+" : "") + str.tostring(r, "0.00") + "R · " + reason, style = label.style_label_down, color = win ? color.new(color.teal, 10) : color.new(color.maroon, 10), textcolor = color.white, size = size.small)
+        if logTrades
+            log.info("TRADE," + syminfo.ticker + "," + str.format_time(trade.entryTime, "yyyy-MM-dd") + "," + str.tostring(trade.entry) + "," + str.format_time(time, "yyyy-MM-dd") + "," + str.tostring(exitPx) + "," + str.tostring(r, "0.0000") + "," + (win ? "1" : "0") + "," + reason + "," + str.tostring(trade.score, "0") + "," + bandName(trade.band) + "," + trade.flags + "," + str.tostring(trade.mfe, "0.00") + "," + str.tostring(trade.mae, "0.00") + "," + str.tostring(bar_index - trade.entryBar) + "," + (trade.inTest ? "Test" : "Tuning"))
+        trade := na
+
+// 2. No open trade: arm, advance or fire a setup.
+if na(trade)
+    if ss.active
+        bool fire = stepSetup(ss)
+        if fire
+            float stopRaw = ss.lowest - stopBufAtr * atr
+            float minRisk = math.max(minRiskAtr * atr, minRiskTicks * syminfo.mintick)
+            float risk    = math.max(close - stopRaw, minRisk)
+            if risk <= maxRiskAtr * atr
+                float pbVol = ss.volN > 0 ? ss.volSum / ss.volN : na
+                [score, band, flags] = factorSet(ss.lowest, pbVol)
+                string track = trackText(band)
+                trade := Trade.new(bar_index, time, close, close - risk, risk, close + t1R * risk, score, band, flags, time >= testStart, false, na, high, 0.0, 0.0)
+                entrySignal := true
+                if showLabels
+                    label.new(bar_index, low, "BUY · Trust " + str.tostring(score, "0") + " · " + track, style = label.style_label_up, color = band == 2 ? color.new(color.green, 0) : band == 1 ? color.new(color.olive, 0) : color.new(color.gray, 0), textcolor = color.white, size = size.small)
+            clearSetup(ss)
+    else if gatesOpen and rsi < rsiThreshold
+        startSetup(ss)
+
+// Lines for the open trade; the stop line follows the trail once Target 1 is reached.
+if na(trade)
+    plotEntry := na
+    plotStop  := na
+    plotT1    := na
+else
+    plotEntry := trade.entry
+    plotStop  := trade.stop
+    plotT1    := trade.t1
 
 // ============================================================
 // PANEL
@@ -261,7 +435,48 @@ if showPanel and barstate.islast
     cellStatus(3, "Trend gate", longKnown ? (gateTrend ? "Above " + str.tostring(longLen) + " MA" : "Below " + str.tostring(longLen) + " MA") : "skipped (<" + str.tostring(longLen) + " bars)", longKnown ? (gateTrend ? color.lime : color.red) : color.orange)
     cellStatus(4, "Liquidity", na(valueTraded) or valueTraded == 0 ? "no volume" : str.tostring(valueTraded / 1000000, "0.0") + "M EGP/bar", gateLiq ? color.lime : color.red)
 
-// @@OUTPUT@@
+cellResult(int row, string key, string tuneVal, string testVal) =>
+    table.cell(panel, 0, row, key, text_color = color.silver, text_size = size.small, text_halign = text.align_left)
+    table.cell(panel, 1, row, tuneVal, text_color = color.white, text_size = size.small)
+    table.cell(panel, 2, row, testVal, text_color = color.white, text_size = size.small)
+
+winText(int p) =>
+    int n = array.get(statN, p)
+    n > 0 ? str.tostring(100.0 * array.get(statW, p) / n, "0.0") + "% (" + str.tostring(array.get(statW, p)) + ")" : "—"
+
+avgText(int p) =>
+    int n = array.get(statN, p)
+    n > 0 ? str.tostring(array.get(statR, p) / n, "0.00") : "—"
+
+bandText(int p, int band) =>
+    int bi = p * 3 + band
+    int n  = array.get(bandN, bi)
+    n > 0 ? str.tostring(n) + " · " + str.tostring(100.0 * array.get(bandW, bi) / n, "0") + "% · " + str.tostring(array.get(bandR, bi) / n, "0.00") + "R" : "—"
+
+if showPanel and barstate.islast
+    cellStatus(5, "Setup", not na(trade) ? "In trade" : ss.active ? "Armed (" + str.tostring(bar_index - ss.startBar) + " bars)" : "Watching", not na(trade) ? color.aqua : ss.active ? color.yellow : color.gray)
+    table.cell(panel, 0, 6, "RESULTS", text_color = color.white, text_size = size.small, text_halign = text.align_left)
+    table.cell(panel, 1, 6, "Tuning", text_color = color.gray, text_size = size.small)
+    table.cell(panel, 2, 6, "Test", text_color = color.gray, text_size = size.small)
+    cellResult(7, "Trades", str.tostring(array.get(statN, 0)), str.tostring(array.get(statN, 1)))
+    cellResult(8, "Win %", winText(0), winText(1))
+    cellResult(9, "Avg R", avgText(0), avgText(1))
+    cellResult(10, "Total R", str.tostring(array.get(statR, 0), "0.00"), str.tostring(array.get(statR, 1), "0.00"))
+    cellResult(11, "Max loss run", str.tostring(array.get(statMaxStreak, 0)), str.tostring(array.get(statMaxStreak, 1)))
+    cellResult(12, "High (n·win·avg)", bandText(0, 2), bandText(1, 2))
+    cellResult(13, "Mid", bandText(0, 1), bandText(1, 1))
+    cellResult(14, "Low", bandText(0, 0), bandText(1, 0))
+    table.cell(panel, 0, 15, "costs " + str.tostring(slippagePct, "0.00") + "%/side + " + str.tostring(commissionEgp, "0.0") + " EGP/order", text_color = color.gray, text_size = size.tiny, text_halign = text.align_left)
+    table.merge_cells(panel, 0, 15, 2, 15)
+
+plot(plotEntry, "Entry", color = color.new(color.white, 30), style = plot.style_linebr)
+plot(plotStop, "Stop", color = color.new(color.red, 0), style = plot.style_linebr)
+plot(plotT1, "Target 1", color = color.new(color.lime, 0), style = plot.style_linebr)
+plotshape(exitWarn, "Exit Warning", shape.xcross, location.abovebar, color.new(color.orange, 0), text = "EXIT", size = size.tiny)
+
+alertcondition(entrySignal, "EGX Trust Entry", "BUY on {{ticker}} {{interval}}: see the chart label for the trust score, stop and Target 1.")
+alertcondition(exitWarn, "EGX Exit Warning", "EXIT warning on {{ticker}} {{interval}}: the index regime turned Down or the stock lost its medium MA.")
+alertcondition(tradeClosedNow, "EGX Trade Closed", "Trade closed on {{ticker}} {{interval}}: see the result label for R and reason.")
 
 // ============================================================
 // DATA WINDOW (verification readouts)
@@ -270,3 +485,16 @@ plot(idxClose, "DBG Index Close", display = display.data_window)
 plot(idxMa, "DBG Index MA", display = display.data_window)
 plot(nz(regime, -9), "DBG Regime (1 Up, 0 Neutral, -1 Down, -9 none)", display = display.data_window)
 plot(gatesOpen ? 1 : 0, "DBG Gates Open", display = display.data_window)
+
+plot(array.get(statN, 0), "DBG Tune N", display = display.data_window)
+plot(array.get(statW, 0), "DBG Tune Wins", display = display.data_window)
+plot(array.get(statR, 0), "DBG Tune R", display = display.data_window)
+plot(array.get(statN, 1), "DBG Test N", display = display.data_window)
+plot(array.get(statW, 1), "DBG Test Wins", display = display.data_window)
+plot(array.get(statR, 1), "DBG Test R", display = display.data_window)
+plot(array.get(bandN, 5), "DBG Test High N", display = display.data_window)
+plot(array.get(bandW, 5), "DBG Test High Wins", display = display.data_window)
+plot(array.get(bandR, 5), "DBG Test High R", display = display.data_window)
+plot(array.get(bandN, 2), "DBG Tune High N", display = display.data_window)
+plot(array.get(bandW, 2), "DBG Tune High Wins", display = display.data_window)
+plot(array.get(bandR, 2), "DBG Tune High R", display = display.data_window)
