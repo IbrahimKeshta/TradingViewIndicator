@@ -75,11 +75,16 @@ All hard gates open and RSI(2) < 10. Gates:
 - Stock close > SMA(200). If fewer than 200 bars exist, the gate is skipped and STATUS flags it.
 - Liquidity: SMA(close × volume, 20) ≥ `Min Avg Value Traded (EGP)` input.
 
-A setup expires after 5 bars, or when price closes more than 0.5 ATR(14) below the setup bar's low.
+A setup expires 5 bars after the first oversold bar. Each later oversold bar inside that span
+**re-arms** it: the confirmation window restarts from that bar, and the cancel reference moves to
+that bar's low. The setup is cancelled when price closes more than 0.5 ATR(14) below the latest
+oversold bar's low, or when the index regime turns Down or liquidity drops below the floor. (Without
+re-arming, a 3-bar confirmation window would make the 5-bar expiry meaningless.)
 
 ### 5. Confirmation
 
-Entry at the close of the first bar within 3 bars of the setup that is any of:
+Entry at the close of the first bar, 1 to 3 bars after the most recent oversold bar (the oversold bar
+itself never confirms), that is any of:
 
 - close > previous high;
 - bullish engulfing;
