@@ -978,8 +978,8 @@ chart rather than quoting a price.
 | Min Risk (x ATR) | 0.5 | Risk floor in ATRs |
 | Min Risk (ticks) | 10 | Risk floor in ticks. The effective floor is the larger of the two |
 | Max Risk (x ATR) | 3.0 | Setups needing a wider stop than this are skipped |
-| Target 1 (R) | 0.75 | Where half the position exits and the stop moves to breakeven. It does not define a win |
-| Trail (x ATR) | 2.5 | Chandelier trail for the second half |
+| Target 1 (R) | 1.0 | Where half the position exits and the stop moves to breakeven. It does not define a win |
+| Trail (x ATR) | 3.5 | Chandelier trail for the second half |
 | Time Stop (bars) | 20 | Exit at the close if Target 1 has not been reached by then |
 
 **Costs**
@@ -1062,6 +1062,25 @@ the trust score and the track record to see how the setup behaves on your own ch
 promise. The full record, including the tuning grid and the biases above, is in
 `docs/superpowers/plans/2026-11-02-egx-trust-validation.md`.
 
+### v2 validation results
+
+v2 moved the goal to profit first: an average of at least +0.15R per trade, and a win rate of at
+least 50% where a win is net R > 0 after costs. It was tuned on the same 15 charts and then read once
+on 10 stocks never seen before (batch C).
+
+- **None of the three filters helped.** Require Index Up, Weekly Trend Filter and ADX Filter each had
+  to add at least 0.03R per trade on the tuning charts. None did, so all three stay off.
+- **The picked exits are `Target 1 (R)` 1.0 and `Trail (x ATR)` 3.5.** These are now the defaults.
+- **The profit bar was not met.** On the 10 unseen stocks: 442 trades, **51.6%** win rate, **+0.055R**
+  per trade, and 7 of the 10 charts profitable. The win-rate and chart-count bars passed; +0.055R is
+  well short of +0.15R.
+- **The 2024+ period on the tuning charts did better** (+0.254R per trade), but those charts had
+  already been seen, and that stretch was a strong EGX bull run, so it is not decisive.
+- **Wider exits were the only lever that helped, and extra indicators did not.**
+
+Read plainly: on stocks it has never seen, the system stays positive after costs, but the edge is
+thin. The full record is in `docs/superpowers/plans/2026-11-02-egx-trust-v2-validation.md`.
+
 ---
 
 ## Things worth knowing before you trade any of these
@@ -1087,7 +1106,8 @@ only meet this on a very long intraday chart.
 
 **The EGX Trust Score has limits of its own** — survivorship bias in the constituent lists, coarse
 ticks on split-adjusted history, and long only. Its measured out-of-sample edge is about breakeven
-(55.2% win rate, +0.02R per trade). They are set out under *Known limits* and *Validation results*
+(55.2% win rate, +0.02R per trade); under v2 it measured +0.055R per trade on 10 unseen stocks,
+which missed the +0.15R profit bar. They are set out under *Known limits* and *Validation results*
 in its section above, and they matter before you rely on its trust score.
 
 **These are decision-support tools, not a strategy.** None of these scripts backtests, sizes a position, or

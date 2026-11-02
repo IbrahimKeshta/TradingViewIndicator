@@ -30,8 +30,8 @@ stopBufAtr   = input.float(0.25, "Stop Buffer (x ATR)", minval = 0, step = 0.05,
 minRiskAtr   = input.float(0.5, "Min Risk (x ATR)", minval = 0, step = 0.1, group = "Trade")
 minRiskTicks = input.int(10, "Min Risk (ticks)", minval = 0, group = "Trade", tooltip = "Split-adjusted EGX history can put a whole stop inside one tick. The risk floor is the larger of this and Min Risk (x ATR).")
 maxRiskAtr   = input.float(3.0, "Max Risk (x ATR)", minval = 0.1, step = 0.1, group = "Trade", tooltip = "Setups whose stop would sit further than this are skipped, not taken with a wide stop.")
-t1R          = input.float(0.75, "Target 1 (R)", minval = 0.1, step = 0.05, group = "Trade", tooltip = "Half the position exits here and the stop moves to breakeven.")
-trailAtr     = input.float(2.5, "Trail (x ATR)", minval = 0.1, step = 0.1, group = "Trade", tooltip = "Chandelier trail for the second half: highest high since entry minus this many ATR, never below breakeven.")
+t1R          = input.float(1.0, "Target 1 (R)", minval = 0.1, step = 0.05, group = "Trade", tooltip = "Half the position exits here and the stop moves to breakeven.")
+trailAtr     = input.float(3.5, "Trail (x ATR)", minval = 0.1, step = 0.1, group = "Trade", tooltip = "Chandelier trail for the second half: highest high since entry minus this many ATR, never below breakeven.")
 timeStopBars = input.int(20, "Time Stop (bars)", minval = 1, group = "Trade", tooltip = "A trade that has not reached Target 1 after this many bars exits at the close.")
 
 // ---------------- Costs ----------------
