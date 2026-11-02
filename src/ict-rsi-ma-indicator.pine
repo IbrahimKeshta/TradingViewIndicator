@@ -369,8 +369,6 @@ plot(majorTrendCode, "DBG Major Trend (1/-1/0)", display = display.data_window)
 plot(intTrendCode, "DBG Internal Trend (1/-1/0)", display = display.data_window)
 plot(inRange ? 1 : 0, "DBG In Range (1/0)", display = display.data_window)
 plot(lastEventCode, "DBG Last Major Event (1=BOS 2=CHoCH)", display = display.data_window)
-plot(array.size(majorHighs), "DBG Major Highs Kept", display = display.data_window)
-plot(array.size(majorLows), "DBG Major Lows Kept", display = display.data_window)
 plot(majorState.lastStrength, "DBG Last Major Strength (xATR)", display = display.data_window)
 
 // ============================================================
@@ -733,10 +731,6 @@ ichiBearConfirm = ichiReady and close < ichiCloudBottom
 // Data Window readouts — the verification surface for this block.
 plot(macdBullConfirm ? 1 : macdBearConfirm ? -1 : 0, "DBG MACD (1/-1/0)", display = display.data_window)
 plot(stochBullConfirm ? 1 : stochBearConfirm ? -1 : 0, "DBG Stoch (1/-1/0)", display = display.data_window)
-plot(volumeSeen ? 1 : 0, "DBG Volume Available (1/0)", display = display.data_window)
-plot(volSurge ? 1 : 0, "DBG Volume Surge (1/0)", display = display.data_window)
-plot(climaxLong ? 1 : 0, "DBG Climax Long (1/0)", display = display.data_window)
-plot(climaxShort ? 1 : 0, "DBG Climax Short (1/0)", display = display.data_window)
 plot(ichiBullConfirm ? 1 : ichiBearConfirm ? -1 : 0, "DBG Ichimoku (1/-1/0)", display = display.data_window)
 
 // ---- group votes ----
@@ -768,10 +762,6 @@ partShortOk      = partShortHits >= partNeed
 // history, and a permanently-dark point in the denominator would grade early setups
 // harshly for a reason that says nothing about them.
 ichiOn = scoreIchimoku and ichiReady
-
-plot(momOn ? 1 : 0, "DBG Momentum Point Enabled (1/0)", display = display.data_window)
-plot(partOn ? 1 : 0, "DBG Participation Point Enabled (1/0)", display = display.data_window)
-plot(ichiOn ? 1 : 0, "DBG Ichimoku Point Enabled (1/0)", display = display.data_window)
 
 // ---- the cloud ----
 // plot() cannot live inside an `if`, so the toggle plots na instead: nothing is drawn and the
@@ -2077,10 +2067,6 @@ plot(dbgTradeSide, "DBG Trade Side (1=long -1=short)", display = display.data_wi
 plot(dbgTpHit, "DBG TP Hit (0-3)", display = display.data_window)
 plot(dbgTradeStop, "DBG Trade Stop", display = display.data_window)
 plot(tradeOpenR, "DBG Open R", display = display.data_window)
-plot(setupScoreVal, "DBG Setup Score", display = display.data_window)
-plot(setupOfVal, "DBG Setup Of", display = display.data_window)
-plot(ofPtsLong, "DBG Enabled Points", display = display.data_window)
-
 // Tuning / Test totals per model, net of costs when Apply Costs is on. Tune settings by the Tuning
 // figures only and read the Test figures once. Straddle is the trades that were entered before
 // Test Start and closed after it, summed over both models; they are in neither column.
