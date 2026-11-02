@@ -35,3 +35,47 @@ What the Tuning data already says:
 - Win rate and R trade off almost mechanically through T1: a closer target raises the win rate and lowers R.
 - **The trust score barely separates trades.** The High band runs within about 1–3 points of the average in every combo.
 - **Factor-drop step, skipped this round. Ruling:** dropping a factor changes only the score, not which trades are taken, so it cannot move the pooled win rate. With High-band separation of about 1–3 points, no factor drop can lift a band from about 57% to 80%. The per-factor log analysis moves to round 2 as the evidence for a rule change.
+
+## Round 1 — out-of-sample verdict (settings c8: RSI 15, T1 0.75)
+
+Test-A = the 15 tuning charts, bars from 2024-01-01. Test-B = 10 never-viewed charts (PHDC, CCAP, ADIB, SKPC, JUFO, OCDI, AMER, CIEB, MTIE, LCSW) over their full history (Tuning + Test columns summed; straddle trades are counted in neither column, at most 1 per chart).
+
+| Set | Chart | n | Wins | Win % | Total R |
+|---|---|---|---|---|---|
+| A | COMI | 22 | 11 | 50.0 | +2.78 |
+| A | TMGH | 16 | 7 | 43.8 | −3.24 |
+| A | ETEL | 19 | 12 | 63.2 | +2.70 |
+| A | EAST | 13 | 7 | 53.8 | +1.89 |
+| A | FWRY | 32 | 21 | 65.6 | +5.66 |
+| A | ABUK | 15 | 11 | 73.3 | +2.91 |
+| A | HRHO | 15 | 11 | 73.3 | +5.28 |
+| A | ORAS | 21 | 14 | 66.7 | +6.99 |
+| A | AMOC | 14 | 9 | 64.3 | +0.24 |
+| A | MFPC | 14 | 9 | 64.3 | −0.72 |
+| A | SWDY | 22 | 11 | 50.0 | −1.46 |
+| A | ORWE | 26 | 12 | 46.2 | −3.05 |
+| A | MASR | 23 | 14 | 60.9 | −0.26 |
+| A | ELEC | 12 | 7 | 58.3 | −2.43 |
+| A | EGCH | 15 | 6 | 40.0 | −6.93 |
+| B | PHDC | 94 | 47 | 50.0 | −0.48 |
+| B | CCAP | 61 | 32 | 52.5 | +3.61 |
+| B | ADIB | 87 | 49 | 56.3 | +4.45 |
+| B | SKPC | 75 | 44 | 58.7 | +7.61 |
+| B | JUFO | 67 | 37 | 55.2 | −6.40 |
+| B | OCDI | 105 | 57 | 54.3 | +2.60 |
+| B | AMER | 46 | 25 | 54.3 | +15.92 |
+| B | CIEB | 51 | 22 | 43.1 | −11.85 |
+| B | MTIE | 69 | 44 | 63.8 | −0.17 |
+| B | LCSW | 39 | 18 | 46.2 | −7.23 |
+
+**Pooled: n = 973, wins = 537, win rate 55.2%, Total R +18.43 (+0.019R per trade), charts with R > 0: 13/25 (52%). High trust band: n = 529, win rate 56.9%, R +5.71.**
+
+| Pass rule | Result | Met |
+|---|---|---|
+| Win rate ≥ 80% | 55.2% | ✗ |
+| Total R > 0 after costs | +18.43R | ✓ |
+| n ≥ 30 | 973 | ✓ |
+| ≥ 60% of charts (n ≥ 5) with R > 0 | 52% | ✗ |
+| Fallback: a trust band ≥ 80% on n ≥ 30 | High 56.9% | ✗ |
+
+**Round 1: FAIL.** The out-of-sample win rate (55.2%) matches the Tuning one (56.0%), so the settings did not overfit. The system is simply a ~55% system, with an edge per trade close to zero after costs.
