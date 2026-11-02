@@ -514,6 +514,37 @@ are identical to running without them.
 | Require Confirmation | off | Don't trade the touch bar. Remember the touch and wait for a candle that closes in the trade's direction, up to Confirmation Max Wait bars later — using the original touch's zone and stop throughout |
 | Confirmation Max Wait (bars) | 3 | A touch with no confirming candle within this many bars is abandoned, not taken late |
 
+**Index Filter** — EGX symbols only, off by default; applies to both entry models. Ignored on
+non-EGX symbols.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Require Index Trend | off | Longs need the stock's index (EGX30 or EGX70 EWI) not trending Down; shorts need it not trending Up. Up = index close above its MA with the MA rising over the slope lookback; Down = the mirror |
+| Index | Auto | Auto picks EGX30 or EGX70 from the constituent lists; EGX30 / EGX70 force one |
+| Index MA Length | 50 | Length of the index moving average |
+| Index Slope Lookback (bars) | 10 | How far back the MA is compared with itself to call it rising or falling |
+
+**Costs** — off by default.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Apply Costs | off | Deducts slippage and commission from every closed trade's R, so the panel, the grade and point stats and the log all show net R |
+| Slippage per Side (%) | 0.1 | Charged once at entry and once at the averaged exit |
+| Commission per Order | 2.0 | In the chart's currency; one order for the entry, one per target reached and one for the remaining thirds |
+| Position Size | 100000 | Only used to turn the per-order commission into R |
+| Min Risk (ticks) | 0 | Rejects setups whose stop is closer than this many ticks, in both models. 0 = off |
+
+**Validation** — splits the closed-trade totals in two.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Test Start | 01 Jan 2024 | Trades entered before this time count as Tuning, trades entered on or after it as Test. A trade entered before and closed after is counted in neither, only as straddle. The Data Window shows N, wins and R for each side per model (`DBG PB Tune N` … `DBG TR Test R`, plus `DBG Straddle N`), and the trade log ends with a period field |
+
+Costs and the tick floor are off by default, so existing charts keep their numbers; turn them on for
+honest EGX results, where a whole stop can sit inside one tick of split-adjusted history. The index
+filter uses the same constituent lists (dated 2026-11-01) and the same EGX30 stand-in before
+mid-2020 as the EGX Trust Score script.
+
 **Confirmations** — three more scored points, five indicators.
 
 | Setting | Default | What it does |
