@@ -120,7 +120,111 @@ if not na(ph)
     lastSwingHigh    := ph
     lastSwingHighBar := bar_index - swingLen
 
-// @@SETUP@@
+// ============================================================
+// SETUP, CONFIRMATION, TRUST SCORE
+// ============================================================
+// Confirmation candles. The setup bar itself never confirms (see stepSetup): an RSI(2) dip
+// bar that also closes above the prior high is a contradiction in practice, and allowing it
+// would let one bar be both the dip and the turn.
+barRange      = high - low
+bodySize      = math.abs(close - open)
+lowerWick     = math.min(open, close) - low
+closeAbovePrv = close > high[1]
+bullEngulf    = close > open and close[1] < open[1] and open <= close[1] and close >= open[1]
+hammer        = barRange > 0 and lowerWick > 0 and lowerWick >= 2 * bodySize and close >= low + barRange * 2.0 / 3.0
+confirmed     = closeAbovePrv or bullEngulf or hammer
+strongConfirm = bullEngulf or (barRange > 0 and close >= high - 0.25 * barRange)
+
+// Supports within 1 ATR of the pullback low. Each kind counts once: the last confirmed swing
+// low, SMA(20), SMA(50), and the 38.2-61.8% retracement of the last swing up.
+supportCount(float lvl) =>
+    int n = 0
+    if not na(lastSwingLow) and math.abs(lvl - lastSwingLow) <= atr
+        n += 1
+    if not na(sma20) and math.abs(lvl - sma20) <= atr
+        n += 1
+    if not na(smaMid) and math.abs(lvl - smaMid) <= atr
+        n += 1
+    if not na(lastSwingLow) and not na(lastSwingHigh) and not na(lastSwingLowBar) and not na(lastSwingHighBar)
+        if lastSwingHighBar > lastSwingLowBar and lastSwingHigh > lastSwingLow
+            swingRange = lastSwingHigh - lastSwingLow
+            zoneTop    = lastSwingHigh - 0.382 * swingRange
+            zoneBottom = lastSwingHigh - 0.618 * swingRange
+            dist       = lvl > zoneTop ? lvl - zoneTop : lvl < zoneBottom ? zoneBottom - lvl : 0.0
+            if dist <= atr
+                n += 1
+    n
+
+bandName(int band) =>
+    band == 2 ? "High" : band == 1 ? "Mid" : "Low"
+
+// Six independent factor groups, equal weight, never fitted. A factor that proves
+// anti-predictive on the tuning set is switched off with its input, not re-weighted.
+factorSet(float lowRef, float pbVolAvg) =>
+    float fIndex = regime == 1 ? 1.0 : regime == 0 ? 0.5 : 0.0
+    float fTrend = longKnown ? (close > smaMid and smaMid > smaLong ? 1.0 : close > smaLong ? 0.5 : 0.0) : (close > smaMid ? 0.5 : 0.0)
+    float fRs    = rsAbove and rsRising ? 1.0 : rsAbove ? 0.5 : 0.0
+    int   nSup   = supportCount(lowRef)
+    float fSup   = nSup >= 2 ? 1.0 : nSup == 1 ? 0.5 : 0.0
+    bool  pbLow  = not na(pbVolAvg) and not na(volAvg) and pbVolAvg < volAvg
+    bool  cfHigh = not na(volAvg) and volume > volAvg
+    float fPart  = pbLow and cfHigh ? 1.0 : pbLow or cfHigh ? 0.5 : 0.0
+    float fConf  = strongConfirm ? 1.0 : 0.5
+    float total  = (useFIndex ? fIndex : 0.0) + (useFTrend ? fTrend : 0.0) + (useFRs ? fRs : 0.0) + (useFSupport ? fSup : 0.0) + (useFPart ? fPart : 0.0) + (useFConf ? fConf : 0.0)
+    int   nOn    = (useFIndex ? 1 : 0) + (useFTrend ? 1 : 0) + (useFRs ? 1 : 0) + (useFSupport ? 1 : 0) + (useFPart ? 1 : 0) + (useFConf ? 1 : 0)
+    float score  = nOn > 0 ? 100.0 * total / nOn : 0.0
+    int   band   = score >= 75 ? 2 : score >= 50 ? 1 : 0
+    string flags = "I" + str.tostring(fIndex, "0.0") + " T" + str.tostring(fTrend, "0.0") + " R" + str.tostring(fRs, "0.0") + " S" + str.tostring(fSup, "0.0") + " P" + str.tostring(fPart, "0.0") + " C" + str.tostring(fConf, "0.0")
+    [score, band, flags]
+
+// Setup state lives in one UDT so functions can mutate it by reference.
+type SetupState
+    bool  active
+    int   startBar
+    int   lastOversoldBar
+    float lowest
+    float oversoldLow
+    float volSum
+    int   volN
+
+var SetupState ss = SetupState.new(false, na, na, na, na, 0.0, 0)
+
+startSetup(SetupState s) =>
+    s.active          := true
+    s.startBar        := bar_index
+    s.lastOversoldBar := bar_index
+    s.lowest          := low
+    s.oversoldLow     := low
+    s.volSum          := volume
+    s.volN            := 1
+    s.active
+
+clearSetup(SetupState s) =>
+    s.active := false
+    s.volSum := 0.0
+    s.volN   := 0
+    s.active
+
+// Advances an armed setup by one bar. Returns true when this bar's close is a qualifying
+// confirmation; the caller decides whether a trade can actually open (risk cap, open trade).
+stepSetup(SetupState s) =>
+    bool fire = false
+    s.lowest := math.min(s.lowest, low)
+    if rsi < rsiThreshold
+        s.lastOversoldBar := bar_index
+        s.oversoldLow     := low
+    bool expired  = bar_index - s.startBar > setupExpiry
+    bool canceled = close < s.oversoldLow - cancelAtr * atr
+    int  sinceOs  = bar_index - s.lastOversoldBar
+    bool inWindow = sinceOs >= 1 and sinceOs <= confirmBars
+    if expired or canceled or not gateRegime or not gateLiq
+        clearSetup(s)
+    else if inWindow and confirmed
+        fire := true
+    else
+        s.volSum += volume
+        s.volN   += 1
+    fire
 
 // @@ENGINE@@
 
