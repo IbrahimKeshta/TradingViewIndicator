@@ -247,12 +247,18 @@ type Trade
     float  highest
     float  mfe
     float  mae
+    bool   sawAboveMid
 
 var Trade trade = na
 
 // R for one leg, after slippage on both sides.
 legR(float entry, float exitPx, float risk) =>
     (exitPx - entry - slippagePct / 100.0 * (entry + exitPx)) / risk
+
+// Stops sit on a whole tick, rounded away from the entry: a stop between ticks only fills at
+// the tick below it, so booking the unrounded price would understate losses on tiny-price names.
+floorTick(float x) =>
+    math.floor(x / syminfo.mintick) * syminfo.mintick
 
 // Blended R: half at Target 1 and half at the final exit when Target 1 was reached, otherwise
 // the whole position at the exit. Commission: 2 orders, or 3 when Target 1 split the exit.
@@ -263,7 +269,8 @@ tradeR(Trade t, float exitPx) =>
     gross - orders * commissionEgp / (shares * t.risk)
 
 // Exit warnings: the index regime is Down, or the stock just closed back under its medium MA.
-// A crossunder, not a level test, because a dip entry can legitimately sit below SMA(50).
+// The EXIT marker uses the crossunder, not a level test, because a dip entry can legitimately
+// sit below SMA(50). Open trades exit via trendLost, which also requires being above the MA first.
 idxDown   = regime == -1
 exitWarn  = trendBreak or (idxDown and nz(regime[1], 0) != -1)
 
@@ -274,6 +281,9 @@ advanceTrade(Trade t) =>
     bool   closed = false
     float  exitPx = na
     string reason = ""
+    // The trend exit needs a close below SMA(50) after the trade has been above it: a dip
+    // bought below the average is not stopped out on its next bar just for being there.
+    bool trendLost = t.sawAboveMid and not na(smaMid) and close < smaMid
     if not t.t1Hit
         if low <= t.stop
             closed := true
@@ -283,11 +293,11 @@ advanceTrade(Trade t) =>
             t.t1Hit  := true
             t.t1Exit := math.max(open, t.t1)
             t.stop   := t.entry
-            if idxDown or trendBreak
+            if idxDown or trendLost
                 closed := true
                 exitPx := close
                 reason := idxDown ? "Exit: Index" : "Exit: Trend"
-        else if idxDown or trendBreak
+        else if idxDown or trendLost
             closed := true
             exitPx := close
             reason := idxDown ? "Exit: Index" : "Exit: Trend"
@@ -298,17 +308,19 @@ advanceTrade(Trade t) =>
     else
         // The trail uses the highest high of earlier bars only. Raising it with this bar's own
         // high and then testing this bar's low would assume the high printed first.
-        float remStop = math.max(t.stop, t.highest - trailAtr * atr)
+        float remStop = math.max(t.stop, floorTick(t.highest - trailAtr * atr))
         if low <= remStop
             closed := true
             exitPx := math.min(open, remStop)
             reason := remStop > t.entry ? "Trail" : "Breakeven"
-        else if idxDown or trendBreak
+        else if idxDown or trendLost
             closed := true
             exitPx := close
             reason := idxDown ? "Exit: Index" : "Exit: Trend"
         else
             t.stop := remStop
+    if not na(smaMid) and close >= smaMid
+        t.sawAboveMid := true
     t.highest := math.max(t.highest, high)
     t.mfe     := math.max(t.mfe, (high - t.entry) / t.risk)
     t.mae     := math.max(t.mae, (t.entry - low) / t.risk)
@@ -360,17 +372,18 @@ bool tradeClosedNow = false
 bool entrySignal    = false
 
 // 1. Manage the open trade.
-if not na(trade) and bar_index > trade.entryBar
-    [closed, exitPx, reason] = advanceTrade(trade)
-    if closed
-        float r   = tradeR(trade, exitPx)
-        bool  win = recordTrade(trade, r)
-        tradeClosedNow := true
-        if showLabels
-            label.new(bar_index, high, (r >= 0 ? "+" : "") + str.tostring(r, "0.00") + "R · " + reason, style = label.style_label_down, color = win ? color.new(color.teal, 10) : color.new(color.maroon, 10), textcolor = color.white, size = size.small)
-        if logTrades
-            log.info("TRADE," + syminfo.ticker + "," + str.format_time(trade.entryTime, "yyyy-MM-dd") + "," + str.tostring(trade.entry) + "," + str.format_time(time, "yyyy-MM-dd") + "," + str.tostring(exitPx) + "," + str.tostring(r, "0.0000") + "," + (win ? "1" : "0") + "," + reason + "," + str.tostring(trade.score, "0") + "," + bandName(trade.band) + "," + trade.flags + "," + str.tostring(trade.mfe, "0.00") + "," + str.tostring(trade.mae, "0.00") + "," + str.tostring(bar_index - trade.entryBar) + "," + (trade.inTest ? "Test" : "Tuning"))
-        trade := na
+if not na(trade)
+    if bar_index > trade.entryBar
+        [closed, exitPx, reason] = advanceTrade(trade)
+        if closed
+            float r   = tradeR(trade, exitPx)
+            bool  win = recordTrade(trade, r)
+            tradeClosedNow := true
+            if showLabels
+                label.new(bar_index, high, (r >= 0 ? "+" : "") + str.tostring(r, "0.00") + "R · " + reason, style = label.style_label_down, color = win ? color.new(color.teal, 10) : color.new(color.maroon, 10), textcolor = color.white, size = size.small)
+            if logTrades and barstate.isconfirmed
+                log.info("TRADE," + syminfo.ticker + "," + str.format_time(trade.entryTime, "yyyy-MM-dd") + "," + str.tostring(trade.entry) + "," + str.format_time(time, "yyyy-MM-dd") + "," + str.tostring(exitPx) + "," + str.tostring(r, "0.0000") + "," + (win ? "1" : "0") + "," + reason + "," + str.tostring(trade.score, "0") + "," + bandName(trade.band) + "," + trade.flags + "," + str.tostring(trade.mfe, "0.00") + "," + str.tostring(trade.mae, "0.00") + "," + str.tostring(bar_index - trade.entryBar) + "," + (trade.inTest ? "Test" : "Tuning"))
+            trade := na
 
 // 2. No open trade: arm, advance or fire a setup.
 if na(trade)
@@ -380,11 +393,13 @@ if na(trade)
             float stopRaw = ss.lowest - stopBufAtr * atr
             float minRisk = math.max(minRiskAtr * atr, minRiskTicks * syminfo.mintick)
             float risk    = math.max(close - stopRaw, minRisk)
-            if risk <= maxRiskAtr * atr
+            float stopPx  = floorTick(close - risk)
+            risk         := close - stopPx
+            if risk > 0 and risk <= maxRiskAtr * atr
                 float pbVol = ss.volN > 0 ? ss.volSum / ss.volN : na
                 [score, band, flags] = factorSet(ss.lowest, pbVol)
                 string track = trackText(band)
-                trade := Trade.new(bar_index, time, close, close - risk, risk, close + t1R * risk, score, band, flags, time >= testStart, false, na, high, 0.0, 0.0)
+                trade := Trade.new(bar_index, time, close, stopPx, risk, close + t1R * risk, score, band, flags, time >= testStart, false, na, high, 0.0, 0.0, not na(smaMid) and close >= smaMid)
                 entrySignal := true
                 if showLabels
                     label.new(bar_index, low, "BUY · Trust " + str.tostring(score, "0") + " · " + track, style = label.style_label_up, color = band == 2 ? color.new(color.green, 0) : band == 1 ? color.new(color.olive, 0) : color.new(color.gray, 0), textcolor = color.white, size = size.small)
@@ -451,7 +466,7 @@ avgText(int p) =>
 bandText(int p, int band) =>
     int bi = p * 3 + band
     int n  = array.get(bandN, bi)
-    n > 0 ? str.tostring(n) + " · " + str.tostring(100.0 * array.get(bandW, bi) / n, "0") + "% · " + str.tostring(array.get(bandR, bi) / n, "0.00") + "R" : "—"
+    n > 0 ? str.tostring(n) + " · " + str.tostring(100.0 * array.get(bandW, bi) / n, "0") + "% · " + str.tostring(array.get(bandR, bi) / n, "0.00") + " · " + str.tostring(array.get(bandR, bi), "0.0") + "R" : "—"
 
 if showPanel and barstate.islast
     cellStatus(5, "Setup", not na(trade) ? "In trade" : ss.active ? "Armed (" + str.tostring(bar_index - ss.startBar) + " bars)" : "Watching", not na(trade) ? color.aqua : ss.active ? color.yellow : color.gray)
@@ -463,7 +478,7 @@ if showPanel and barstate.islast
     cellResult(9, "Avg R", avgText(0), avgText(1))
     cellResult(10, "Total R", str.tostring(array.get(statR, 0), "0.00"), str.tostring(array.get(statR, 1), "0.00"))
     cellResult(11, "Max loss run", str.tostring(array.get(statMaxStreak, 0)), str.tostring(array.get(statMaxStreak, 1)))
-    cellResult(12, "High (n·win·avg)", bandText(0, 2), bandText(1, 2))
+    cellResult(12, "High (n·win·avg·tot)", bandText(0, 2), bandText(1, 2))
     cellResult(13, "Mid", bandText(0, 1), bandText(1, 1))
     cellResult(14, "Low", bandText(0, 0), bandText(1, 0))
     table.cell(panel, 0, 15, "costs " + str.tostring(slippagePct, "0.00") + "%/side + " + str.tostring(commissionEgp, "0.0") + " EGP/order", text_color = color.gray, text_size = size.tiny, text_halign = text.align_left)
