@@ -88,6 +88,7 @@ int regime = na(idxMa) or na(idxMaPast) or na(idxClose) ? na : idxClose > idxMa 
 // STOCK TREND
 // ============================================================
 atr         = ta.atr(atrLen)
+atrPrev     = atr[1]   // the trail is tested against this bar's low, so it must not see this bar's range
 smaLong     = ta.sma(close, longLen)
 smaMid      = ta.sma(close, midLen)
 sma20       = ta.sma(close, 20)
@@ -257,8 +258,9 @@ legR(float entry, float exitPx, float risk) =>
 
 // Stops sit on a whole tick, rounded away from the entry: a stop between ticks only fills at
 // the tick below it, so booking the unrounded price would understate losses on tiny-price names.
+// The epsilon keeps a price already on a tick from losing one to float error.
 floorTick(float x) =>
-    math.floor(x / syminfo.mintick) * syminfo.mintick
+    math.floor(x / syminfo.mintick + 1e-9) * syminfo.mintick
 
 // Blended R: half at Target 1 and half at the final exit when Target 1 was reached, otherwise
 // the whole position at the exit. Commission: 2 orders, or 3 when Target 1 split the exit.
@@ -293,7 +295,13 @@ advanceTrade(Trade t) =>
             t.t1Hit  := true
             t.t1Exit := math.max(open, t.t1)
             t.stop   := t.entry
-            if idxDown or trendLost
+            // Same bar, unfavourable order: assume Target 1 filled first and price then came
+            // back to the new breakeven stop. A fill there beats any close-based exit.
+            if low <= t.entry
+                closed := true
+                exitPx := t.entry
+                reason := "Breakeven"
+            else if idxDown or trendLost
                 closed := true
                 exitPx := close
                 reason := idxDown ? "Exit: Index" : "Exit: Trend"
@@ -306,9 +314,10 @@ advanceTrade(Trade t) =>
             exitPx := close
             reason := "Time"
     else
-        // The trail uses the highest high of earlier bars only. Raising it with this bar's own
-        // high and then testing this bar's low would assume the high printed first.
-        float remStop = math.max(t.stop, floorTick(t.highest - trailAtr * atr))
+        // The trail uses the highest high and the ATR of earlier bars only: raising it with this
+        // bar's high, or widening it with this bar's range, and then testing this bar's low would
+        // assume the favourable intrabar order.
+        float remStop = math.max(t.stop, floorTick(t.highest - trailAtr * nz(atrPrev, atr)))
         if low <= remStop
             closed := true
             exitPx := math.min(open, remStop)
@@ -338,25 +347,33 @@ var array<int>   bandW         = array.new<int>(6, 0)
 var array<float> bandR         = array.new<float>(6, 0.0)
 var array<int>   trackN        = array.new<int>(3, 0)
 var array<int>   trackW        = array.new<int>(3, 0)
+var array<int>   statStraddle  = array.new<int>(1, 0)
 
+// A trade entered before Test Start that closes after it was decided partly on Test bars: it is
+// counted in neither column (only in the straddle count), so tuning never sees Test-period prices.
 recordTrade(Trade t, float r) =>
-    int  p   = t.inTest ? 1 : 0
-    int  bi  = p * 3 + t.band
-    bool win = t.t1Hit
-    array.set(statN, p, array.get(statN, p) + 1)
-    array.set(statR, p, array.get(statR, p) + r)
-    array.set(bandN, bi, array.get(bandN, bi) + 1)
-    array.set(bandR, bi, array.get(bandR, bi) + r)
+    int  p        = t.inTest ? 1 : 0
+    int  bi       = p * 3 + t.band
+    bool win      = t.t1Hit
+    bool straddle = not t.inTest and time >= testStart
     array.set(trackN, t.band, array.get(trackN, t.band) + 1)
     if win
-        array.set(statW, p, array.get(statW, p) + 1)
-        array.set(bandW, bi, array.get(bandW, bi) + 1)
         array.set(trackW, t.band, array.get(trackW, t.band) + 1)
-        array.set(statStreak, p, 0)
+    if straddle
+        array.set(statStraddle, 0, array.get(statStraddle, 0) + 1)
     else
-        int s = array.get(statStreak, p) + 1
-        array.set(statStreak, p, s)
-        array.set(statMaxStreak, p, math.max(array.get(statMaxStreak, p), s))
+        array.set(statN, p, array.get(statN, p) + 1)
+        array.set(statR, p, array.get(statR, p) + r)
+        array.set(bandN, bi, array.get(bandN, bi) + 1)
+        array.set(bandR, bi, array.get(bandR, bi) + r)
+        if win
+            array.set(statW, p, array.get(statW, p) + 1)
+            array.set(bandW, bi, array.get(bandW, bi) + 1)
+            array.set(statStreak, p, 0)
+        else
+            int s = array.get(statStreak, p) + 1
+            array.set(statStreak, p, s)
+            array.set(statMaxStreak, p, math.max(array.get(statMaxStreak, p), s))
     win
 
 trackText(int band) =>
@@ -382,7 +399,7 @@ if not na(trade)
             if showLabels
                 label.new(bar_index, high, (r >= 0 ? "+" : "") + str.tostring(r, "0.00") + "R · " + reason, style = label.style_label_down, color = win ? color.new(color.teal, 10) : color.new(color.maroon, 10), textcolor = color.white, size = size.small)
             if logTrades and barstate.isconfirmed
-                log.info("TRADE," + syminfo.ticker + "," + str.format_time(trade.entryTime, "yyyy-MM-dd") + "," + str.tostring(trade.entry) + "," + str.format_time(time, "yyyy-MM-dd") + "," + str.tostring(exitPx) + "," + str.tostring(r, "0.0000") + "," + (win ? "1" : "0") + "," + reason + "," + str.tostring(trade.score, "0") + "," + bandName(trade.band) + "," + trade.flags + "," + str.tostring(trade.mfe, "0.00") + "," + str.tostring(trade.mae, "0.00") + "," + str.tostring(bar_index - trade.entryBar) + "," + (trade.inTest ? "Test" : "Tuning"))
+                log.info("TRADE," + syminfo.ticker + "," + str.format_time(trade.entryTime, "yyyy-MM-dd") + "," + str.tostring(trade.entry) + "," + str.format_time(time, "yyyy-MM-dd") + "," + str.tostring(exitPx) + "," + str.tostring(r, "0.000000") + "," + (win ? "1" : "0") + "," + reason + "," + str.tostring(trade.score, "0") + "," + bandName(trade.band) + "," + trade.flags + "," + str.tostring(trade.mfe, "0.00") + "," + str.tostring(trade.mae, "0.00") + "," + str.tostring(bar_index - trade.entryBar) + "," + (trade.inTest ? "Test" : time >= testStart ? "Straddle" : "Tuning"))
             trade := na
 
 // 2. No open trade: arm, advance or fire a setup.
@@ -433,7 +450,6 @@ var table panel = showPanel ? table.new(panelPos(), 3, PANEL_ROWS, bgcolor = col
 cellStatus(int row, string key, string val, color valColor) =>
     table.cell(panel, 0, row, key, text_color = color.silver, text_size = size.small, text_halign = text.align_left)
     table.cell(panel, 1, row, val, text_color = valColor, text_size = size.small, text_halign = text.align_left)
-    table.merge_cells(panel, 1, row, 2, row)
 
 regimeText(int r) =>
     na(r) ? "No data" : r == 1 ? "Up" : r == -1 ? "Down" : "Neutral"
@@ -444,7 +460,6 @@ regimeColor(int r) =>
 if showPanel and barstate.islast
     table.cell(panel, 0, 0, "EGX TRUST", text_color = color.white, text_size = size.small, text_halign = text.align_left)
     table.cell(panel, 1, 0, "lists " + LIST_DATE, text_color = color.gray, text_size = size.tiny, text_halign = text.align_left)
-    table.merge_cells(panel, 1, 0, 2, 0)
     cellStatus(1, "Index", indexName + " (" + indexHow + ")", indexHow == "Unlisted" ? color.orange : color.white)
     cellStatus(2, "Regime", regimeText(regime), regimeColor(regime))
     cellStatus(3, "Trend gate", longKnown ? (gateTrend ? "Above " + str.tostring(longLen) + " MA" : "Below " + str.tostring(longLen) + " MA") : "skipped (<" + str.tostring(longLen) + " bars)", longKnown ? (gateTrend ? color.lime : color.red) : color.orange)
@@ -481,15 +496,23 @@ if showPanel and barstate.islast
     cellResult(12, "High (n·win·avg·tot)", bandText(0, 2), bandText(1, 2))
     cellResult(13, "Mid", bandText(0, 1), bandText(1, 1))
     cellResult(14, "Low", bandText(0, 0), bandText(1, 0))
-    table.cell(panel, 0, 15, "costs " + str.tostring(slippagePct, "0.00") + "%/side + " + str.tostring(commissionEgp, "0.0") + " EGP/order", text_color = color.gray, text_size = size.tiny, text_halign = text.align_left)
+    table.cell(panel, 0, 15, "costs " + str.tostring(slippagePct, "0.00") + "%/side + " + str.tostring(commissionEgp, "0.0") + " EGP/order" + " · straddle " + str.tostring(array.get(statStraddle, 0)), text_color = color.gray, text_size = size.tiny, text_halign = text.align_left)
+
+// Merge once. Repeating table.merge_cells on every realtime tick is untested territory.
+var bool panelMerged = false
+if showPanel and barstate.islast and not panelMerged
+    table.merge_cells(panel, 1, 0, 2, 0)
+    for row = 1 to 5
+        table.merge_cells(panel, 1, row, 2, row)
     table.merge_cells(panel, 0, 15, 2, 15)
+    panelMerged := true
 
 plot(plotEntry, "Entry", color = color.new(color.white, 30), style = plot.style_linebr)
 plot(plotStop, "Stop", color = color.new(color.red, 0), style = plot.style_linebr)
 plot(plotT1, "Target 1", color = color.new(color.lime, 0), style = plot.style_linebr)
 plotshape(exitWarn, "Exit Warning", shape.xcross, location.abovebar, color.new(color.orange, 0), text = "EXIT", size = size.tiny)
 
-alertcondition(entrySignal, "EGX Trust Entry", "BUY on {{ticker}} {{interval}}: see the chart label for the trust score, stop and Target 1.")
+alertcondition(entrySignal, "EGX Trust Entry", "BUY on {{ticker}} {{interval}}: the chart label shows the trust score and track record; stop and Target 1 are drawn as lines.")
 alertcondition(exitWarn, "EGX Exit Warning", "EXIT warning on {{ticker}} {{interval}}: the index regime turned Down or the stock lost its medium MA.")
 alertcondition(tradeClosedNow, "EGX Trade Closed", "Trade closed on {{ticker}} {{interval}}: see the result label for R and reason.")
 
@@ -513,3 +536,4 @@ plot(array.get(bandR, 5), "DBG Test High R", display = display.data_window)
 plot(array.get(bandN, 2), "DBG Tune High N", display = display.data_window)
 plot(array.get(bandW, 2), "DBG Tune High Wins", display = display.data_window)
 plot(array.get(bandR, 2), "DBG Tune High R", display = display.data_window)
+plot(array.get(statStraddle, 0), "DBG Straddle N", display = display.data_window)

@@ -760,7 +760,7 @@ open, setups are not armed.
 | **Risk floor** | The larger of `Min Risk (x ATR)` ATRs and `Min Risk (ticks)` ticks. A stop closer than that is pushed out to the floor |
 | **Risk cap** | A setup whose stop would sit further than `Max Risk (x ATR)` ATRs away is **skipped**, not taken with a wide stop |
 | **Target 1** | Entry plus `Target 1 (R)` times the risk. Half the position exits here and the stop on the other half moves to breakeven |
-| **Trail** | After Target 1: a chandelier trail, `Trail (x ATR)` ATRs below the highest high of the *earlier* bars, never below breakeven. It uses earlier bars only, because raising it with the current bar's own high and then testing the current low would assume the high printed first |
+| **Trail** | After Target 1: a chandelier trail, `Trail (x ATR)` ATRs below the highest high of the *earlier* bars, never below breakeven. It uses the **previous bar's ATR** and earlier bars only, because raising it with the current bar's own high, or widening it with the current bar's range, and then testing the current low would assume the favourable order inside the bar |
 | **Time stop** | A trade that has not reached Target 1 after `Time Stop (bars)` bars exits at the close |
 
 Stops are rounded to a tick because a stop between ticks only fills at the tick below it, so booking
@@ -785,7 +785,9 @@ engine applies the stricter rule above to its own simulated position.
 
 Bar-by-bar scripts cannot see the order of events inside a bar, so they assume the unfavourable one:
 a bar that touches both the stop and Target 1 counts as **stopped**. A gap through the stop fills at
-the open, worse than the stop; a gap through Target 1 fills at the open, better than the target.
+the open, worse than the stop; a gap through Target 1 fills at the open, better than the target. On
+the bar that reaches Target 1, if price also trades back to the entry, the second half is assumed to
+exit at breakeven on that same bar.
 
 When a trade closes, a label shows the result in R and the reason: `Stop`, `Breakeven`, `Trail`,
 `Time`, `Exit: Index` or `Exit: Trend`.
@@ -862,8 +864,10 @@ trades entered from that time onward.
 | `Mid` | The same four figures for the Mid band |
 | `Low` | The same four figures for the Low band |
 
-A `—` means there are no trades yet. The last line of the panel repeats the cost assumptions in force,
-for example `costs 0.10%/side + 2.0 EGP/order`.
+A `—` means there are no trades yet. Trades entered before `Test Start` but closed after it were
+decided partly on Test-period prices, so they are counted in **neither** column; they appear only in
+the `straddle` count on the footer. The last line of the panel repeats the cost assumptions in force
+and that count, for example `costs 0.10%/side + 2.0 EGP/order · straddle 1`.
 
 The panel only renders on the last bar, and results are whatever history TradingView loaded. Read `n`
 before you trust a percentage, as with the other indicators.
@@ -909,7 +913,7 @@ Set these up with the alarm-clock icon → *Condition: EGX Trust Score*.
 
 | Alert | Fires when |
 |---|---|
-| EGX Trust Entry | A trade opened. The chart label carries the trust score, stop and Target 1 |
+| EGX Trust Entry | A trade opened. The chart label shows the trust score and track record; the stop and Target 1 are drawn as lines |
 | EGX Exit Warning | The index regime turned Down, or the stock crossed under its medium MA |
 | EGX Trade Closed | The trade ended. The result label carries the R and the reason |
 
