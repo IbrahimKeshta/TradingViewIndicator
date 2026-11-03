@@ -20,4 +20,31 @@ If a symbol has no TradingView data, the next name in that list replaces it.
 
 ## Results
 
-(filled in after the runs)
+**Script at `52c8d5d`.** The first load hit RE10140 (too many plots), because the two anchored VWAP lines pushed the script over 64. Three confirmation debug plots (MACD, Stoch, Ichimoku readouts) were dropped to fix it.
+
+### Step 1 — Tuning (15 charts, trades entered before 2024-01-01)
+
+| Chart | Baseline n / wins / R | Anchored VWAP n / wins / R |
+|---|---|---|
+| COMI | 59 / 26 / +12.60 | 56 / 25 / +12.55 |
+| TMGH | 42 / 15 / +6.29 | 42 / 15 / +6.29 |
+| ETEL | 47 / 22 / +11.13 | 47 / 22 / +11.13 |
+| EAST | 30 / 10 / −7.22 | 30 / 10 / −7.22 |
+| FWRY | 14 / 8 / +9.99 | 14 / 8 / +9.99 |
+| ABUK | 52 / 17 / −7.45 | 49 / 16 / −5.70 |
+| HRHO | 48 / 20 / +5.07 | 48 / 20 / +5.07 |
+| ORAS | 20 / 9 / +18.59 | 20 / 9 / +18.59 |
+| AMOC | 23 / 10 / +2.87 | 22 / 10 / +3.15 |
+| MFPC | 29 / 15 / +11.41 | 29 / 15 / +11.41 |
+| SWDY | 42 / 19 / +1.15 | 42 / 19 / +1.15 |
+| ORWE | 32 / 12 / −3.64 | 32 / 12 / −3.64 |
+| MASR | 28 / 13 / −1.93 | 28 / 13 / −1.93 |
+| ELEC | 0 / 0 / 0 | 0 / 0 / 0 |
+| EGCH | 47 / 21 / +4.37 | 43 / 19 / +3.11 |
+| **Pooled** | **513 / 42.3% / +0.123R per trade (+63.23R)** | **502 / 42.4% / +0.127R per trade (+63.95R)** |
+
+The baseline matches the earlier ICT baseline chart for chart, so the new code changes nothing while it's off.
+
+**Lift +0.004R per trade, below the +0.03 keep bar. Not kept; step 2 not run.** Batch E (ACTF, AIHC, BONY, DAPH, ELKA, EXPA, HDBK, MCRO, NCCW, SVCE) was never opened and is still unused.
+
+**Why it does almost nothing:** it removed 11 of 513 trades (2%) and changed nothing on 11 of 15 charts. A pullback long already needs the internal trend to be up, and in an internal uptrend the close is nearly always above the VWAP from the last confirmed major low. That anchor is at least 20 bars old, so the filter mostly agrees with the trend condition the engine already applies, rather than adding new information.
