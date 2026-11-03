@@ -729,11 +729,8 @@ ichiCloudBottom = math.min(ichiSpanA[ichiDisp], ichiSpanB[ichiDisp])
 ichiReady       = not na(ichiCloudTop) and not na(ichiCloudBottom)
 ichiBullConfirm = ichiReady and close > ichiCloudTop
 ichiBearConfirm = ichiReady and close < ichiCloudBottom
-
-// Data Window readouts — the verification surface for this block.
-plot(macdBullConfirm ? 1 : macdBearConfirm ? -1 : 0, "DBG MACD (1/-1/0)", display = display.data_window)
-plot(stochBullConfirm ? 1 : stochBearConfirm ? -1 : 0, "DBG Stoch (1/-1/0)", display = display.data_window)
-plot(ichiBullConfirm ? 1 : ichiBearConfirm ? -1 : 0, "DBG Ichimoku (1/-1/0)", display = display.data_window)
+// The per-indicator Data Window readouts were dropped to stay inside Pine's 64-plot limit; the
+// panel's Confirm row still shows the grouped Momentum and Ichimoku votes.
 
 // ---- group votes ----
 // At least half the enabled members, rounded up: 2 of 3, 1 of 2, 1 of 1. Never a strict
