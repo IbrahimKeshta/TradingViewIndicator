@@ -27,4 +27,16 @@
 
 ## Results
 
-(filled in after the runs)
+### Step 1 — Tuning (15 charts, trades entered before 2024-01-01)
+
+| Config | n | Win % | Avg R / trade | Lift vs base | Total R | Charts R>0 (n≥5) |
+|---|---|---|---|---|---|---|
+| base | 513 | 42.3 | +0.123 | — | +63.23 | 10/14 |
+| r1 runner | 417 | 40.5 | +0.192 | +0.069 | +80.15 | 11/14 |
+| r2 major tier | 509 | 42.2 | +0.128 | +0.005 | +65.25 | 10/14 |
+| r3 runner + major | 398 | 40.2 | +0.228 | +0.105 | +90.81 | 12/14 |
+| r4 runner + major + trail from entry | 366 | 35.5 | +0.309 | +0.186 | +113.25 | 12/14 |
+
+Per-chart rows are in the raw TSV (round `runner`). The runner configs take fewer trades because a trade held longer blocks the next setup (one trade slot per model).
+
+**Pick: r4** (Runner on, Trailing Tier Major, Trail From Entry on). Highest Tuning avg R, lift +0.186 ≥ 0.03, n 366 ≥ 150. Committed before any batch E chart was opened.
