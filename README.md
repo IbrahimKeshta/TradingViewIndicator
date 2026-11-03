@@ -1145,6 +1145,17 @@ ticks on split-adjusted history, and long only. Its measured out-of-sample edge 
 which missed the +0.15R profit bar. They are set out under *Known limits* and *Validation results*
 in its section above, and they matter before you rely on its trust score.
 
+**The ICT confluence indicator on EGX daily, measured on stocks it was never tuned on** (long only,
+`Apply Costs` on, `Min Risk (ticks)` 10): the plain pullback model averaged **+0.161R per trade after
+costs** over 40 unseen stocks and 1,277 trades, at a win rate of about 42–46%. Three exit settings together,
+`Runner (no exit at TP3)` on, `Trailing Tier` Major and `Trail From Entry` on, raised that to +0.363R
+per trade on the last 20 of those stocks, against +0.243R for the plain settings on the same 20. Read that
+carefully: it comes from fewer, bigger winners, not from winning more often. It took 25% fewer trades,
+added about 13% to total R, beat the plain settings on only 9 of the 20 stocks, and dropped the win rate
+to about 41%. Filters tested and *not* found to help out of sample: `Require Confirmation`,
+`Require Index Trend` and `Require Anchored VWAP`. Records:
+`docs/superpowers/plans/2026-11-03-ict-*.md` and `2026-11-04-ict-runner-retest.md`.
+
 **These are decision-support tools, not a strategy.** None of these scripts backtests, sizes a position, or
 places an order. The trade engine computes levels and records what would have happened; it does not
 size a position and it has no idea what your account can absorb. No indicator knows the future, and
