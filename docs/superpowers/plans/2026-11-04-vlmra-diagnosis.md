@@ -7,7 +7,7 @@
 | Finding | Numbers |
 |---|---|
 | **Shorts lose, longs win** | Longs: 23 trades, **+4.52R**. Shorts: 13 trades, **−3.50R** (PB −2.19, TR −1.31). Shorting isn't available on most EGX stocks anyway. |
-| **Losers never got going** | 20 of 21 losers never reached +1R in their favour; 9 never reached +0.5R. Entry timing, not exit management, is the problem; the September 2026-09 root-cause pass found the same thing. |
+| **Losers never got going** | 20 of 21 losers never reached +1R in their favour; 9 never reached +0.5R. Entry timing, not exit management, is the problem; the 2026-09-17 root-cause pass found the same thing. |
 | **Three trades carry everything** | The 3 trades that hit TP3 made +12.09R. The other 33 lost −11.07R. Only 13 of 36 reached TP1. |
 | **Profit came from one year** | 2023 +10.92R (both TP3 trades). 2022 −4.91, 2024 +0.05, 2025 −2.62, 2026 −1.48. |
 | **Stop on Close Only costs some R per loss but saves trades** | 10 losses closed beyond −1R, giving away an extra 2.71R. Turning it off still made things worse: the trail model went from +4.74 to −3.14R (long only). |
