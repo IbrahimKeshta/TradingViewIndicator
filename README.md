@@ -390,6 +390,8 @@ is the one thing to act on, in the order the gate applies its checks:
 | `no trend` | The internal tier has no direction yet |
 | `in range` | Price is inside a major range — the engine stands down |
 | `htf bias` | `Require HTF Bias` is on and higher-timeframe structure points the other way, or has no direction yet |
+| `index trend` | `Require Index Trend` is on and the stock's EGX index trends against the trade, or has no reading yet |
+| `anchored vwap` | `Require Anchored VWAP` is on and the close is on the wrong side of the anchored VWAP, or there is no anchor yet |
 | `awaiting confirmation` | `Require Confirmation` is on and a touch is being watched for a same-direction candle. Clears itself, one way or the other, within `Confirmation Max Wait` bars |
 | `no zone touch` | **The common one.** Price has not traded back into an FVG or order block. This is a hard requirement, not a scored point: no amount of score tuning produces a trade while it reads this |
 | `score short` | Everything structural is met and the score is below `Minimum Score` |
@@ -513,6 +515,8 @@ are identical to running without them.
 | Min FVG Size (× ATR) | 0.3 | Minimum gap height for an FVG |
 | Require Confirmation | off | Don't trade the touch bar. Remember the touch and wait for a candle that closes in the trade's direction, up to Confirmation Max Wait bars later — using the original touch's zone and stop throughout |
 | Confirmation Max Wait (bars) | 3 | A touch with no confirming candle within this many bars is abandoned, not taken late |
+| Require Anchored VWAP | off | Longs need the close above the VWAP anchored at the latest major swing low (buyers since that low are in profit); shorts need the close below the VWAP anchored at the latest major swing high. Applies to both entry models. The anchor only moves once the swing is confirmed, so history never sees a swing early. Needs volume |
+| Show Anchored VWAP | off | Draws both anchored VWAP lines. Display only |
 
 **Index Filter** — EGX symbols only, off by default; applies to both entry models. Ignored on
 non-EGX symbols.
