@@ -40,3 +40,31 @@
 Per-chart rows are in the raw TSV (round `runner`). The runner configs take fewer trades because a trade held longer blocks the next setup (one trade slot per model).
 
 **Pick: r4** (Runner on, Trailing Tier Major, Trail From Entry on). Highest Tuning avg R, lift +0.186 ≥ 0.03, n 366 ≥ 150. Committed before any batch E chart was opened.
+
+### Step 2 — Deciding test, batch E (10 never-opened stocks, full history, Tuning + Test summed)
+
+AIHC does not exist on TradingView ("This symbol doesn't exist"), so per the replacement rule ARCC (the next unused EGX70 name in list order) took its place.
+
+| Chart | Baseline n / wins / R | r4 n / wins / R |
+|---|---|---|
+| ACTF | 5 / 0 / −4.81 | 5 / 0 / −4.81 |
+| BONY | 2 / 0 / −2.06 | 2 / 0 / −2.06 |
+| DAPH | 72 / 25 / −1.25 | 52 / 18 / **+17.76** |
+| ELKA | 11 / 2 / −6.92 | 9 / 1 / −5.68 |
+| ARCC | 32 / 14 / +2.11 | 31 / 12 / −5.30 |
+| EXPA | 35 / 13 / +4.00 | 29 / 9 / −2.77 |
+| HDBK | 37 / 21 / +20.82 | 21 / 8 / +15.35 |
+| MCRO | 4 / 3 / +2.07 | 3 / 2 / +1.82 |
+| NCCW | 22 / 8 / −1.99 | 15 / 5 / +0.95 |
+| SVCE | 56 / 27 / +13.56 | 38 / 13 / +12.55 |
+| **Pooled** | **276 / 40.9% / +0.092R per trade (+25.53R)**, 4/8 charts R>0 | **205 / 33.2% / +0.136R per trade (+27.81R)**, 4/8 charts R>0 |
+
+| Pass rule | Result | Met |
+|---|---|---|
+| Pick avg R > 0 after costs | +0.136 | ✓ |
+| Beats baseline by ≥ +0.03R per trade | +0.044 | ✓ |
+| ≥ 60% of charts (n ≥ 5) with R > 0 | 4/8 = 50% | ✗ |
+
+**Verdict: FAIL** (breadth). The average lift is real on paper but rests on one stock. DAPH alone swings by +19.0R (−1.25 → +17.76). Without DAPH, r4 averages +0.066R per trade (153 trades) against the baseline's +0.131R (204 trades), so on the other nine stocks the runner settings were *worse*. They beat the baseline on 3 of the 8 charts with n ≥ 5 (DAPH, ELKA, NCCW) and lost on 4. Total R barely moved (+27.81 vs +25.53) while trades fell 26% and the win rate fell to 33%.
+
+**Reading:** the runner settings do what they are built for, which is to let one big trend pay for many small losses. Whether a batch contains such a trend is luck of the draw. Tuning had several (COMI, FWRY, MFPC); batch E had one. That is a real trade-off, not an edge that shows up on most stocks, and the protocol's breadth rule exists to catch exactly this.
