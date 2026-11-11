@@ -1,13 +1,15 @@
 //@version=6
 // Session Order Flow — context overlay, built in stages.
 //
-// Stage 1 (this file so far): session boxes, range-used gauge, reference-range sweep state.
-// Later stages add liquidity pools, a session volume profile, volume delta and a full dashboard.
+// Stage 1: session boxes, range-used gauge, reference-range sweep state.
+// Stage 2: liquidity pools (unswept swing highs / lows) on the chart and a higher timeframe.
+// Later stages add a session volume profile, volume delta and a full dashboard.
 //
 // Nothing here repaints: every classification that is drawn or alerted is decided on a confirmed
 // bar close, and no request.security call is used — the higher-period values (day / week range,
 // prior-period high and low) are accumulated locally from chart bars, so history and realtime
-// are computed by the same code path.
+// are computed by the same code path. Higher-timeframe swings are likewise built by aggregating
+// chart bars locally and are only used once the higher-timeframe bars that confirm them have closed.
 //
 // All drawings are anchored by time (xloc.bar_time), not bar index, so no max_bars_back is needed.
 indicator("Session Order Flow", shorttitle = "SESS-OF", overlay = true, max_boxes_count = 200, max_lines_count = 100, max_labels_count = 100)
@@ -36,7 +38,20 @@ openRangeMins = input.int(30, "Opening Range Length (minutes)", minval = 5, maxv
 avgRangeLen   = input.int(14, "Average Range Length (periods)", minval = 2, maxval = 60, group = "Range Used", tooltip = "Periods are days on an intraday chart, weeks on a daily chart, months on a weekly chart. The average is built from completed periods on the chart, so it needs that many periods of loaded history.")
 exhaustedPct  = input.float(85.0, "Exhausted At (% of average range)", minval = 10, step = 5, group = "Range Used")
 
+// ---------------- Liquidity pools ----------------
+showPools     = input.bool(true, "Show Chart-Timeframe Pools", group = "Liquidity Pools", tooltip = "BSL (buy-side liquidity) sits above an unswept swing high, SSL (sell-side) below an unswept swing low: where stop orders are likely to be resting.")
+pivotLen      = input.int(10, "Swing Length (bars each side)", minval = 2, maxval = 50, group = "Liquidity Pools")
+showHtfPools  = input.bool(true, "Show Higher-Timeframe Pools", group = "Liquidity Pools")
+htfInput      = input.timeframe("60", "Higher Timeframe", group = "Liquidity Pools", tooltip = "If this is not above the chart timeframe it is bumped automatically: to daily on an intraday chart, weekly on a daily chart, monthly on a weekly chart.")
+htfPivotLen   = input.int(3, "HTF Swing Length (HTF bars each side)", minval = 1, maxval = 20, group = "Liquidity Pools")
+maxPools      = input.int(5, "Max Pools Kept (per side, per tier)", minval = 1, maxval = 20, group = "Liquidity Pools")
+keepSwept     = input.bool(true, "Keep Taken Pools (faded)", group = "Liquidity Pools", tooltip = "A pool is resolved on the close of the first bar that trades through it: 'swept' if that bar closes back inside, 'run' if it closes beyond.")
+poolThickMult = input.float(0.1, "Band Thickness (x ATR)", minval = 0.01, step = 0.05, group = "Liquidity Pools")
+colBsl        = input.color(#9c27b0, "BSL", group = "Liquidity Pools", inline = "pcol")
+colSsl        = input.color(#3d6fb5, "SSL", group = "Liquidity Pools", inline = "pcol")
+
 // ---------------- Display ----------------
+labelStyle     = input.string("Auto", "Session Label Style", options = ["Auto", "Full", "Compact"], group = "Display", tooltip = "Full: 'ASIA BULL BREAKOUT'. Compact: 'ASIA ▲'. Auto uses Full in 24h mode and Compact in single-session mode, where boxes are narrow.")
 showRefLines   = input.bool(true, "Show Reference High / Low", group = "Display")
 showDashboard  = input.bool(true, "Show Dashboard", group = "Display")
 dashPosition   = input.string("Top right", "Dashboard Position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = "Display")
@@ -76,13 +91,17 @@ type Sess
     float  hi      = na
     float  lo      = na
     box    bx      = na
+    bool   extend  = false   // keep stretching the box right after the window closes, until the next one opens
     bool   ended   = false   // true only on the first bar after the window
     bool   brokeUp = false   // true only on the bar the breakout is confirmed
     bool   brokeDn = false
 
-method setLook(Sess s, string status, color c) =>
+labelCompact = labelStyle == "Compact" or (labelStyle == "Auto" and not is24hMode)
+
+method setLook(Sess s, int dir, color c) =>
     if not na(s.bx)
-        s.bx.set_text(s.name + " " + status)
+        string status = labelCompact ? (dir > 0 ? " ▲" : dir < 0 ? " ▼" : "") : (dir > 0 ? " BULL BREAKOUT" : dir < 0 ? " BEAR BREAKOUT" : " ACCUMULATION")
+        s.bx.set_text(s.name + status)
         s.bx.set_border_color(c)
         s.bx.set_text_color(c)
         s.bx.set_bgcolor(color.new(c, boxFillTransp))
@@ -97,7 +116,7 @@ method update(Sess s, bool inSess, bool show) =>
         s.lo    := low
         s.state := "forming"
         s.bx    := show ? box.new(time, high, time_close, low, xloc = xloc.bar_time, border_width = 1, border_style = line.style_dashed, text_size = size.small, text_halign = text.align_left, text_valign = text.align_top) : na
-        s.setLook("ACCUMULATION", colAccum)
+        s.setLook(0, colAccum)
     else if inSess
         s.hi := math.max(s.hi, high)
         s.lo := math.min(s.lo, low)
@@ -105,6 +124,8 @@ method update(Sess s, bool inSess, bool show) =>
             s.bx.set_top(s.hi)
             s.bx.set_bottom(s.lo)
             s.bx.set_right(time_close)
+    if not inSess and s.extend and s.state != "idle" and not na(s.bx)
+        s.bx.set_right(time_close)
     if not inSess and s.active
         s.state := "watch"
         s.ended := true
@@ -112,11 +133,11 @@ method update(Sess s, bool inSess, bool show) =>
         if close > s.hi
             s.state   := "bull"
             s.brokeUp := true
-            s.setLook("BULL BREAKOUT", colBull)
+            s.setLook(1, colBull)
         else if close < s.lo
             s.state   := "bear"
             s.brokeDn := true
-            s.setLook("BEAR BREAKOUT", colBear)
+            s.setLook(-1, colBear)
     s.active := inSess
     s
 
@@ -125,7 +146,8 @@ inWindow(string sess) => not na(time(timeframe.period, sess, sessionTimezone))
 var Sess asia    = Sess.new("ASIA")
 var Sess london  = Sess.new("LONDON")
 var Sess newYork = Sess.new("NEW YORK")
-var Sess openRng = Sess.new("OPENING RANGE")
+// The opening range is one or two bars wide, so its box runs to the end of the day instead.
+var Sess openRng = Sess.new(name = "OR", extend = true)
 
 newDay = timeframe.change("D")
 var int dayOpenTime = na
@@ -245,6 +267,162 @@ hiStatus = sideStatus(refHi, hiTouched, close > refHi)
 loStatus = sideStatus(refLo, loTouched, close < refLo)
 
 // ============================================================
+// LIQUIDITY POOLS
+// ============================================================
+// A pool is an unswept swing high (BSL) or swing low (SSL). It lives until the first bar that
+// trades through it, and is resolved on that bar's close:
+//   swept — closed back inside (stops taken, move rejected)
+//   run   — closed beyond (move accepted)
+
+htfBumped = timeframe.isintraday ? "D" : timeframe.isdaily ? "W" : "M"
+htfTf     = timeframe.in_seconds(htfInput) > tfSeconds ? htfInput : htfBumped
+htfSecs   = timeframe.in_seconds(htfTf)
+htfOn     = showHtfPools and htfSecs > tfSeconds
+htfLabel  = htfSecs < 3600 ? str.tostring(htfSecs / 60) + "m" : htfSecs < 86400 ? str.tostring(htfSecs / 3600) + "h" : htfTf
+
+atrValue  = nz(ta.atr(14), high - low)
+poolThick = math.max(atrValue * poolThickMult, syminfo.mintick)
+
+type Pool
+    float level
+    bool  isHigh
+    bool  htf
+    box   bx
+
+poolText(bool isHigh, bool htf) =>
+    (htf ? "HTF " : "") + (isHigh ? "BSL" : "SSL") + (htf ? " [" + htfLabel + "]" : "")
+
+poolBox(float level, int t0, bool isHigh, bool htf) =>
+    color c  = isHigh ? colBsl : colSsl
+    float th = poolThick * (htf ? 2 : 1)
+    bool vis = htf ? showHtfPools : showPools
+    box b    = na
+    if vis
+        b := box.new(t0, isHigh ? level : level + th, time_close, isHigh ? level - th : level, xloc = xloc.bar_time, border_color = color.new(c, 100), bgcolor = color.new(c, htf ? 35 : 60), text = poolText(isHigh, htf), text_color = color.new(color.white, 15), text_size = size.tiny, text_halign = text.align_right, text_valign = text.align_center)
+    b
+
+// Adds a pool. A higher-timeframe swing at the same price as an existing chart-timeframe pool
+// upgrades that pool instead of stacking a second band on top of it.
+addPool(array<Pool> arr, float level, int t0, bool isHigh, bool htf) =>
+    int same = -1
+    if arr.size() > 0
+        for i = 0 to arr.size() - 1
+            Pool q = arr.get(i)
+            if q.isHigh == isHigh and math.abs(q.level - level) <= syminfo.mintick
+                same := i
+    if same >= 0
+        Pool q = arr.get(same)
+        if htf and not q.htf
+            q.bx.delete()
+            q.htf := true
+            q.bx  := poolBox(level, t0, isHigh, true)
+    else
+        arr.push(Pool.new(level, isHigh, htf, poolBox(level, t0, isHigh, htf)))
+        int count = 0
+        int oldest = -1
+        for i = 0 to arr.size() - 1
+            Pool q = arr.get(i)
+            if q.isHigh == isHigh and q.htf == htf
+                count += 1
+                if oldest < 0
+                    oldest := i
+        if count > maxPools
+            Pool gone = arr.remove(oldest)
+            gone.bx.delete()
+    same
+
+var array<Pool> pools = array.new<Pool>()
+
+// ---- chart-timeframe swings ----
+pivHi = ta.pivothigh(high, pivotLen, pivotLen)
+pivLo = ta.pivotlow(low, pivotLen, pivotLen)
+if not na(pivHi)
+    addPool(pools, pivHi, time[pivotLen], true, false)
+if not na(pivLo)
+    addPool(pools, pivLo, time[pivotLen], false, false)
+
+// ---- higher-timeframe swings, aggregated locally from chart bars ----
+htfNew = timeframe.change(htfTf)
+var float        aggHi = na
+var float        aggLo = na
+var int          aggT  = na
+var array<float> hHi   = array.new<float>()
+var array<float> hLo   = array.new<float>()
+var array<int>   hT    = array.new<int>()
+htfWindow = 2 * htfPivotLen + 1
+
+if htfOn
+    if htfNew and not na(aggHi)
+        // The higher-timeframe bar that just ended is now final: store it and test the middle
+        // bar of the window, which now has htfPivotLen closed bars on each side.
+        hHi.push(aggHi)
+        hLo.push(aggLo)
+        hT.push(aggT)
+        if hHi.size() > htfWindow
+            hHi.shift()
+            hLo.shift()
+            hT.shift()
+        if hHi.size() == htfWindow
+            float midHi = hHi.get(htfPivotLen)
+            float midLo = hLo.get(htfPivotLen)
+            if midHi == hHi.max() and hHi.indexof(midHi) == htfPivotLen and hHi.lastindexof(midHi) == htfPivotLen
+                addPool(pools, midHi, hT.get(htfPivotLen), true, true)
+            if midLo == hLo.min() and hLo.indexof(midLo) == htfPivotLen and hLo.lastindexof(midLo) == htfPivotLen
+                addPool(pools, midLo, hT.get(htfPivotLen), false, true)
+    if htfNew or na(aggHi)
+        aggHi := high
+        aggLo := low
+        aggT  := time
+    else
+        aggHi := math.max(aggHi, high)
+        aggLo := math.min(aggLo, low)
+
+// ---- resolve pools traded through on this bar ----
+bool bslSwept = false
+bool sslSwept = false
+bool bslRun   = false
+bool sslRun   = false
+var string lastLiqText = "none yet"
+var int    lastLiqBar  = na
+
+if pools.size() > 0
+    for i = pools.size() - 1 to 0
+        Pool p = pools.get(i)
+        bool hit = p.isHigh ? high > p.level : low < p.level
+        if hit and barstate.isconfirmed
+            bool accepted = p.isHigh ? close > p.level : close < p.level
+            if p.isHigh
+                bslRun   := bslRun or accepted
+                bslSwept := bslSwept or not accepted
+            else
+                sslRun   := sslRun or accepted
+                sslSwept := sslSwept or not accepted
+            string what = poolText(p.isHigh, p.htf) + (accepted ? " run" : " swept")
+            lastLiqText := what + " @ " + str.tostring(p.level, format.mintick)
+            lastLiqBar  := bar_index
+            if keepSwept
+                p.bx.set_right(time_close)
+                p.bx.set_bgcolor(color.new(color.gray, 82))
+                p.bx.set_text_color(color.new(color.gray, 30))
+                p.bx.set_text(what)
+            else
+                p.bx.delete()
+            pools.remove(i)
+        else
+            p.bx.set_right(time_close)
+
+// Nearest live pool on each side of price, for the dashboard.
+float nearBsl = na
+float nearSsl = na
+if barstate.islast and pools.size() > 0
+    for i = 0 to pools.size() - 1
+        Pool p = pools.get(i)
+        if p.isHigh and p.level > close and (na(nearBsl) or p.level < nearBsl)
+            nearBsl := p.level
+        if not p.isHigh and p.level < close and (na(nearSsl) or p.level > nearSsl)
+            nearSsl := p.level
+
+// ============================================================
 // DASHBOARD
 // ============================================================
 
@@ -252,7 +430,7 @@ statusColor(string st) =>
     st == "Swept" ? colAccum : st == "Broken" ? color.white : color.gray
 
 dashPos = dashPosition == "Top right" ? position.top_right : dashPosition == "Top left" ? position.top_left : dashPosition == "Bottom right" ? position.bottom_right : position.bottom_left
-var table dash = table.new(dashPos, 2, 4, bgcolor = color.new(#0d1321, 15), border_width = 1, border_color = color.new(color.gray, 85))
+var table dash = table.new(dashPos, 2, 7, bgcolor = color.new(#0d1321, 15), border_width = 1, border_color = color.new(color.gray, 85))
 
 dashRow(int row, string k, string v, color vc) =>
     dash.cell(0, row, k, text_color = color.gray, text_halign = text.align_left, text_size = size.small)
@@ -265,6 +443,11 @@ if showDashboard and barstate.islast
     dashRow(1, "Range used", rangeText, rangeExhausted ? colBear : color.white)
     dashRow(2, refName + " high", hiStatus + (na(refHi) ? "" : "  @ " + str.tostring(refHi, format.mintick)), statusColor(hiStatus))
     dashRow(3, refName + " low", loStatus + (na(refLo) ? "" : "  @ " + str.tostring(refLo, format.mintick)), statusColor(loStatus))
+    bslText = na(nearBsl) ? "none above" : str.tostring(nearBsl, format.mintick) + "  (" + str.tostring((nearBsl - close) / atrValue, "#.#") + " ATR away)"
+    sslText = na(nearSsl) ? "none below" : str.tostring(nearSsl, format.mintick) + "  (" + str.tostring((close - nearSsl) / atrValue, "#.#") + " ATR away)"
+    dashRow(4, "Nearest BSL", bslText, colBsl)
+    dashRow(5, "Nearest SSL", sslText, colSsl)
+    dashRow(6, "Last liquidity", lastLiqText + (na(lastLiqBar) ? "" : "  (" + str.tostring(bar_index - lastLiqBar) + " bars ago)"), color.white)
 
 // ============================================================
 // ALERTS
@@ -275,3 +458,7 @@ alertcondition(anyBearBreak, title = "Session Bear Breakout", message = "A sessi
 alertcondition(hiSweepEvent, title = "Reference High Swept", message = "Reference high was taken and price closed back below it on {{ticker}} {{interval}}.")
 alertcondition(loSweepEvent, title = "Reference Low Swept", message = "Reference low was taken and price closed back above it on {{ticker}} {{interval}}.")
 alertcondition(rangeExhausted and not rangeExhausted[1], title = "Range Exhausted", message = "Average range used has crossed the exhaustion threshold on {{ticker}} {{interval}}.")
+alertcondition(bslSwept, title = "BSL Swept", message = "Buy-side liquidity was taken and price closed back below it on {{ticker}} {{interval}}.")
+alertcondition(sslSwept, title = "SSL Swept", message = "Sell-side liquidity was taken and price closed back above it on {{ticker}} {{interval}}.")
+alertcondition(bslRun, title = "BSL Run", message = "Price closed above a buy-side liquidity pool on {{ticker}} {{interval}}.")
+alertcondition(sslRun, title = "SSL Run", message = "Price closed below a sell-side liquidity pool on {{ticker}} {{interval}}.")
