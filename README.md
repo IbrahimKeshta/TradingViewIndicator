@@ -764,9 +764,10 @@ number is tick volume, and the dashboard says so.
 TradingView serves only a limited depth of lower-timeframe history. Bars older than that fall back to
 the chart bar's own direction.
 
-The volume profile is built from chart bars, each bar's volume spread evenly across the price rows it
-covers. It is sharp on a 5-minute chart and coarse where a period has few bars — EGX on 30 minutes is
-nine bars a day; a daily chart is five bars a week.
+The volume profile is built from the same lower-timeframe bars, each small bar's volume spread evenly
+across the price rows it covers. That makes the POC and value area read the same on a 5-minute and a
+15-minute chart. Where the lower-timeframe history has run out, the chart bars are used instead and
+the profile is coarser — most visibly on older days, and on daily charts further back.
 
 ## Alerts
 

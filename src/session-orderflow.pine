@@ -15,8 +15,8 @@
 // are computed by the same code path. Higher-timeframe swings are likewise built by aggregating
 // chart bars locally and are only used once the higher-timeframe bars that confirm them have closed.
 //
-// The one data request is request.security_lower_tf for the delta estimate, which only reads the
-// intrabars inside each chart bar.
+// The one data request is request.security_lower_tf, which only reads the intrabars inside each
+// chart bar. Those feed the volume profile and the delta estimate.
 //
 // All drawings are anchored by time (xloc.bar_time), not bar index, so no max_bars_back is needed.
 indicator("Session Order Flow", shorttitle = "SESS-OF", overlay = true, max_boxes_count = 200, max_lines_count = 100, max_labels_count = 100)
@@ -58,7 +58,7 @@ colBsl        = input.color(#9c27b0, "BSL", group = "Liquidity Pools", inline = 
 colSsl        = input.color(#3d6fb5, "SSL", group = "Liquidity Pools", inline = "pcol")
 
 // ---------------- Volume profile ----------------
-showProfile     = input.bool(true, "Show Developing POC / Value Area", group = "Volume Profile", tooltip = "Built from the current period's chart bars: the day on an intraday chart, the week on a daily chart. Each bar's volume is spread evenly across the price rows it covers, so a lower chart timeframe gives a sharper profile.\n\nPOC (point of control) is the price row with the most volume. The value area is the band around it holding the chosen share of the period's volume.")
+showProfile     = input.bool(true, "Show Developing POC / Value Area", group = "Volume Profile", tooltip = "Built for the current period: the day on an intraday chart, the week on a daily chart. Each chart bar is split into lower-timeframe bars (see Volume Delta settings) and each small bar's volume is spread evenly across the price rows it covers, so the profile reads the same on different chart timeframes wherever that history is available.\n\nPOC (point of control) is the price row with the most volume. The value area is the band around it holding the chosen share of the period's volume.")
 showPrevProfile = input.bool(true, "Show Prior Period POC / Value Area", group = "Volume Profile")
 vpRows          = input.int(40, "Rows Per Average Range", minval = 10, maxval = 200, group = "Volume Profile", tooltip = "Row height is the average period range divided by this. More rows is finer but noisier.")
 vaPct           = input.float(70.0, "Value Area (% of volume)", minval = 10, maxval = 95, step = 5, group = "Volume Profile")
@@ -66,7 +66,7 @@ prevKeep        = input.int(2, "Prior-Level Sets Kept On Chart", minval = 1, max
 colPoc          = input.color(#ffeb3b, "POC / Value Area", group = "Volume Profile")
 
 // ---------------- Volume delta ----------------
-deltaTfInput = input.string("Auto", "Delta Lower Timeframe", options = ["Auto", "1", "3", "5", "15", "30", "60", "240"], group = "Volume Delta", tooltip = "Delta is an estimate: each lower-timeframe bar's whole volume is counted as buying if it closed up and selling if it closed down. Auto uses 1-minute bars on intraday charts, 30-minute on daily and 4-hour above that.\n\nTradingView only serves a limited depth of lower-timeframe history; older chart bars fall back to the chart bar's own direction. If the choice is not below the chart timeframe, the chart bar's own direction is used throughout.")
+deltaTfInput = input.string("Auto", "Lower Timeframe (delta and profile)", options = ["Auto", "1", "3", "5", "15", "30", "60", "240"], group = "Volume Delta", tooltip = "The small bars each chart bar is split into. They build the volume profile and the delta estimate.\n\nDelta is an estimate: each lower-timeframe bar's whole volume is counted as buying if it closed up and selling if it closed down. Auto uses 1-minute bars on intraday charts, 30-minute on daily and 4-hour above that.\n\nTradingView only serves a limited depth of lower-timeframe history; older chart bars fall back to the chart bar's own direction. If the choice is not below the chart timeframe, the chart bar's own direction is used throughout.")
 pressureLen  = input.int(20, "Pressure Window (bars)", minval = 2, maxval = 200, group = "Volume Delta")
 domPct       = input.float(55.0, "Dominance Threshold (% of volume)", minval = 51, maxval = 90, step = 1, group = "Volume Delta", tooltip = "Buying (or selling) share of volume over the pressure window needed to call one side dominant. If one side is dominant but price has not moved its way over the same window, the state reads Absorption instead.")
 
@@ -498,55 +498,71 @@ if newAnchor or na(profStep)
     float basis = not na(avgRange) ? avgRange : bar_index > 20 ? atrValue * 8 : na
     profStep := na(basis) or basis <= 0 ? na : math.max(math.round_to_mintick(basis / vpRows), syminfo.mintick)
 
+// Lower-timeframe bars inside this chart bar. They feed both the profile (so it is built from
+// the same small bars whatever the chart timeframe, and reads the same on 5m and 15m) and the
+// delta estimate further down. Where TradingView has no intrabar history, the chart bar is used.
+ltfTfAuto = timeframe.isintraday ? "1" : timeframe.isdaily ? "30" : "240"
+ltfTfWant = deltaTfInput == "Auto" ? ltfTfAuto : deltaTfInput
+ltfTf     = timeframe.in_seconds(ltfTfWant) < tfSeconds ? ltfTfWant : timeframe.period
+[ltfHi, ltfLo, ltfVol, ltfDeltas] = request.security_lower_tf(syminfo.tickerid, ltfTf, [high, low, volume, close > open ? volume : close < open ? -volume : 0.0])
+
 barVol = nz(volume)
+useLtf = ltfVol.size() > 0 and nz(ltfVol.sum()) > 0
 if barVol > 0 and not na(profStep)
     sawVolume := true
-    int loRow = int(math.floor(low / profStep))
-    int hiRow = int(math.floor(high / profStep))
-    if hiRow - loRow > 2000
-        // A freak bar: do not grow the grid for it, credit its close instead.
-        loRow := int(math.floor(close / profStep))
-        hiRow := loRow
-    if na(profBase)
-        profBase := loRow
-    // Hard ceiling on grid size: a bar that would stretch it past this is credited to the
-    // nearest existing edge row rather than growing the array without bound.
-    loRow := math.max(loRow, profBase + prof.size() - 5000)
-    hiRow := math.min(hiRow, profBase + 4999)
-    if hiRow < loRow
-        hiRow := loRow
-    while loRow < profBase
-        prof.unshift(0.0)
-        profBase -= 1
-    while hiRow > profBase + prof.size() - 1
-        prof.push(0.0)
-    float share = barVol / (hiRow - loRow + 1)
-    for r = loRow to hiRow
-        float nv = prof.get(r - profBase) + share
-        prof.set(r - profBase, nv)
-        if nv > pocVol
-            pocVol := nv
-            pocRow := r
-    profTotal += barVol
+    int pieces = useLtf ? ltfVol.size() : 1
+    for j = 0 to pieces - 1
+        float pHi = useLtf ? ltfHi.get(j) : high
+        float pLo = useLtf ? ltfLo.get(j) : low
+        float pV  = useLtf ? nz(ltfVol.get(j)) : barVol
+        if pV > 0 and not na(pHi) and not na(pLo)
+            int loRow = int(math.floor(pLo / profStep))
+            int hiRow = int(math.floor(pHi / profStep))
+            if hiRow - loRow > 2000
+                // A freak bar: do not grow the grid for it, credit its close instead.
+                loRow := int(math.floor(close / profStep))
+                hiRow := loRow
+            if na(profBase)
+                profBase := loRow
+            // Hard ceiling on grid size: a bar that would stretch it past this is credited to
+            // the nearest existing edge row rather than growing the array without bound.
+            loRow := math.max(loRow, profBase + prof.size() - 5000)
+            hiRow := math.min(hiRow, profBase + 4999)
+            if hiRow < loRow
+                hiRow := loRow
+            while loRow < profBase
+                prof.unshift(0.0)
+                profBase -= 1
+            while hiRow > profBase + prof.size() - 1
+                prof.push(0.0)
+            float share = pV / (hiRow - loRow + 1)
+            for r = loRow to hiRow
+                float nv = prof.get(r - profBase) + share
+                prof.set(r - profBase, nv)
+                if nv > pocVol
+                    pocVol := nv
+                    pocRow := r
+            profTotal += pV
 
-    // Value area: grow outwards from the POC row, always taking the larger neighbour.
-    int n   = prof.size()
-    int vLo = pocRow - profBase
-    int vHi = vLo
-    float acc    = prof.get(vLo)
-    float target = profTotal * vaPct / 100
-    while acc < target and (vLo > 0 or vHi < n - 1)
-        float up = vHi < n - 1 ? prof.get(vHi + 1) : -1.0
-        float dn = vLo > 0 ? prof.get(vLo - 1) : -1.0
-        if up >= dn
-            vHi += 1
-            acc += up
-        else
-            vLo -= 1
-            acc += dn
-    devPoc := (pocRow + 0.5) * profStep
-    devVah := (profBase + vHi + 1) * profStep
-    devVal := (profBase + vLo) * profStep
+    if not na(pocRow)
+        // Value area: grow outwards from the POC row, always taking the larger neighbour.
+        int n   = prof.size()
+        int vLo = pocRow - profBase
+        int vHi = vLo
+        float acc    = prof.get(vLo)
+        float target = profTotal * vaPct / 100
+        while acc < target and (vLo > 0 or vHi < n - 1)
+            float up = vHi < n - 1 ? prof.get(vHi + 1) : -1.0
+            float dn = vLo > 0 ? prof.get(vLo - 1) : -1.0
+            if up >= dn
+                vHi += 1
+                acc += up
+            else
+                vLo -= 1
+                acc += dn
+        devPoc := (pocRow + 0.5) * profStep
+        devVah := (profBase + vHi + 1) * profStep
+        devVal := (profBase + vLo) * profStep
 
 // Drawn as flat lines rather than as a plotted path. The developing lines span the current
 // period at their latest values and are removed when the period ends, because a finished
@@ -632,12 +648,6 @@ valuePos = na(devPoc) ? 0 : close > devVah ? 1 : close < devVal ? -1 : 0
 // and signs each one's volume by its direction, which is the usual approximation. On forex and
 // CFD symbols the underlying figure is tick volume, so treat the result as activity, not size.
 
-deltaTfAuto = timeframe.isintraday ? "1" : timeframe.isdaily ? "30" : "240"
-deltaTfWant = deltaTfInput == "Auto" ? deltaTfAuto : deltaTfInput
-deltaTf     = timeframe.in_seconds(deltaTfWant) < tfSeconds ? deltaTfWant : timeframe.period
-signedVol() => close > open ? volume : close < open ? -volume : 0.0
-
-ltfDeltas = request.security_lower_tf(syminfo.tickerid, deltaTf, signedVol())
 barDeltaFallback = close > open ? barVol : close < open ? -barVol : 0.0
 barDelta  = ltfDeltas.size() > 0 ? nz(ltfDeltas.sum()) : barDeltaFallback
 
