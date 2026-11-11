@@ -6,7 +6,8 @@
 // Stage 3: developing volume profile for the current period (POC and value area), plus the
 //          prior period's final levels.
 // Stage 4: estimated volume delta from lower-timeframe bars (net delta, pressure, flow state).
-// Later stages add the signal experiment and the final dashboard.
+// Stage 5: conditions verdict (a fixed rule checklist) and the grouped dashboard.
+// There are deliberately no entry signals here; this script describes context only.
 //
 // Nothing here repaints: every classification that is drawn or alerted is decided on a confirmed
 // bar close, and no higher-timeframe request.security call is used — the higher-period values (day / week range,
@@ -61,6 +62,7 @@ showProfile     = input.bool(true, "Show Developing POC / Value Area", group = "
 showPrevProfile = input.bool(true, "Show Prior Period POC / Value Area", group = "Volume Profile")
 vpRows          = input.int(40, "Rows Per Average Range", minval = 10, maxval = 200, group = "Volume Profile", tooltip = "Row height is the average period range divided by this. More rows is finer but noisier.")
 vaPct           = input.float(70.0, "Value Area (% of volume)", minval = 10, maxval = 95, step = 5, group = "Volume Profile")
+prevKeep        = input.int(2, "Prior-Level Sets Kept On Chart", minval = 1, maxval = 20, group = "Volume Profile", tooltip = "Each new period draws the previous period's POC and value area across it. This is how many of those sets stay visible.")
 colPoc          = input.color(#ffeb3b, "POC / Value Area", group = "Volume Profile")
 
 // ---------------- Volume delta ----------------
@@ -68,10 +70,15 @@ deltaTfInput = input.string("Auto", "Delta Lower Timeframe", options = ["Auto", 
 pressureLen  = input.int(20, "Pressure Window (bars)", minval = 2, maxval = 200, group = "Volume Delta")
 domPct       = input.float(55.0, "Dominance Threshold (% of volume)", minval = 51, maxval = 90, step = 1, group = "Volume Delta", tooltip = "Buying (or selling) share of volume over the pressure window needed to call one side dominant. If one side is dominant but price has not moved its way over the same window, the state reads Absorption instead.")
 
+// ---------------- Conditions ----------------
+lowVolRatio = input.float(0.7, "Low-Volume Threshold (x normal)", minval = 0.1, maxval = 1.0, step = 0.05, group = "Conditions", tooltip = "Recent volume (over the pressure window) below this fraction of the longer-run average counts as low participation.")
+
 // ---------------- Display ----------------
 labelStyle     = input.string("Auto", "Session Label Style", options = ["Auto", "Full", "Compact"], group = "Display", tooltip = "Full: 'ASIA BULL BREAKOUT'. Compact: 'ASIA ▲'. Auto uses Full in 24h mode and Compact in single-session mode, where boxes are narrow.")
 showRefLines   = input.bool(true, "Show Reference High / Low", group = "Display")
 showDashboard  = input.bool(true, "Show Dashboard", group = "Display")
+dashDetail     = input.string("Full", "Dashboard Detail", options = ["Full", "Compact"], group = "Display", tooltip = "Compact shows only the conditions verdict, its reason, what to look for, and the bias.")
+dashTextSize   = input.string("Small", "Dashboard Text Size", options = ["Tiny", "Small", "Normal"], group = "Display")
 dashPosition   = input.string("Top right", "Dashboard Position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = "Display")
 colBull        = input.color(#26c6da, "Bull", group = "Display", inline = "col")
 colBear        = input.color(#ff1f5a, "Bear", group = "Display", inline = "col")
@@ -552,6 +559,7 @@ var line lpPoc = na
 var line lpVah = na
 var line lpVal = na
 var int  periodStartT = na
+var array<line> prevLines = array.new<line>()
 
 if newAnchor or na(periodStartT)
     periodStartT := time
@@ -568,6 +576,12 @@ if newAnchor or na(periodStartT)
         lpPoc := line.new(time, prevPoc, time_close, prevPoc, xloc = xloc.bar_time, color = color.new(colPoc, 45))
         lpVah := line.new(time, prevVah, time_close, prevVah, xloc = xloc.bar_time, color = color.new(colPoc, 55), style = line.style_dotted)
         lpVal := line.new(time, prevVal, time_close, prevVal, xloc = xloc.bar_time, color = color.new(colPoc, 55), style = line.style_dotted)
+        prevLines.push(lpPoc)
+        prevLines.push(lpVah)
+        prevLines.push(lpVal)
+        while prevLines.size() > prevKeep * 3
+            line oldLn = prevLines.shift()
+            oldLn.delete()
 else if not na(lpPoc)
     lpPoc.set_x2(time_close)
     lpVah.set_x2(time_close)
@@ -649,40 +663,109 @@ plot(barDelta, "Bar Delta (est.)", display = display.data_window)
 plot(cumDelta, "Net Delta (est.)", display = display.data_window)
 
 // ============================================================
+// CONDITIONS  (a fixed rule checklist, evaluated top to bottom)
+// ============================================================
+// Bias: price against both the developing POC and the prior period's POC.
+//   above both -> bullish, below both -> bearish, between them -> neutral.
+// Verdict: the first rule that applies wins.
+//   AVOID       range for the period is already used up
+//   WAIT        no bias / price outside the value area / flow disagrees / volume is thin
+//   FAVOURABLE  none of the above
+// This describes conditions for trading in the bias direction. It is not an entry signal.
+
+bias = na(devPoc) ? 0 : na(prevPoc) ? (close > devPoc ? 1 : close < devPoc ? -1 : 0) : close > devPoc and close > prevPoc ? 1 : close < devPoc and close < prevPoc ? -1 : 0
+
+// Flow that argues against the bias: the other side dominant and getting its way, or the
+// bias side's own pressure being absorbed.
+flowAgainst = (bias > 0 and ((sellDom and not sellAbsorbed) or buyAbsorbed)) or (bias < 0 and ((buyDom and not buyAbsorbed) or sellAbsorbed))
+volRecent   = ta.sma(barVol, pressureLen)
+volNormal   = ta.sma(barVol, pressureLen * 5)
+lowVolume   = volNormal > 0 and volRecent < volNormal * lowVolRatio
+extended    = (bias > 0 and valuePos > 0) or (bias < 0 and valuePos < 0) or (bias != 0 and valuePos == -bias)
+
+// 2 = favourable, 1 = wait, 0 = avoid
+verdict = rangeExhausted ? 0 : bias == 0 or extended or flowAgainst or lowVolume ? 1 : 2
+favourableLong  = verdict == 2 and bias > 0
+favourableShort = verdict == 2 and bias < 0
+
+// ============================================================
 // DASHBOARD
 // ============================================================
 
-statusColor(string st) =>
-    st == "Swept" ? colAccum : st == "Broken" ? color.white : color.gray
+px(float v) => str.tostring(v, format.mintick)
 
-dashPos = dashPosition == "Top right" ? position.top_right : dashPosition == "Top left" ? position.top_left : dashPosition == "Bottom right" ? position.bottom_right : position.bottom_left
-var table dash = table.new(dashPos, 2, 12, bgcolor = color.new(#0d1321, 15), border_width = 1, border_color = color.new(color.gray, 85))
+dashPos  = dashPosition == "Top right" ? position.top_right : dashPosition == "Top left" ? position.top_left : dashPosition == "Bottom right" ? position.bottom_right : position.bottom_left
+dashSize = dashTextSize == "Tiny" ? size.tiny : dashTextSize == "Normal" ? size.normal : size.small
+var table dash = table.new(dashPos, 2, 11, bgcolor = color.new(#0d1321, 15), border_width = 1, border_color = color.new(color.gray, 85))
 
 dashRow(int row, string k, string v, color vc) =>
-    dash.cell(0, row, k, text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    dash.cell(1, row, v, text_color = vc, text_halign = text.align_left, text_size = size.small)
+    dash.cell(0, row, k, text_color = color.gray, text_halign = text.align_left, text_size = dashSize)
+    dash.cell(1, row, v, text_color = vc, text_halign = text.align_left, text_size = dashSize)
 
 if showDashboard and barstate.islast
-    modeText  = is24hMode ? (sessionsOn ? "24h sessions" : "24h (timeframe too high for session boxes)") : (openRangeOn ? "Single session" : "Single session (no opening-range box on this timeframe)")
-    rangeText = na(rangeUsedPct) ? "n/a (needs more history)" : str.tostring(rangeUsedPct, "#") + "% of avg " + anchorName + (rangeExhausted ? "  [EXHAUSTED]" : "")
-    dashRow(0, "Mode", modeText, color.white)
-    dashRow(1, "Range used", rangeText, rangeExhausted ? colBear : color.white)
-    dashRow(2, refName + " high", hiStatus + (na(refHi) ? "" : "  @ " + str.tostring(refHi, format.mintick)), statusColor(hiStatus))
-    dashRow(3, refName + " low", loStatus + (na(refLo) ? "" : "  @ " + str.tostring(refLo, format.mintick)), statusColor(loStatus))
-    bslText = na(nearBsl) ? "none above" : str.tostring(nearBsl, format.mintick) + "  (" + str.tostring((nearBsl - close) / atrValue, "#.#") + " ATR away)"
-    sslText = na(nearSsl) ? "none below" : str.tostring(nearSsl, format.mintick) + "  (" + str.tostring((close - nearSsl) / atrValue, "#.#") + " ATR away)"
-    dashRow(4, "Nearest BSL", bslText, colBsl)
-    dashRow(5, "Nearest SSL", sslText, colSsl)
-    pocText = na(devPoc) ? (sawVolume ? "n/a" : "n/a (no volume on this symbol)") : str.tostring(devPoc, format.mintick) + (close >= devPoc ? "  — price above" : "  — price below")
-    vaText  = na(devPoc) ? "n/a" : valuePos > 0 ? "Above value (extended up)" : valuePos < 0 ? "Below value (extended down)" : "Inside value"
-    dashRow(7, "POC (" + anchorName + ")", pocText, colPoc)
-    dashRow(8, "Value area", vaText, valuePos > 0 ? colBull : valuePos < 0 ? colBear : color.white)
-    deltaText = sawVolume ? (cumDelta >= 0 ? "+" : "") + str.tostring(cumDelta, format.volume) + tickVolNote : "n/a (no volume on this symbol)"
-    pressText = na(buyPct) ? "n/a" : str.tostring(buyPct, "#") + "% buy / " + str.tostring(100 - buyPct, "#") + "% sell"
-    dashRow(9, "Net Δ est. (" + anchorName + ")", deltaText, cumDelta >= 0 ? colBull : colBear)
-    dashRow(10, "Pressure (" + str.tostring(pressureLen) + " bars)", pressText, na(buyPct) ? color.gray : buyPct >= 50 ? colBull : colBear)
-    dashRow(11, "Flow state", flowState, flowColor)
-    dashRow(6, "Last liquidity", lastLiqText + (na(lastLiqBar) ? "" : "  (" + str.tostring(bar_index - lastLiqBar) + " bars ago)"), color.white)
+    string biasWord = bias > 0 ? "Bullish" : bias < 0 ? "Bearish" : "Neutral"
+    color  biasCol  = bias > 0 ? colBull : bias < 0 ? colBear : color.white
+    string dirWord  = bias > 0 ? "Longs" : "Shorts"
+
+    // ---- verdict, reason, what to look for ----
+    string verdictText = ""
+    string whyText     = ""
+    string lookText    = ""
+    color  verdictCol  = color.white
+    if verdict == 0
+        verdictText := "AVOID"
+        verdictCol  := colBear
+        whyText     := str.tostring(rangeUsedPct, "#") + "% of the average " + anchorName + " range is already used"
+        lookText    := "Avoid chasing. This resets when a new " + anchorName + " opens."
+    else if verdict == 2
+        verdictText := "FAVOURABLE — " + (bias > 0 ? "long side" : "short side")
+        verdictCol  := biasCol
+        whyText     := "Bias and flow agree, price is inside value, range is available"
+        float target = bias > 0 ? nearBsl : nearSsl
+        lookText    := dirWord + " favoured. " + (na(target) ? "No liquidity pool ahead." : "Next pool " + px(target) + ".") + " Bias fails " + (bias > 0 ? "below" : "above") + " POC " + px(devPoc) + "."
+    else
+        verdictText := "WAIT"
+        verdictCol  := colAccum
+        if bias == 0
+            whyText  := na(devPoc) ? "No volume profile, so no bias" : "Price is between today's POC and the prior POC"
+            lookText := na(devPoc) ? "This symbol reports no volume." : "Wait for price to hold above or below both POCs."
+        else if extended
+            bool counter = valuePos == -bias
+            whyText  := counter ? "Price has left the value area against the bias" : "Price is extended beyond the value area"
+            lookText := counter ? "Wait for price to get back inside value (" + px(devVal) + " – " + px(devVah) + ")." : "Wait for a pullback toward " + (bias > 0 ? "VAH " + px(devVah) : "VAL " + px(devVal)) + " or POC " + px(devPoc) + "."
+        else if flowAgainst
+            whyText  := "Order flow disagrees with the bias (" + flowState + ")"
+            lookText := "Wait for flow to turn, or for the absorption to resolve."
+        else
+            whyText  := "Volume is thin (" + str.tostring(volRecent / volNormal * 100, "#") + "% of normal)"
+            lookText := "Wait for participation to return."
+
+    dashRow(0, "Conditions", verdictText, verdictCol)
+    dashRow(1, "Why", whyText, color.white)
+    dashRow(2, "Look for", lookText, color.white)
+    string biasDetail = na(devPoc) ? "" : na(prevPoc) ? "  (vs POC " + px(devPoc) + ")" : "  (POC " + px(devPoc) + ", prior POC " + px(prevPoc) + ")"
+    dashRow(3, "Bias", biasWord + biasDetail, biasCol)
+
+    if dashDetail == "Full"
+        string rangeText = na(rangeUsedPct) ? "n/a (needs more history)" : str.tostring(rangeUsedPct, "#") + "% of avg " + anchorName + (rangeExhausted ? "  [EXHAUSTED]" : "")
+        dashRow(4, "Range used", rangeText, rangeExhausted ? colBear : color.white)
+
+        string refText = "High " + hiStatus + (na(refHi) ? "" : " @ " + px(refHi)) + "  ·  Low " + loStatus + (na(refLo) ? "" : " @ " + px(refLo))
+        dashRow(5, refName + " range", refText, hiStatus == "Swept" or loStatus == "Swept" ? colAccum : color.white)
+
+        string vaText = na(devPoc) ? (sawVolume ? "n/a" : "n/a (no volume on this symbol)") : (valuePos > 0 ? "Above value" : valuePos < 0 ? "Below value" : "Inside value") + "  (" + px(devVal) + " – " + px(devVah) + ")"
+        dashRow(6, "Value area", vaText, valuePos > 0 ? colBull : valuePos < 0 ? colBear : color.white)
+
+        string bslText = na(nearBsl) ? "BSL none above" : "BSL " + px(nearBsl) + " (" + str.tostring((nearBsl - close) / atrValue, "#.#") + " ATR)"
+        string sslText = na(nearSsl) ? "SSL none below" : "SSL " + px(nearSsl) + " (" + str.tostring((close - nearSsl) / atrValue, "#.#") + " ATR)"
+        dashRow(7, "Liquidity", bslText + "  ·  " + sslText, color.white)
+        dashRow(8, "Last taken", lastLiqText + (na(lastLiqBar) ? "" : "  (" + str.tostring(bar_index - lastLiqBar) + " bars ago)"), color.white)
+
+        string flowText = not sawVolume ? "n/a (no volume on this symbol)" : flowState + "  ·  " + (na(buyPct) ? "" : str.tostring(buyPct, "#") + "% buy  ·  ") + "net Δ " + (cumDelta >= 0 ? "+" : "") + str.tostring(cumDelta, format.volume) + tickVolNote
+        dashRow(9, "Flow (est.)", flowText, flowColor)
+
+        string modeText = is24hMode ? (sessionsOn ? "24h sessions" : "24h, no session boxes on this timeframe") : (openRangeOn ? "Single session" : "Single session, no opening-range box on this timeframe")
+        dashRow(10, "Mode", modeText, color.gray)
 
 // ============================================================
 // ALERTS
@@ -699,3 +782,5 @@ alertcondition(bslRun, title = "BSL Run", message = "Price closed above a buy-si
 alertcondition(sslRun, title = "SSL Run", message = "Price closed below a sell-side liquidity pool on {{ticker}} {{interval}}.")
 alertcondition(buyAbsorbed and not buyAbsorbed[1], title = "Buying Absorbed", message = "Buying is dominant but price has not risen over the pressure window on {{ticker}} {{interval}}.")
 alertcondition(sellAbsorbed and not sellAbsorbed[1], title = "Selling Absorbed", message = "Selling is dominant but price has not fallen over the pressure window on {{ticker}} {{interval}}.")
+alertcondition(favourableLong and not favourableLong[1], title = "Conditions Favourable (long side)", message = "Conditions turned favourable for the long side on {{ticker}} {{interval}}. This is context, not an entry signal.")
+alertcondition(favourableShort and not favourableShort[1], title = "Conditions Favourable (short side)", message = "Conditions turned favourable for the short side on {{ticker}} {{interval}}. This is context, not an entry signal.")
