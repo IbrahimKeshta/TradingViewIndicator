@@ -3,7 +3,9 @@
 //
 // Stage 1: session boxes, range-used gauge, reference-range sweep state.
 // Stage 2: liquidity pools (unswept swing highs / lows) on the chart and a higher timeframe.
-// Later stages add a session volume profile, volume delta and a full dashboard.
+// Stage 3: developing volume profile for the current period (POC and value area), plus the
+//          prior period's final levels.
+// Later stages add volume delta and a full dashboard.
 //
 // Nothing here repaints: every classification that is drawn or alerted is decided on a confirmed
 // bar close, and no request.security call is used — the higher-period values (day / week range,
@@ -45,10 +47,17 @@ showHtfPools  = input.bool(true, "Show Higher-Timeframe Pools", group = "Liquidi
 htfInput      = input.timeframe("60", "Higher Timeframe", group = "Liquidity Pools", tooltip = "If this is not above the chart timeframe it is bumped automatically: to daily on an intraday chart, weekly on a daily chart, monthly on a weekly chart.")
 htfPivotLen   = input.int(3, "HTF Swing Length (HTF bars each side)", minval = 1, maxval = 20, group = "Liquidity Pools")
 maxPools      = input.int(5, "Max Pools Kept (per side, per tier)", minval = 1, maxval = 20, group = "Liquidity Pools")
-keepSwept     = input.bool(true, "Keep Taken Pools (faded)", group = "Liquidity Pools", tooltip = "A pool is resolved on the close of the first bar that trades through it: 'swept' if that bar closes back inside, 'run' if it closes beyond.")
+keepTaken     = input.int(3, "Taken Pools Kept (faded)", minval = 0, maxval = 30, group = "Liquidity Pools", tooltip = "How many of the most recently taken pools stay on the chart in grey. 0 removes them as soon as they are taken.\n\nA pool is resolved on the close of the first bar that trades through it: 'swept' if that bar closes back inside, 'run' if it closes beyond.")
 poolThickMult = input.float(0.1, "Band Thickness (x ATR)", minval = 0.01, step = 0.05, group = "Liquidity Pools")
 colBsl        = input.color(#9c27b0, "BSL", group = "Liquidity Pools", inline = "pcol")
 colSsl        = input.color(#3d6fb5, "SSL", group = "Liquidity Pools", inline = "pcol")
+
+// ---------------- Volume profile ----------------
+showProfile     = input.bool(true, "Show Developing POC / Value Area", group = "Volume Profile", tooltip = "Built from the current period's chart bars: the day on an intraday chart, the week on a daily chart. Each bar's volume is spread evenly across the price rows it covers, so a lower chart timeframe gives a sharper profile.\n\nPOC (point of control) is the price row with the most volume. The value area is the band around it holding the chosen share of the period's volume.")
+showPrevProfile = input.bool(true, "Show Prior Period POC / Value Area", group = "Volume Profile")
+vpRows          = input.int(40, "Rows Per Average Range", minval = 10, maxval = 200, group = "Volume Profile", tooltip = "Row height is the average period range divided by this. More rows is finer but noisier.")
+vaPct           = input.float(70.0, "Value Area (% of volume)", minval = 10, maxval = 95, step = 5, group = "Volume Profile")
+colPoc          = input.color(#ffeb3b, "POC / Value Area", group = "Volume Profile")
 
 // ---------------- Display ----------------
 labelStyle     = input.string("Auto", "Session Label Style", options = ["Auto", "Full", "Compact"], group = "Display", tooltip = "Full: 'ASIA BULL BREAKOUT'. Compact: 'ASIA ▲'. Auto uses Full in 24h mode and Compact in single-session mode, where boxes are narrow.")
@@ -229,6 +238,8 @@ if sessionsOn
     if asia.active
         refHi := na
         refLo := na
+        refHiLine.delete()
+        refLoLine.delete()
     else if asia.ended
         refReset := true
         newRefHi := asia.hi
@@ -243,6 +254,11 @@ if refReset
     refLo     := newRefLo
     hiTouched := false
     loTouched := false
+    // Only the live reference pair is drawn; earlier pairs are removed to keep the chart readable.
+    refHiLine.delete()
+    refLoLine.delete()
+    refHiLine := na
+    refLoLine := na
     if showRefLines
         refHiLine := line.new(time, refHi, time_close, refHi, xloc = xloc.bar_time, color = colRef, style = line.style_dotted)
         refLoLine := line.new(time, refLo, time_close, refLo, xloc = xloc.bar_time, color = colRef, style = line.style_dotted)
@@ -382,6 +398,7 @@ bool bslSwept = false
 bool sslSwept = false
 bool bslRun   = false
 bool sslRun   = false
+var array<box> takenBoxes = array.new<box>()
 var string lastLiqText = "none yet"
 var int    lastLiqBar  = na
 
@@ -400,16 +417,18 @@ if pools.size() > 0
             string what = poolText(p.isHigh, p.htf) + (accepted ? " run" : " swept")
             lastLiqText := what + " @ " + str.tostring(p.level, format.mintick)
             lastLiqBar  := bar_index
-            if keepSwept
-                p.bx.set_right(time_close)
-                p.bx.set_bgcolor(color.new(color.gray, 82))
-                p.bx.set_text_color(color.new(color.gray, 30))
-                p.bx.set_text(what)
-            else
-                p.bx.delete()
+            p.bx.set_right(time_close)
+            p.bx.set_bgcolor(color.new(color.gray, 82))
+            p.bx.set_text_color(color.new(color.gray, 30))
+            p.bx.set_text(what)
+            takenBoxes.push(p.bx)
             pools.remove(i)
         else
             p.bx.set_right(time_close)
+
+while takenBoxes.size() > keepTaken
+    box old = takenBoxes.shift()
+    old.delete()
 
 // Nearest live pool on each side of price, for the dashboard.
 float nearBsl = na
@@ -423,6 +442,107 @@ if barstate.islast and pools.size() > 0
             nearSsl := p.level
 
 // ============================================================
+// VOLUME PROFILE  (developing, per period)
+// ============================================================
+// Rows sit on a fixed price grid chosen when the period opens, so the profile is only ever added
+// to — nothing already plotted is recalculated. The values plotted on each bar are the POC and
+// value area as they stood at that bar's close.
+
+var array<float> prof      = array.new<float>()
+var int          profBase  = na      // grid row number of prof[0]
+var float        profStep  = na      // row height
+var float        profTotal = 0.0
+var int          pocRow    = na
+var float        pocVol    = 0.0
+var float        devPoc    = na
+var float        devVah    = na
+var float        devVal    = na
+var float        prevPoc   = na
+var float        prevVah   = na
+var float        prevVal   = na
+var bool         sawVolume = false
+
+if newAnchor or na(profStep)
+    // periods was already advanced above; the period that just ended is complete only if it
+    // was not the partial one the chart history starts in.
+    if newAnchor and periods > 1 and not na(devPoc)
+        prevPoc := devPoc
+        prevVah := devVah
+        prevVal := devVal
+    prof.clear()
+    profBase  := na
+    profTotal := 0.0
+    pocRow    := na
+    pocVol    := 0.0
+    devPoc    := na
+    devVah    := na
+    devVal    := na
+    // Until enough periods exist for an average range, size rows from ATR; before ATR itself
+    // has warmed up, leave the grid undefined so nothing is built on a meaningless row height.
+    float basis = not na(avgRange) ? avgRange : bar_index > 20 ? atrValue * 8 : na
+    profStep := na(basis) or basis <= 0 ? na : math.max(math.round_to_mintick(basis / vpRows), syminfo.mintick)
+
+barVol = nz(volume)
+if barVol > 0 and not na(profStep)
+    sawVolume := true
+    int loRow = int(math.floor(low / profStep))
+    int hiRow = int(math.floor(high / profStep))
+    if hiRow - loRow > 2000
+        // A freak bar: do not grow the grid for it, credit its close instead.
+        loRow := int(math.floor(close / profStep))
+        hiRow := loRow
+    if na(profBase)
+        profBase := loRow
+    // Hard ceiling on grid size: a bar that would stretch it past this is credited to the
+    // nearest existing edge row rather than growing the array without bound.
+    loRow := math.max(loRow, profBase + prof.size() - 5000)
+    hiRow := math.min(hiRow, profBase + 4999)
+    if hiRow < loRow
+        hiRow := loRow
+    while loRow < profBase
+        prof.unshift(0.0)
+        profBase -= 1
+    while hiRow > profBase + prof.size() - 1
+        prof.push(0.0)
+    float share = barVol / (hiRow - loRow + 1)
+    for r = loRow to hiRow
+        float nv = prof.get(r - profBase) + share
+        prof.set(r - profBase, nv)
+        if nv > pocVol
+            pocVol := nv
+            pocRow := r
+    profTotal += barVol
+
+    // Value area: grow outwards from the POC row, always taking the larger neighbour.
+    int n   = prof.size()
+    int vLo = pocRow - profBase
+    int vHi = vLo
+    float acc    = prof.get(vLo)
+    float target = profTotal * vaPct / 100
+    while acc < target and (vLo > 0 or vHi < n - 1)
+        float up = vHi < n - 1 ? prof.get(vHi + 1) : -1.0
+        float dn = vLo > 0 ? prof.get(vLo - 1) : -1.0
+        if up >= dn
+            vHi += 1
+            acc += up
+        else
+            vLo -= 1
+            acc += dn
+    devPoc := (pocRow + 0.5) * profStep
+    devVah := (profBase + vHi + 1) * profStep
+    devVal := (profBase + vLo) * profStep
+
+// na on the first bar of each period breaks the line there instead of drawing a vertical jump.
+plot(showProfile and not newAnchor ? devPoc : na, "POC", color = colPoc, linewidth = 2, style = plot.style_steplinebr)
+plot(showProfile and not newAnchor ? devVah : na, "Value Area High", color = color.new(colPoc, 35), style = plot.style_steplinebr)
+plot(showProfile and not newAnchor ? devVal : na, "Value Area Low", color = color.new(colPoc, 35), style = plot.style_steplinebr)
+plot(showPrevProfile and not newAnchor ? prevPoc : na, "Prior POC", color = color.new(colPoc, 55), style = plot.style_steplinebr)
+plot(showPrevProfile and not newAnchor ? prevVah : na, "Prior Value Area High", color = color.new(colPoc, 75), style = plot.style_steplinebr)
+plot(showPrevProfile and not newAnchor ? prevVal : na, "Prior Value Area Low", color = color.new(colPoc, 75), style = plot.style_steplinebr)
+
+valuePos = na(devPoc) ? 0 : close > devVah ? 1 : close < devVal ? -1 : 0
+
+// ============================================================
 // DASHBOARD
 // ============================================================
 
@@ -430,7 +550,7 @@ statusColor(string st) =>
     st == "Swept" ? colAccum : st == "Broken" ? color.white : color.gray
 
 dashPos = dashPosition == "Top right" ? position.top_right : dashPosition == "Top left" ? position.top_left : dashPosition == "Bottom right" ? position.bottom_right : position.bottom_left
-var table dash = table.new(dashPos, 2, 7, bgcolor = color.new(#0d1321, 15), border_width = 1, border_color = color.new(color.gray, 85))
+var table dash = table.new(dashPos, 2, 9, bgcolor = color.new(#0d1321, 15), border_width = 1, border_color = color.new(color.gray, 85))
 
 dashRow(int row, string k, string v, color vc) =>
     dash.cell(0, row, k, text_color = color.gray, text_halign = text.align_left, text_size = size.small)
@@ -447,6 +567,10 @@ if showDashboard and barstate.islast
     sslText = na(nearSsl) ? "none below" : str.tostring(nearSsl, format.mintick) + "  (" + str.tostring((close - nearSsl) / atrValue, "#.#") + " ATR away)"
     dashRow(4, "Nearest BSL", bslText, colBsl)
     dashRow(5, "Nearest SSL", sslText, colSsl)
+    pocText = na(devPoc) ? (sawVolume ? "n/a" : "n/a (no volume on this symbol)") : str.tostring(devPoc, format.mintick) + (close >= devPoc ? "  — price above" : "  — price below")
+    vaText  = na(devPoc) ? "n/a" : valuePos > 0 ? "Above value (extended up)" : valuePos < 0 ? "Below value (extended down)" : "Inside value"
+    dashRow(7, "POC (" + anchorName + ")", pocText, colPoc)
+    dashRow(8, "Value area", vaText, valuePos > 0 ? colBull : valuePos < 0 ? colBear : color.white)
     dashRow(6, "Last liquidity", lastLiqText + (na(lastLiqBar) ? "" : "  (" + str.tostring(bar_index - lastLiqBar) + " bars ago)"), color.white)
 
 // ============================================================
