@@ -5,13 +5,17 @@
 // Stage 2: liquidity pools (unswept swing highs / lows) on the chart and a higher timeframe.
 // Stage 3: developing volume profile for the current period (POC and value area), plus the
 //          prior period's final levels.
-// Later stages add volume delta and a full dashboard.
+// Stage 4: estimated volume delta from lower-timeframe bars (net delta, pressure, flow state).
+// Later stages add the signal experiment and the final dashboard.
 //
 // Nothing here repaints: every classification that is drawn or alerted is decided on a confirmed
-// bar close, and no request.security call is used — the higher-period values (day / week range,
+// bar close, and no higher-timeframe request.security call is used — the higher-period values (day / week range,
 // prior-period high and low) are accumulated locally from chart bars, so history and realtime
 // are computed by the same code path. Higher-timeframe swings are likewise built by aggregating
 // chart bars locally and are only used once the higher-timeframe bars that confirm them have closed.
+//
+// The one data request is request.security_lower_tf for the delta estimate, which only reads the
+// intrabars inside each chart bar.
 //
 // All drawings are anchored by time (xloc.bar_time), not bar index, so no max_bars_back is needed.
 indicator("Session Order Flow", shorttitle = "SESS-OF", overlay = true, max_boxes_count = 200, max_lines_count = 100, max_labels_count = 100)
@@ -58,6 +62,11 @@ showPrevProfile = input.bool(true, "Show Prior Period POC / Value Area", group =
 vpRows          = input.int(40, "Rows Per Average Range", minval = 10, maxval = 200, group = "Volume Profile", tooltip = "Row height is the average period range divided by this. More rows is finer but noisier.")
 vaPct           = input.float(70.0, "Value Area (% of volume)", minval = 10, maxval = 95, step = 5, group = "Volume Profile")
 colPoc          = input.color(#ffeb3b, "POC / Value Area", group = "Volume Profile")
+
+// ---------------- Volume delta ----------------
+deltaTfInput = input.string("Auto", "Delta Lower Timeframe", options = ["Auto", "1", "3", "5", "15", "30", "60", "240"], group = "Volume Delta", tooltip = "Delta is an estimate: each lower-timeframe bar's whole volume is counted as buying if it closed up and selling if it closed down. Auto uses 1-minute bars on intraday charts, 30-minute on daily and 4-hour above that.\n\nTradingView only serves a limited depth of lower-timeframe history; older chart bars fall back to the chart bar's own direction. If the choice is not below the chart timeframe, the chart bar's own direction is used throughout.")
+pressureLen  = input.int(20, "Pressure Window (bars)", minval = 2, maxval = 200, group = "Volume Delta")
+domPct       = input.float(55.0, "Dominance Threshold (% of volume)", minval = 51, maxval = 90, step = 1, group = "Volume Delta", tooltip = "Buying (or selling) share of volume over the pressure window needed to call one side dominant. If one side is dominant but price has not moved its way over the same window, the state reads Absorption instead.")
 
 // ---------------- Display ----------------
 labelStyle     = input.string("Auto", "Session Label Style", options = ["Auto", "Full", "Compact"], group = "Display", tooltip = "Full: 'ASIA BULL BREAKOUT'. Compact: 'ASIA ▲'. Auto uses Full in 24h mode and Compact in single-session mode, where boxes are narrow.")
@@ -532,15 +541,112 @@ if barVol > 0 and not na(profStep)
     devVah := (profBase + vHi + 1) * profStep
     devVal := (profBase + vLo) * profStep
 
-// na on the first bar of each period breaks the line there instead of drawing a vertical jump.
-plot(showProfile and not newAnchor ? devPoc : na, "POC", color = colPoc, linewidth = 2, style = plot.style_steplinebr)
-plot(showProfile and not newAnchor ? devVah : na, "Value Area High", color = color.new(colPoc, 35), style = plot.style_steplinebr)
-plot(showProfile and not newAnchor ? devVal : na, "Value Area Low", color = color.new(colPoc, 35), style = plot.style_steplinebr)
-plot(showPrevProfile and not newAnchor ? prevPoc : na, "Prior POC", color = color.new(colPoc, 55), style = plot.style_steplinebr)
-plot(showPrevProfile and not newAnchor ? prevVah : na, "Prior Value Area High", color = color.new(colPoc, 75), style = plot.style_steplinebr)
-plot(showPrevProfile and not newAnchor ? prevVal : na, "Prior Value Area Low", color = color.new(colPoc, 75), style = plot.style_steplinebr)
+// Drawn as flat lines rather than as a plotted path. The developing lines span the current
+// period at their latest values and are removed when the period ends, because a finished
+// period's final levels were not known while it was trading. The prior-period lines are fixed
+// from the first bar of the period they are drawn across, so those are left on the chart.
+var line lPoc  = na
+var line lVah  = na
+var line lVal  = na
+var line lpPoc = na
+var line lpVah = na
+var line lpVal = na
+var int  periodStartT = na
+
+if newAnchor or na(periodStartT)
+    periodStartT := time
+    lPoc.delete()
+    lVah.delete()
+    lVal.delete()
+    lPoc  := na
+    lVah  := na
+    lVal  := na
+    lpPoc := na
+    lpVah := na
+    lpVal := na
+    if showPrevProfile and not na(prevPoc)
+        lpPoc := line.new(time, prevPoc, time_close, prevPoc, xloc = xloc.bar_time, color = color.new(colPoc, 45))
+        lpVah := line.new(time, prevVah, time_close, prevVah, xloc = xloc.bar_time, color = color.new(colPoc, 55), style = line.style_dotted)
+        lpVal := line.new(time, prevVal, time_close, prevVal, xloc = xloc.bar_time, color = color.new(colPoc, 55), style = line.style_dotted)
+else if not na(lpPoc)
+    lpPoc.set_x2(time_close)
+    lpVah.set_x2(time_close)
+    lpVal.set_x2(time_close)
+
+if showProfile and not na(devPoc)
+    if na(lPoc)
+        lPoc := line.new(periodStartT, devPoc, time_close, devPoc, xloc = xloc.bar_time, color = colPoc, width = 2)
+        lVah := line.new(periodStartT, devVah, time_close, devVah, xloc = xloc.bar_time, color = color.new(colPoc, 20), style = line.style_dashed)
+        lVal := line.new(periodStartT, devVal, time_close, devVal, xloc = xloc.bar_time, color = color.new(colPoc, 20), style = line.style_dashed)
+    lPoc.set_xy1(periodStartT, devPoc)
+    lPoc.set_xy2(time_close, devPoc)
+    lVah.set_xy1(periodStartT, devVah)
+    lVah.set_xy2(time_close, devVah)
+    lVal.set_xy1(periodStartT, devVal)
+    lVal.set_xy2(time_close, devVal)
+
+// Small tags at the right-hand end of each line, rebuilt on the last bar only.
+var array<label> vpTags = array.new<label>()
+vpTag(float y, string txt, color c) =>
+    label.new(time_close, y, txt, xloc = xloc.bar_time, style = label.style_label_left, color = color.new(color.black, 100), textcolor = c, size = size.tiny)
+
+if barstate.islast
+    while vpTags.size() > 0
+        label gone = vpTags.pop()
+        gone.delete()
+    if showProfile and not na(devPoc)
+        vpTags.push(vpTag(devPoc, "POC", colPoc))
+        vpTags.push(vpTag(devVah, "VAH", colPoc))
+        vpTags.push(vpTag(devVal, "VAL", colPoc))
+    if showPrevProfile and not na(lpPoc)
+        vpTags.push(vpTag(prevPoc, "prior POC", color.new(colPoc, 35)))
+        vpTags.push(vpTag(prevVah, "prior VAH", color.new(colPoc, 35)))
+        vpTags.push(vpTag(prevVal, "prior VAL", color.new(colPoc, 35)))
+
+// The per-bar values stay available in the Data Window (and to alerts) without drawing a path.
+plot(devPoc, "POC", color = colPoc, display = display.data_window)
+plot(devVah, "Value Area High", color = colPoc, display = display.data_window)
+plot(devVal, "Value Area Low", color = colPoc, display = display.data_window)
+plot(prevPoc, "Prior POC", color = colPoc, display = display.data_window)
 
 valuePos = na(devPoc) ? 0 : close > devVah ? 1 : close < devVal ? -1 : 0
+
+// ============================================================
+// VOLUME DELTA  (estimated)
+// ============================================================
+// There is no true bid/ask data in Pine. This splits each chart bar into lower-timeframe bars
+// and signs each one's volume by its direction, which is the usual approximation. On forex and
+// CFD symbols the underlying figure is tick volume, so treat the result as activity, not size.
+
+deltaTfAuto = timeframe.isintraday ? "1" : timeframe.isdaily ? "30" : "240"
+deltaTfWant = deltaTfInput == "Auto" ? deltaTfAuto : deltaTfInput
+deltaTf     = timeframe.in_seconds(deltaTfWant) < tfSeconds ? deltaTfWant : timeframe.period
+signedVol() => close > open ? volume : close < open ? -volume : 0.0
+
+ltfDeltas = request.security_lower_tf(syminfo.tickerid, deltaTf, signedVol())
+barDeltaFallback = close > open ? barVol : close < open ? -barVol : 0.0
+barDelta  = ltfDeltas.size() > 0 ? nz(ltfDeltas.sum()) : barDeltaFallback
+
+var float cumDelta = 0.0
+if newAnchor
+    cumDelta := 0.0
+cumDelta += barDelta
+
+buyVol     = (barVol + barDelta) / 2
+sumVolN    = math.sum(barVol, pressureLen)
+buyPct     = sumVolN > 0 ? math.sum(buyVol, pressureLen) / sumVolN * 100 : na
+priceChgN  = close - close[pressureLen]
+buyDom     = buyPct >= domPct
+sellDom    = buyPct <= 100 - domPct
+// Dominant flow that price has not followed: the other side is taking it without giving ground.
+buyAbsorbed  = buyDom and priceChgN <= 0
+sellAbsorbed = sellDom and priceChgN >= 0
+flowState  = na(buyPct) ? "n/a" : buyAbsorbed ? "Absorption — buying absorbed" : sellAbsorbed ? "Absorption — selling absorbed" : buyDom ? "Buying dominance" : sellDom ? "Selling dominance" : "Balanced"
+flowColor  = na(buyPct) ? color.gray : buyAbsorbed or sellAbsorbed ? colAccum : buyDom ? colBull : sellDom ? colBear : color.white
+tickVolNote = syminfo.type == "forex" or syminfo.type == "cfd" ? "  (tick volume)" : ""
+
+plot(barDelta, "Bar Delta (est.)", display = display.data_window)
+plot(cumDelta, "Net Delta (est.)", display = display.data_window)
 
 // ============================================================
 // DASHBOARD
@@ -550,7 +656,7 @@ statusColor(string st) =>
     st == "Swept" ? colAccum : st == "Broken" ? color.white : color.gray
 
 dashPos = dashPosition == "Top right" ? position.top_right : dashPosition == "Top left" ? position.top_left : dashPosition == "Bottom right" ? position.bottom_right : position.bottom_left
-var table dash = table.new(dashPos, 2, 9, bgcolor = color.new(#0d1321, 15), border_width = 1, border_color = color.new(color.gray, 85))
+var table dash = table.new(dashPos, 2, 12, bgcolor = color.new(#0d1321, 15), border_width = 1, border_color = color.new(color.gray, 85))
 
 dashRow(int row, string k, string v, color vc) =>
     dash.cell(0, row, k, text_color = color.gray, text_halign = text.align_left, text_size = size.small)
@@ -571,6 +677,11 @@ if showDashboard and barstate.islast
     vaText  = na(devPoc) ? "n/a" : valuePos > 0 ? "Above value (extended up)" : valuePos < 0 ? "Below value (extended down)" : "Inside value"
     dashRow(7, "POC (" + anchorName + ")", pocText, colPoc)
     dashRow(8, "Value area", vaText, valuePos > 0 ? colBull : valuePos < 0 ? colBear : color.white)
+    deltaText = sawVolume ? (cumDelta >= 0 ? "+" : "") + str.tostring(cumDelta, format.volume) + tickVolNote : "n/a (no volume on this symbol)"
+    pressText = na(buyPct) ? "n/a" : str.tostring(buyPct, "#") + "% buy / " + str.tostring(100 - buyPct, "#") + "% sell"
+    dashRow(9, "Net Δ est. (" + anchorName + ")", deltaText, cumDelta >= 0 ? colBull : colBear)
+    dashRow(10, "Pressure (" + str.tostring(pressureLen) + " bars)", pressText, na(buyPct) ? color.gray : buyPct >= 50 ? colBull : colBear)
+    dashRow(11, "Flow state", flowState, flowColor)
     dashRow(6, "Last liquidity", lastLiqText + (na(lastLiqBar) ? "" : "  (" + str.tostring(bar_index - lastLiqBar) + " bars ago)"), color.white)
 
 // ============================================================
@@ -586,3 +697,5 @@ alertcondition(bslSwept, title = "BSL Swept", message = "Buy-side liquidity was 
 alertcondition(sslSwept, title = "SSL Swept", message = "Sell-side liquidity was taken and price closed back above it on {{ticker}} {{interval}}.")
 alertcondition(bslRun, title = "BSL Run", message = "Price closed above a buy-side liquidity pool on {{ticker}} {{interval}}.")
 alertcondition(sslRun, title = "SSL Run", message = "Price closed below a sell-side liquidity pool on {{ticker}} {{interval}}.")
+alertcondition(buyAbsorbed and not buyAbsorbed[1], title = "Buying Absorbed", message = "Buying is dominant but price has not risen over the pressure window on {{ticker}} {{interval}}.")
+alertcondition(sellAbsorbed and not sellAbsorbed[1], title = "Selling Absorbed", message = "Selling is dominant but price has not fallen over the pressure window on {{ticker}} {{interval}}.")
