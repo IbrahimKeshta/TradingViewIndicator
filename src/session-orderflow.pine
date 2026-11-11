@@ -1,0 +1,277 @@
+//@version=6
+// Session Order Flow — context overlay, built in stages.
+//
+// Stage 1 (this file so far): session boxes, range-used gauge, reference-range sweep state.
+// Later stages add liquidity pools, a session volume profile, volume delta and a full dashboard.
+//
+// Nothing here repaints: every classification that is drawn or alerted is decided on a confirmed
+// bar close, and no request.security call is used — the higher-period values (day / week range,
+// prior-period high and low) are accumulated locally from chart bars, so history and realtime
+// are computed by the same code path.
+//
+// All drawings are anchored by time (xloc.bar_time), not bar index, so no max_bars_back is needed.
+indicator("Session Order Flow", shorttitle = "SESS-OF", overlay = true, max_boxes_count = 200, max_lines_count = 100, max_labels_count = 100)
+
+// ============================================================
+// INPUTS
+// ============================================================
+
+// ---------------- Market mode ----------------
+marketMode = input.string("Auto", "Market Mode", options = ["Auto", "24h sessions", "Single session"], group = "Market", tooltip = "24h sessions: Asia / London / New York boxes, and the Asia range is the reference range for the sweep state. Meant for crypto, forex, CFDs and futures.\n\nSingle session: one opening-range box per day, and the prior day's high and low are the reference range. Meant for exchange-hours markets such as EGX.\n\nAuto picks 24h sessions for crypto, forex, CFD and futures symbols and Single session for everything else.")
+
+// ---------------- Sessions (24h mode) ----------------
+sessionTimezone = input.string("America/New_York", "Session Timezone", group = "Sessions (24h mode)", tooltip = "The default hours below are quoted in New York time, which lets Pine's DST-aware session matching follow the real opens. Change the hours too if you change this.")
+showAsia        = input.bool(true, "Show Asia", group = "Sessions (24h mode)", inline = "asia")
+asiaSession     = input.session("1800-0000", "", group = "Sessions (24h mode)", inline = "asia")
+showLondon      = input.bool(true, "Show London", group = "Sessions (24h mode)", inline = "ldn")
+londonSession   = input.session("0200-0500", "", group = "Sessions (24h mode)", inline = "ldn")
+showNewYork     = input.bool(true, "Show New York", group = "Sessions (24h mode)", inline = "ny")
+newYorkSession  = input.session("0700-1000", "", group = "Sessions (24h mode)", inline = "ny")
+
+// ---------------- Opening range (single-session mode) ----------------
+showOpenRange = input.bool(true, "Show Opening Range", group = "Opening Range (single-session mode)")
+openRangeMins = input.int(30, "Opening Range Length (minutes)", minval = 5, maxval = 240, step = 5, group = "Opening Range (single-session mode)", tooltip = "The first N minutes of each trading day. The box is only drawn when the chart timeframe is no larger than this.")
+
+// ---------------- Range used ----------------
+avgRangeLen   = input.int(14, "Average Range Length (periods)", minval = 2, maxval = 60, group = "Range Used", tooltip = "Periods are days on an intraday chart, weeks on a daily chart, months on a weekly chart. The average is built from completed periods on the chart, so it needs that many periods of loaded history.")
+exhaustedPct  = input.float(85.0, "Exhausted At (% of average range)", minval = 10, step = 5, group = "Range Used")
+
+// ---------------- Display ----------------
+showRefLines   = input.bool(true, "Show Reference High / Low", group = "Display")
+showDashboard  = input.bool(true, "Show Dashboard", group = "Display")
+dashPosition   = input.string("Top right", "Dashboard Position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = "Display")
+colBull        = input.color(#26c6da, "Bull", group = "Display", inline = "col")
+colBear        = input.color(#ff1f5a, "Bear", group = "Display", inline = "col")
+colAccum       = input.color(#d4c98a, "Accumulation", group = "Display", inline = "col")
+colRef         = input.color(#b0b0b0, "Reference", group = "Display", inline = "col")
+boxFillTransp  = input.int(90, "Box Fill Transparency", minval = 50, maxval = 100, group = "Display")
+
+// ============================================================
+// MODE RESOLUTION
+// ============================================================
+
+autoIs24h    = syminfo.type == "crypto" or syminfo.type == "forex" or syminfo.type == "cfd" or syminfo.type == "futures"
+is24hMode    = marketMode == "24h sessions" or (marketMode == "Auto" and autoIs24h)
+tfSeconds    = timeframe.in_seconds()
+// Session boxes need bars much smaller than the session; on anything above 1h the windows
+// stop being resolvable and the script falls back to prior-period context only.
+sessionsOn   = is24hMode and timeframe.isintraday and tfSeconds <= 3600
+openRangeOn  = not is24hMode and timeframe.isintraday and tfSeconds <= openRangeMins * 60
+
+// The "period" that range-used and the fallback reference range are measured over.
+anchorTf     = timeframe.isintraday ? "D" : timeframe.isdaily ? "W" : timeframe.isweekly ? "M" : "12M"
+anchorName   = timeframe.isintraday ? "day" : timeframe.isdaily ? "week" : timeframe.isweekly ? "month" : "year"
+
+// ============================================================
+// SESSION BOXES
+// ============================================================
+
+// state: idle -> forming (inside the window) -> watch (window closed, range frozen)
+//        -> bull / bear (first confirmed close outside the frozen range).
+// A session that never closes outside its range before its next occurrence stays ACCUMULATION.
+type Sess
+    string name
+    bool   active  = false
+    string state   = "idle"
+    float  hi      = na
+    float  lo      = na
+    box    bx      = na
+    bool   ended   = false   // true only on the first bar after the window
+    bool   brokeUp = false   // true only on the bar the breakout is confirmed
+    bool   brokeDn = false
+
+method setLook(Sess s, string status, color c) =>
+    if not na(s.bx)
+        s.bx.set_text(s.name + " " + status)
+        s.bx.set_border_color(c)
+        s.bx.set_text_color(c)
+        s.bx.set_bgcolor(color.new(c, boxFillTransp))
+    s
+
+method update(Sess s, bool inSess, bool show) =>
+    s.ended   := false
+    s.brokeUp := false
+    s.brokeDn := false
+    if inSess and not s.active
+        s.hi    := high
+        s.lo    := low
+        s.state := "forming"
+        s.bx    := show ? box.new(time, high, time_close, low, xloc = xloc.bar_time, border_width = 1, border_style = line.style_dashed, text_size = size.small, text_halign = text.align_left, text_valign = text.align_top) : na
+        s.setLook("ACCUMULATION", colAccum)
+    else if inSess
+        s.hi := math.max(s.hi, high)
+        s.lo := math.min(s.lo, low)
+        if not na(s.bx)
+            s.bx.set_top(s.hi)
+            s.bx.set_bottom(s.lo)
+            s.bx.set_right(time_close)
+    if not inSess and s.active
+        s.state := "watch"
+        s.ended := true
+    if not inSess and s.state == "watch" and barstate.isconfirmed
+        if close > s.hi
+            s.state   := "bull"
+            s.brokeUp := true
+            s.setLook("BULL BREAKOUT", colBull)
+        else if close < s.lo
+            s.state   := "bear"
+            s.brokeDn := true
+            s.setLook("BEAR BREAKOUT", colBear)
+    s.active := inSess
+    s
+
+inWindow(string sess) => not na(time(timeframe.period, sess, sessionTimezone))
+
+var Sess asia    = Sess.new("ASIA")
+var Sess london  = Sess.new("LONDON")
+var Sess newYork = Sess.new("NEW YORK")
+var Sess openRng = Sess.new("OPENING RANGE")
+
+newDay = timeframe.change("D")
+var int dayOpenTime = na
+if newDay or na(dayOpenTime)
+    dayOpenTime := time
+
+// Windows are evaluated on every bar, outside any short-circuited expression.
+inAsia      = inWindow(asiaSession)
+inLondon    = inWindow(londonSession)
+inNewYork   = inWindow(newYorkSession)
+inOpenRange = time - dayOpenTime < openRangeMins * 60000
+
+// Asia is always tracked in 24h mode, even when hidden, because it is the reference range.
+asia.update(sessionsOn and inAsia, showAsia)
+london.update(sessionsOn and showLondon and inLondon, true)
+newYork.update(sessionsOn and showNewYork and inNewYork, true)
+openRng.update(openRangeOn and showOpenRange and inOpenRange, true)
+
+anyBullBreak = asia.brokeUp or london.brokeUp or newYork.brokeUp or openRng.brokeUp
+anyBearBreak = asia.brokeDn or london.brokeDn or newYork.brokeDn or openRng.brokeDn
+
+// ============================================================
+// RANGE USED  (today's range vs. the average of completed periods)
+// ============================================================
+
+newAnchor = timeframe.change(anchorTf)
+
+var float        curHi      = na
+var float        curLo      = na
+var float        prevHi     = na
+var float        prevLo     = na
+var int          periods    = 0     // completed-or-started periods seen; the first is partial and is never averaged
+var array<float> pastRanges = array.new<float>()
+
+if na(curHi)
+    curHi := high
+    curLo := low
+else if newAnchor
+    if periods > 0
+        pastRanges.push(curHi - curLo)
+        if pastRanges.size() > avgRangeLen
+            pastRanges.shift()
+        prevHi := curHi
+        prevLo := curLo
+    periods += 1
+    curHi := high
+    curLo := low
+else
+    curHi := math.max(curHi, high)
+    curLo := math.min(curLo, low)
+
+avgRangeReady = pastRanges.size() >= math.min(avgRangeLen, 5)
+avgRange      = avgRangeReady ? pastRanges.avg() : na
+rangeUsedPct  = avgRange > 0 ? (curHi - curLo) / avgRange * 100 : na
+rangeExhausted = not na(rangeUsedPct) and rangeUsedPct >= exhaustedPct
+
+// ============================================================
+// REFERENCE RANGE AND SWEEP STATE
+// ============================================================
+// 24h mode with session boxes available: the Asia range, once Asia has closed.
+// Otherwise: the prior period's high and low (prior day intraday, prior week on daily, ...).
+//
+// Per side:  Intact  — never traded beyond
+//            Swept   — traded beyond, currently closed back inside (stops taken, move rejected)
+//            Broken  — traded beyond and currently closing beyond (move accepted)
+
+var float  refHi      = na
+var float  refLo      = na
+var bool   hiTouched  = false
+var bool   loTouched  = false
+var line   refHiLine  = na
+var line   refLoLine  = na
+refName = sessionsOn ? "Asia" : "Prior " + anchorName
+
+bool refReset  = false
+float newRefHi = na
+float newRefLo = na
+if sessionsOn
+    if asia.active
+        refHi := na
+        refLo := na
+    else if asia.ended
+        refReset := true
+        newRefHi := asia.hi
+        newRefLo := asia.lo
+else if newAnchor and not na(prevHi)
+    refReset := true
+    newRefHi := prevHi
+    newRefLo := prevLo
+
+if refReset
+    refHi     := newRefHi
+    refLo     := newRefLo
+    hiTouched := false
+    loTouched := false
+    if showRefLines
+        refHiLine := line.new(time, refHi, time_close, refHi, xloc = xloc.bar_time, color = colRef, style = line.style_dotted)
+        refLoLine := line.new(time, refLo, time_close, refLo, xloc = xloc.bar_time, color = colRef, style = line.style_dotted)
+else if not na(refHi) and not na(refHiLine)
+    refHiLine.set_x2(time_close)
+    refLoLine.set_x2(time_close)
+
+hiTouchedNow = not na(refHi) and high > refHi
+loTouchedNow = not na(refLo) and low < refLo
+// A sweep event: first trade beyond the level on a bar that closes back inside it.
+hiSweepEvent = barstate.isconfirmed and hiTouchedNow and not hiTouched and close <= refHi
+loSweepEvent = barstate.isconfirmed and loTouchedNow and not loTouched and close >= refLo
+if hiTouchedNow
+    hiTouched := true
+if loTouchedNow
+    loTouched := true
+
+sideStatus(float level, bool touched, bool beyond) =>
+    na(level) ? "Forming" : not touched ? "Intact" : beyond ? "Broken" : "Swept"
+
+hiStatus = sideStatus(refHi, hiTouched, close > refHi)
+loStatus = sideStatus(refLo, loTouched, close < refLo)
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+
+statusColor(string st) =>
+    st == "Swept" ? colAccum : st == "Broken" ? color.white : color.gray
+
+dashPos = dashPosition == "Top right" ? position.top_right : dashPosition == "Top left" ? position.top_left : dashPosition == "Bottom right" ? position.bottom_right : position.bottom_left
+var table dash = table.new(dashPos, 2, 4, bgcolor = color.new(#0d1321, 15), border_width = 1, border_color = color.new(color.gray, 85))
+
+dashRow(int row, string k, string v, color vc) =>
+    dash.cell(0, row, k, text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    dash.cell(1, row, v, text_color = vc, text_halign = text.align_left, text_size = size.small)
+
+if showDashboard and barstate.islast
+    modeText  = is24hMode ? (sessionsOn ? "24h sessions" : "24h (timeframe too high for session boxes)") : (openRangeOn ? "Single session" : "Single session (no opening-range box on this timeframe)")
+    rangeText = na(rangeUsedPct) ? "n/a (needs more history)" : str.tostring(rangeUsedPct, "#") + "% of avg " + anchorName + (rangeExhausted ? "  [EXHAUSTED]" : "")
+    dashRow(0, "Mode", modeText, color.white)
+    dashRow(1, "Range used", rangeText, rangeExhausted ? colBear : color.white)
+    dashRow(2, refName + " high", hiStatus + (na(refHi) ? "" : "  @ " + str.tostring(refHi, format.mintick)), statusColor(hiStatus))
+    dashRow(3, refName + " low", loStatus + (na(refLo) ? "" : "  @ " + str.tostring(refLo, format.mintick)), statusColor(loStatus))
+
+// ============================================================
+// ALERTS
+// ============================================================
+
+alertcondition(anyBullBreak, title = "Session Bull Breakout", message = "A session range closed out to the upside on {{ticker}} {{interval}}.")
+alertcondition(anyBearBreak, title = "Session Bear Breakout", message = "A session range closed out to the downside on {{ticker}} {{interval}}.")
+alertcondition(hiSweepEvent, title = "Reference High Swept", message = "Reference high was taken and price closed back below it on {{ticker}} {{interval}}.")
+alertcondition(loSweepEvent, title = "Reference Low Swept", message = "Reference low was taken and price closed back above it on {{ticker}} {{interval}}.")
+alertcondition(rangeExhausted and not rangeExhausted[1], title = "Range Exhausted", message = "Average range used has crossed the exhaustion threshold on {{ticker}} {{interval}}.")
