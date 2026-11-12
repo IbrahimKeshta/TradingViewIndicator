@@ -10,7 +10,7 @@ into TradingView.
 |---|---|---|
 | [`src/ict-rsi-ma-indicator.pine`](src/ict-rsi-ma-indicator.pine) | Market structure, order blocks, fair value gaps and session killzones, scored into graded trade setups with an entry zone, a stop, targets and a trailing stop | On the price chart |
 | [`src/gann-angles.pine`](src/gann-angles.pine) | Gann price levels (three modes) projected from an automatic or manual anchor, plus Gann time cycles | On the price chart |
-| [`src/session-orderflow.pine`](src/session-orderflow.pine) | Session ranges, liquidity pools, a developing volume profile and an estimated volume delta, reduced to a favourable / wait / avoid reading of current conditions. Context only — no entry signals | On the price chart |
+| [`src/session-orderflow.pine`](src/session-orderflow.pine) | Session ranges, liquidity pools, a developing volume profile and an estimated volume delta, reduced to a favourable / wait / avoid reading of current conditions. Context first; an optional experimental trade module is off by default | On the price chart |
 
 They are independent. Run any one on its own, or several together.
 
@@ -676,7 +676,8 @@ first: **what kind of day is it, and is this a sensible place to be looking at a
 session ranges, the resting liquidity, where volume has actually traded, and which side is pressing —
 then reduces that to a plain three-way verdict.
 
-It has **no entry signals, no stops and no targets**, on purpose. It is context. Use it beside the
+By default it draws **no entry signals, no stops and no targets**, on purpose. It is context; an
+optional trade module is described further down. Use it beside the
 confluence indicator or on its own.
 
 ## Two market modes
@@ -753,6 +754,44 @@ no learning behind it.
 | Absorption — selling absorbed | Selling is dominant but price has not fallen |
 | Balanced | Neither side reaches the threshold |
 
+## The trade module (experimental)
+
+Off by default. Turn on `Enable Trade Module` and the script draws an entry, a stop and two targets,
+and keeps a record of how those trades would have gone.
+
+| Part | Rule |
+|---|---|
+| Entry | A **sweep** on a closed bar: a liquidity pool or the reference high / low is traded through and the same bar closes back inside. Low swept → long, high swept → short. Entry is that bar's close. One trade at a time |
+| Stop | Beyond the sweep bar's wick plus a small buffer, never closer than 0.5 ATR. A sweep needing a stop wider than 3 ATR is skipped |
+| TP1 | 1R — as far from entry as the stop is |
+| TP2 | The nearest opposing pool, reference level or POC between 1.5R and 4R away; if there is none, 2R |
+| After TP1 | The stop moves to entry |
+
+`Conditions Filter` decides which sweeps become trades: `Favourable only`, `Not against bias` (the
+default), `Any except Avoid`, or `No filter`. **Run `No filter` first.** It is the baseline: if a
+stricter filter does not beat it, the verdict is not adding anything on that market.
+
+### Reading the record
+
+The `Record` row assumes half the position comes off at TP1 and half at TP2.
+
+| Outcome | Result with the defaults |
+|---|---|
+| Stopped before TP1 | −1R |
+| TP1, then stopped at entry | +0.5R |
+| TP1 and TP2 | +0.5R plus half of TP2's R |
+
+It reports the average and total in R and the share of trades in each bucket, not a single "win
+rate". A high share of `TP1 only` with a small average R is a very different result from the same
+share with a large one, and one percentage would hide that.
+
+Three things keep it honest. A bar that reaches both the stop and a target is scored as the stop. TP2
+on the same bar as TP1 only counts if the bar never traded back to entry. And the figures are
+**before spread, commission and slippage**, which matter most on small stops.
+
+This module has not been validated on any market. Treat its record as a description of the past on
+the bars loaded, not as an expectation.
+
 ## What the volume figures are, and are not
 
 Pine has no bid/ask data. **Delta here is an estimate**: each chart bar is split into 1-minute bars
@@ -772,7 +811,8 @@ the profile is coarser — most visibly on older days, and on daily charts furth
 ## Alerts
 
 Session bull / bear breakout, reference high / low swept, range exhausted, BSL / SSL swept, BSL / SSL
-run, buying / selling absorbed, and conditions turning favourable on either side.
+run, buying / selling absorbed, and conditions turning favourable on either side. With the trade
+module on: long entry, short entry, TP1 reached, TP2 reached and stopped.
 
 ## Settings worth knowing
 

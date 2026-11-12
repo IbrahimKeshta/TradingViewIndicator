@@ -7,7 +7,8 @@
 //          prior period's final levels.
 // Stage 4: estimated volume delta from lower-timeframe bars (net delta, pressure, flow state).
 // Stage 5: conditions verdict (a fixed rule checklist) and the grouped dashboard.
-// There are deliberately no entry signals here; this script describes context only.
+// Stage 6: an optional, experimental trade module (off by default). With it off, this script
+//          describes context only and draws no entries.
 //
 // Nothing here repaints: every classification that is drawn or alerted is decided on a confirmed
 // bar close, and no higher-timeframe request.security call is used — the higher-period values (day / week range,
@@ -19,7 +20,7 @@
 // chart bar. Those feed the volume profile and the delta estimate.
 //
 // All drawings are anchored by time (xloc.bar_time), not bar index, so no max_bars_back is needed.
-indicator("Session Order Flow", shorttitle = "SESS-OF", overlay = true, max_boxes_count = 200, max_lines_count = 100, max_labels_count = 100)
+indicator("Session Order Flow", shorttitle = "SESS-OF", overlay = true, max_boxes_count = 200, max_lines_count = 500, max_labels_count = 500)
 
 // ============================================================
 // INPUTS
@@ -69,6 +70,21 @@ colPoc          = input.color(#ffeb3b, "POC / Value Area", group = "Volume Profi
 deltaTfInput = input.string("Auto", "Lower Timeframe (delta and profile)", options = ["Auto", "1", "3", "5", "15", "30", "60", "240"], group = "Volume Delta", tooltip = "The small bars each chart bar is split into. They build the volume profile and the delta estimate.\n\nDelta is an estimate: each lower-timeframe bar's whole volume is counted as buying if it closed up and selling if it closed down. Auto uses 1-minute bars on intraday charts, 30-minute on daily and 4-hour above that.\n\nTradingView only serves a limited depth of lower-timeframe history; older chart bars fall back to the chart bar's own direction. If the choice is not below the chart timeframe, the chart bar's own direction is used throughout.")
 pressureLen  = input.int(20, "Pressure Window (bars)", minval = 2, maxval = 200, group = "Volume Delta")
 domPct       = input.float(55.0, "Dominance Threshold (% of volume)", minval = 51, maxval = 90, step = 1, group = "Volume Delta", tooltip = "Buying (or selling) share of volume over the pressure window needed to call one side dominant. If one side is dominant but price has not moved its way over the same window, the state reads Absorption instead.")
+
+// ---------------- Trade module (experimental) ----------------
+showTrades   = input.bool(false, "Enable Trade Module", group = "Trade Module (experimental)", tooltip = "Draws an entry, stop and two targets when a liquidity level is swept: traded through, then closed back inside on the same bar. Entry is that bar's close.\n\nThis is an unvalidated experiment. The record it reports ignores spread, commission and slippage, and assumes half the position is closed at TP1 and half at TP2.")
+tradeGate    = input.string("Not against bias", "Conditions Filter", options = ["Favourable only", "Not against bias", "Any except Avoid", "No filter"], group = "Trade Module (experimental)", tooltip = "Which sweeps become trades.\n\nFavourable only: the verdict is FAVOURABLE for the trade's side.\nNot against bias: verdict is not AVOID and the bias is not opposite.\nAny except Avoid: verdict is not AVOID.\nNo filter: every sweep. Use this as the baseline to see whether the filter is adding anything.")
+trigPools    = input.bool(true, "Trigger On Liquidity Pool Sweeps", group = "Trade Module (experimental)")
+trigRef      = input.bool(true, "Trigger On Reference High / Low Sweeps", group = "Trade Module (experimental)")
+stopBufAtr   = input.float(0.1, "Stop Buffer Beyond Sweep Wick (x ATR)", minval = 0.0, step = 0.05, group = "Trade Module (experimental)")
+minRiskAtr   = input.float(0.5, "Minimum Stop Distance (x ATR)", minval = 0.1, step = 0.1, group = "Trade Module (experimental)", tooltip = "A stop closer than this is widened to it, so ordinary noise does not take the trade out.")
+maxRiskAtr   = input.float(3.0, "Maximum Stop Distance (x ATR)", minval = 0.5, step = 0.5, group = "Trade Module (experimental)", tooltip = "A sweep whose stop would be further than this is skipped.")
+tp1R         = input.float(1.0, "TP1 (R)", minval = 0.25, step = 0.25, group = "Trade Module (experimental)", tooltip = "R is the distance from entry to the initial stop. 1.0 means TP1 is as far from entry as the stop is.")
+tp2MinR      = input.float(1.5, "TP2 Minimum (R)", minval = 0.5, step = 0.25, group = "Trade Module (experimental)", tooltip = "TP2 is the nearest opposing liquidity pool, reference level or POC that is at least this far away.")
+tp2MaxR      = input.float(4.0, "TP2 Maximum (R)", minval = 1.0, step = 0.5, group = "Trade Module (experimental)", tooltip = "If the nearest such level is further than this, or there is none, the fallback is used instead.")
+tp2FallbackR = input.float(2.0, "TP2 Fallback (R)", minval = 0.5, step = 0.25, group = "Trade Module (experimental)")
+beAfterTp1   = input.bool(true, "Move Stop To Entry After TP1", group = "Trade Module (experimental)")
+maxTradeBars = input.int(0, "Close Trade After N Bars (0 = never)", minval = 0, group = "Trade Module (experimental)")
 
 // ---------------- Conditions ----------------
 lowVolRatio = input.float(0.7, "Low-Volume Threshold (x normal)", minval = 0.1, maxval = 1.0, step = 0.05, group = "Conditions", tooltip = "Recent volume (over the pressure window) below this fraction of the longer-run average counts as low participation.")
@@ -699,6 +715,157 @@ favourableLong  = verdict == 2 and bias > 0
 favourableShort = verdict == 2 and bias < 0
 
 // ============================================================
+// TRADE MODULE  (experimental, off by default)
+// ============================================================
+// Entry   a sweep on a confirmed bar: a liquidity pool or the reference high / low is traded
+//         through and the same bar closes back inside. Low swept -> long, high swept -> short.
+//         Entry price is that bar's close. One trade at a time.
+// Stop    beyond the sweep bar's wick plus a buffer, never closer than the minimum distance.
+// TP1     a fixed multiple of the initial risk (1R by default).
+// TP2     the nearest opposing pool / reference level / POC inside the allowed R window,
+//         otherwise the fallback R.
+// Record  half the position is taken off at TP1 and half at TP2. A bar that reaches both the
+//         stop and a target is scored as the stop. Costs are not modelled.
+
+type Trade
+    int   dir
+    float entry
+    float stop
+    float risk
+    float tp1
+    float tp2
+    bool  tp1Hit  = false
+    int   openBar = 0
+    line  lnEntry = na
+    line  lnStop  = na
+    line  lnTp1   = na
+    line  lnTp2   = na
+    label lbStop  = na
+    label lbTp1   = na
+    label lbTp2   = na
+
+var Trade trade   = na
+var int   nTrades  = 0
+var int   nStopped = 0     // full loss: stopped before TP1
+var int   nTp1Only = 0     // TP1 reached, remainder stopped
+var int   nTp2     = 0     // both targets reached
+var int   nTimeout = 0
+var float totalR   = 0.0
+
+bool longEntry  = false
+bool shortEntry = false
+bool evStopped  = false
+bool evTp1      = false
+bool evTp2      = false
+
+gateOk(int dir) =>
+    tradeGate == "No filter" or (verdict != 0 and (tradeGate == "Any except Avoid" or (tradeGate == "Not against bias" and bias != -dir) or (tradeGate == "Favourable only" and verdict == 2 and bias == dir)))
+
+// Keeps the level nearest to entry among those at least minT away in the trade's direction.
+nearerTarget(float best, float lv, float minT, int dir) =>
+    bool ok = not na(lv) and (dir > 0 ? lv >= minT : lv <= minT)
+    ok and (na(best) or (dir > 0 ? lv < best : lv > best)) ? lv : best
+
+// ---- manage the open trade (from the bar after entry) ----
+if not na(trade) and bar_index > trade.openBar
+    Trade t = trade
+    bool  isLong  = t.dir > 0
+    bool  hitStop = isLong ? low <= t.stop : high >= t.stop
+    bool  hitTp1  = isLong ? high >= t.tp1 : low <= t.tp1
+    bool  hitTp2  = isLong ? high >= t.tp2 : low <= t.tp2
+    float tp2R    = math.abs(t.tp2 - t.entry) / t.risk
+    float resultR = na
+    if not t.tp1Hit
+        if hitStop
+            resultR   := -1.0
+            nStopped  += 1
+            evStopped := true
+        else if hitTp1
+            t.tp1Hit := true
+            evTp1    := true
+            // TP2 on the same bar only counts if the bar never traded back to entry.
+            bool cameBack = isLong ? low <= t.entry : high >= t.entry
+            if hitTp2 and not cameBack
+                resultR := 0.5 * tp1R + 0.5 * tp2R
+                nTp2    += 1
+                evTp2   := true
+            else if beAfterTp1
+                t.stop := t.entry
+                t.lnStop.set_y1(t.stop)
+                t.lnStop.set_y2(t.stop)
+                t.lbStop.set_y(t.stop)
+                t.lbStop.set_text("SL (entry) " + str.tostring(t.stop, format.mintick))
+    else
+        if hitStop
+            float stopR = (t.stop - t.entry) * t.dir / t.risk
+            resultR   := 0.5 * tp1R + 0.5 * stopR
+            nTp1Only  += 1
+            evStopped := true
+        else if hitTp2
+            resultR := 0.5 * tp1R + 0.5 * tp2R
+            nTp2    += 1
+            evTp2   := true
+    if na(resultR) and maxTradeBars > 0 and bar_index - t.openBar >= maxTradeBars
+        float mtmR = (close - t.entry) * t.dir / t.risk
+        resultR  := t.tp1Hit ? 0.5 * tp1R + 0.5 * mtmR : mtmR
+        nTimeout += 1
+
+    t.lnEntry.set_x2(time_close)
+    t.lnStop.set_x2(time_close)
+    t.lnTp1.set_x2(time_close)
+    t.lnTp2.set_x2(time_close)
+    t.lbStop.set_x(time_close)
+    t.lbTp1.set_x(time_close)
+    t.lbTp2.set_x(time_close)
+    if t.tp1Hit
+        t.lbTp1.set_text("TP1 ✓")
+
+    if not na(resultR)
+        totalR  += resultR
+        nTrades += 1
+        label.new(time, high, (resultR > 0 ? "+" : "") + str.tostring(resultR, "#.##") + "R", xloc = xloc.bar_time, yloc = yloc.abovebar, style = label.style_none, textcolor = resultR > 0 ? colBull : resultR < 0 ? colBear : color.gray, size = size.small)
+        trade := na
+
+// ---- open a new trade ----
+if showTrades and na(trade) and barstate.isconfirmed
+    bool lowSwept  = (trigPools and sslSwept) or (trigRef and loSweepEvent)
+    bool highSwept = (trigPools and bslSwept) or (trigRef and hiSweepEvent)
+    int  dir = lowSwept and not highSwept ? 1 : highSwept and not lowSwept ? -1 : 0
+    if dir != 0 and gateOk(dir)
+        float wickStop = dir > 0 ? low - atrValue * stopBufAtr : high + atrValue * stopBufAtr
+        float risk     = math.max(math.abs(close - wickStop), atrValue * minRiskAtr)
+        if risk > 0 and risk <= atrValue * maxRiskAtr
+            float entry = close
+            float stop  = entry - dir * risk
+            float tp1   = entry + dir * risk * tp1R
+            float minT  = entry + dir * risk * tp2MinR
+            float best  = na
+            if pools.size() > 0
+                for i = 0 to pools.size() - 1
+                    Pool q = pools.get(i)
+                    if q.isHigh == (dir > 0)
+                        best := nearerTarget(best, q.level, minT, dir)
+            best := nearerTarget(best, dir > 0 ? refHi : refLo, minT, dir)
+            best := nearerTarget(best, devPoc, minT, dir)
+            best := nearerTarget(best, prevPoc, minT, dir)
+            float tp2 = na(best) or math.abs(best - entry) > risk * tp2MaxR ? entry + dir * risk * tp2FallbackR : best
+
+            color cDir = dir > 0 ? colBull : colBear
+            Trade t = Trade.new(dir, entry, stop, risk, tp1, tp2)
+            t.openBar := bar_index
+            t.lnEntry := line.new(time, entry, time_close, entry, xloc = xloc.bar_time, color = color.gray, style = line.style_dotted)
+            t.lnStop  := line.new(time, stop, time_close, stop, xloc = xloc.bar_time, color = colBear, width = 2)
+            t.lnTp1   := line.new(time, tp1, time_close, tp1, xloc = xloc.bar_time, color = colBull)
+            t.lnTp2   := line.new(time, tp2, time_close, tp2, xloc = xloc.bar_time, color = colBull, width = 2)
+            t.lbStop  := vpTag(stop, "SL " + str.tostring(stop, format.mintick), colBear)
+            t.lbTp1   := vpTag(tp1, "TP1 " + str.tostring(tp1, format.mintick), colBull)
+            t.lbTp2   := vpTag(tp2, "TP2 " + str.tostring(tp2, format.mintick), colBull)
+            label.new(time, close, dir > 0 ? "BUY" : "SELL", xloc = xloc.bar_time, yloc = dir > 0 ? yloc.belowbar : yloc.abovebar, style = dir > 0 ? label.style_label_up : label.style_label_down, color = cDir, textcolor = color.white, size = size.small)
+            trade      := t
+            longEntry  := dir > 0
+            shortEntry := dir < 0
+
+// ============================================================
 // DASHBOARD
 // ============================================================
 
@@ -706,7 +873,7 @@ px(float v) => str.tostring(v, format.mintick)
 
 dashPos  = dashPosition == "Top right" ? position.top_right : dashPosition == "Top left" ? position.top_left : dashPosition == "Bottom right" ? position.bottom_right : position.bottom_left
 dashSize = dashTextSize == "Tiny" ? size.tiny : dashTextSize == "Normal" ? size.normal : size.small
-var table dash = table.new(dashPos, 2, 11, bgcolor = color.new(#0d1321, 15), border_width = 1, border_color = color.new(color.gray, 85))
+var table dash = table.new(dashPos, 2, 13, bgcolor = color.new(#0d1321, 15), border_width = 1, border_color = color.new(color.gray, 85))
 
 dashRow(int row, string k, string v, color vc) =>
     dash.cell(0, row, k, text_color = color.gray, text_halign = text.align_left, text_size = dashSize)
@@ -777,6 +944,18 @@ if showDashboard and barstate.islast
         string modeText = is24hMode ? (sessionsOn ? "24h sessions" : "24h, no session boxes on this timeframe") : (openRangeOn ? "Single session" : "Single session, no opening-range box on this timeframe")
         dashRow(10, "Mode", modeText, color.gray)
 
+    if showTrades
+        string tradeText = "No open trade"
+        color  tradeCol  = color.gray
+        if not na(trade)
+            tradeText := (trade.dir > 0 ? "LONG" : "SHORT") + "  entry " + px(trade.entry) + "  ·  SL " + px(trade.stop) + "  ·  TP1 " + px(trade.tp1) + (trade.tp1Hit ? " ✓" : "") + "  ·  TP2 " + px(trade.tp2)
+            tradeCol  := trade.dir > 0 ? colBull : colBear
+        dashRow(11, "Trade (exp.)", tradeText, tradeCol)
+        string recText = "No closed trades yet"
+        if nTrades > 0
+            recText := str.tostring(nTrades) + " trades  ·  avg " + (totalR >= 0 ? "+" : "") + str.tostring(totalR / nTrades, "#.##") + "R  ·  total " + (totalR >= 0 ? "+" : "") + str.tostring(totalR, "#.#") + "R\nstopped " + str.tostring(nStopped * 100.0 / nTrades, "#") + "%  ·  TP1 only " + str.tostring(nTp1Only * 100.0 / nTrades, "#") + "%  ·  TP2 " + str.tostring(nTp2 * 100.0 / nTrades, "#") + "%" + (nTimeout > 0 ? "  ·  timed out " + str.tostring(nTimeout * 100.0 / nTrades, "#") + "%" : "") + "\nbefore costs, " + tradeGate
+        dashRow(12, "Record (exp.)", recText, nTrades == 0 ? color.gray : totalR >= 0 ? colBull : colBear)
+
 // ============================================================
 // ALERTS
 // ============================================================
@@ -794,3 +973,8 @@ alertcondition(buyAbsorbed and not buyAbsorbed[1], title = "Buying Absorbed", me
 alertcondition(sellAbsorbed and not sellAbsorbed[1], title = "Selling Absorbed", message = "Selling is dominant but price has not fallen over the pressure window on {{ticker}} {{interval}}.")
 alertcondition(favourableLong and not favourableLong[1], title = "Conditions Favourable (long side)", message = "Conditions turned favourable for the long side on {{ticker}} {{interval}}. This is context, not an entry signal.")
 alertcondition(favourableShort and not favourableShort[1], title = "Conditions Favourable (short side)", message = "Conditions turned favourable for the short side on {{ticker}} {{interval}}. This is context, not an entry signal.")
+alertcondition(longEntry, title = "Trade Module: Long Entry", message = "Experimental long entry after a low was swept on {{ticker}} {{interval}}. Stop and targets are drawn on the chart.")
+alertcondition(shortEntry, title = "Trade Module: Short Entry", message = "Experimental short entry after a high was swept on {{ticker}} {{interval}}. Stop and targets are drawn on the chart.")
+alertcondition(evTp1, title = "Trade Module: TP1 Reached", message = "TP1 reached on {{ticker}} {{interval}}.")
+alertcondition(evTp2, title = "Trade Module: TP2 Reached", message = "TP2 reached on {{ticker}} {{interval}}.")
+alertcondition(evStopped, title = "Trade Module: Stopped", message = "The open trade was stopped on {{ticker}} {{interval}}.")
