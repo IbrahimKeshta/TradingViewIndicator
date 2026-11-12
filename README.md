@@ -2,7 +2,7 @@
 
 # TradingView Indicators
 
-Two Pine Script v6 indicators for TradingView, written to be read as much as used. Both are single
+Three Pine Script v6 indicators for TradingView, written to be read as much as used. All are single
 self-contained files — no libraries, no external data, nothing to install beyond pasting the script
 into TradingView.
 
@@ -10,8 +10,9 @@ into TradingView.
 |---|---|---|
 | [`src/ict-rsi-ma-indicator.pine`](src/ict-rsi-ma-indicator.pine) | Market structure, order blocks, fair value gaps and session killzones, scored into graded trade setups with an entry zone, a stop, targets and a trailing stop | On the price chart |
 | [`src/gann-angles.pine`](src/gann-angles.pine) | Gann price levels (three modes) projected from an automatic or manual anchor, plus Gann time cycles | On the price chart |
+| [`src/session-orderflow.pine`](src/session-orderflow.pine) | Session ranges, liquidity pools, a developing volume profile and an estimated volume delta, reduced to a favourable / wait / avoid reading of current conditions. Context first; an optional experimental trade module is off by default | On the price chart |
 
-They are independent. Run either on its own, or both together.
+They are independent. Run any one on its own, or several together.
 
 ---
 
@@ -666,7 +667,175 @@ position, so if `Table Position` and `Time Table Position` match, one hides the 
 
 ---
 
-## Things worth knowing before you trade either of these
+# Session Order Flow
+
+## The idea
+
+The confluence indicator answers "is there a setup here?". This one answers the question that comes
+first: **what kind of day is it, and is this a sensible place to be looking at all?** It draws the
+session ranges, the resting liquidity, where volume has actually traded, and which side is pressing —
+then reduces that to a plain three-way verdict.
+
+By default it draws **no entry signals, no stops and no targets**, on purpose. It is context; an
+optional trade module is described further down. Use it beside the
+confluence indicator or on its own.
+
+## Two market modes
+
+The script reads the symbol type and picks a mode. `Market Mode` in the settings overrides it.
+
+| | 24h sessions (crypto, forex, CFDs, futures) | Single session (EGX and other exchange-hours markets) |
+|---|---|---|
+| Boxes | Asia, London and New York ranges | One opening-range box per day (first 30 minutes), stretched to the close |
+| Reference range | The Asia range, once Asia has closed | The prior day's high and low |
+| On a 4h or daily chart | No boxes; prior day / prior week high and low | No boxes; prior day / prior week high and low |
+
+Everything measured "per period" follows the chart: per **day** on an intraday chart, per **week** on
+a daily chart, per **month** on a weekly chart.
+
+## Reading the chart
+
+| What you see | What it means |
+|---|---|
+| Dashed box, sand colour, `ACCUMULATION` | A session range. It stays this way until a bar closes outside it |
+| Box turns teal `BULL BREAKOUT` / red `BEAR BREAKOUT` | The first bar to **close** outside the frozen range. Decided on the close, never changed afterwards |
+| Dotted grey pair | The live reference high and low (Asia range, or prior day / week) |
+| Purple band `BSL` | Buy-side liquidity: an unswept swing high, where stops are likely resting above |
+| Blue band `SSL` | Sell-side liquidity: an unswept swing low |
+| `HTF BSL [1h]` / `HTF SSL [1h]` | The same, from higher-timeframe swings. Thicker band |
+| Grey band `… swept` | A bar traded through the pool and **closed back inside**: stops taken, move rejected |
+| Grey band `… run` | A bar traded through the pool and **closed beyond**: move accepted |
+| Solid yellow line `POC` | Point of control: the price with the most volume so far this period |
+| Dashed yellow `VAH` / `VAL` | Value area: the band around the POC holding 70% of the period's volume |
+| Faint yellow `prior POC / VAH / VAL` | Last period's final levels, carried across this one |
+
+The developing POC and value-area lines are removed when their period ends. A finished day's final
+levels were not known while that day was trading, so leaving them drawn across it would be hindsight.
+The prior-period lines are fixed from the first bar they are drawn on, so those stay.
+
+## The dashboard
+
+| Row | Reading |
+|---|---|
+| **Conditions** | `FAVOURABLE`, `WAIT` or `AVOID` — see below |
+| **Why** | The single rule that produced the verdict |
+| **Look for** | What would have to change, with the price levels involved |
+| **Bias** | Bullish above both today's POC and the prior POC, bearish below both, neutral between them |
+| Range used | This period's range as a share of the average of the last 14 completed periods |
+| Asia / Prior day range | Each side: `Intact`, `Swept` (traded beyond, closed back inside) or `Broken` (closing beyond) |
+| Value area | Whether price is inside, above or below it |
+| Liquidity | Nearest live pool above and below, with distance in ATR |
+| Last taken | The most recent pool to be swept or run |
+| Flow (est.) | Flow state, buying share of volume over the last 20 bars, net delta for the period |
+
+### How the verdict is decided
+
+It is a fixed checklist, read top to bottom. The first rule that applies wins. There is no model and
+no learning behind it.
+
+| Order | Rule | Verdict |
+|---|---|---|
+| 1 | Range used is at or above 85% of average | `AVOID` |
+| 2 | Bias is neutral | `WAIT` |
+| 3 | Price is outside the value area | `WAIT` |
+| 4 | Order flow disagrees with the bias | `WAIT` |
+| 5 | Recent volume is below 70% of normal | `WAIT` |
+| 6 | None of the above | `FAVOURABLE` for the bias side |
+
+`FAVOURABLE` means the conditions for trading in the bias direction are in place. It does not mean
+"enter now".
+
+### Flow state
+
+| State | Meaning |
+|---|---|
+| Buying / Selling dominance | One side has at least 55% of volume over the window |
+| Absorption — buying absorbed | Buying is dominant but price has not risen over the same window |
+| Absorption — selling absorbed | Selling is dominant but price has not fallen |
+| Balanced | Neither side reaches the threshold |
+
+## The trade module (experimental)
+
+Off by default. Turn on `Enable Trade Module` and the script draws an entry, a stop and two targets,
+and keeps a record of how those trades would have gone.
+
+| Part | Rule |
+|---|---|
+| Entry | A **sweep** on a closed bar: a liquidity pool or the reference high / low is traded through and the same bar closes back inside. Low swept → long, high swept → short. Entry is that bar's close. One trade at a time |
+| Stop | Beyond the sweep bar's wick plus a small buffer, never closer than 0.5 ATR. A sweep needing a stop wider than 3 ATR is skipped |
+| TP1 | 1R — as far from entry as the stop is |
+| TP2 | The nearest opposing pool, reference level or POC between 1.5R and 4R away; if there is none, 2R |
+| After TP1 | The stop moves to entry |
+
+`Conditions Filter` decides which sweeps become trades: `Favourable only`, `Not against bias` (the
+default), `Any except Avoid`, or `No filter`. **Run `No filter` first.** It is the baseline: if a
+stricter filter does not beat it, the verdict is not adding anything on that market.
+
+### Reading the record
+
+The `Record` row assumes half the position comes off at TP1 and half at TP2.
+
+| Outcome | Result with the defaults |
+|---|---|
+| Stopped before TP1 | −1R |
+| TP1, then stopped at entry | +0.5R |
+| TP1 and TP2 | +0.5R plus half of TP2's R |
+
+It reports the average and total in R and the share of trades in each bucket, not a single "win
+rate". A high share of `TP1 only` with a small average R is a very different result from the same
+share with a large one, and one percentage would hide that.
+
+Three things keep it honest. A bar that reaches both the stop and a target is scored as the stop. TP2
+on the same bar as TP1 only counts if the bar never traded back to entry. And the figures are
+**before spread, commission and slippage**, which matter most on small stops.
+
+This module has not been validated on any market. Treat its record as a description of the past on
+the bars loaded, not as an expectation.
+
+## What the volume figures are, and are not
+
+Pine has no bid/ask data. **Delta here is an estimate**: each chart bar is split into 1-minute bars
+(30-minute on a daily chart), and each small bar's whole volume is counted as buying if it closed up
+and selling if it closed down. That is the standard approximation and it is useful, but it is not
+order flow in the sense a futures footprint chart shows it. On forex and CFD symbols the underlying
+number is tick volume, and the dashboard says so.
+
+TradingView serves only a limited depth of lower-timeframe history. Bars older than that fall back to
+the chart bar's own direction.
+
+The volume profile is built from the same lower-timeframe bars, each small bar's volume spread evenly
+across the price rows it covers. That makes the POC and value area read the same on a 5-minute and a
+15-minute chart. Where the lower-timeframe history has run out, the chart bars are used instead and
+the profile is coarser — most visibly on older days, and on daily charts further back.
+
+## Alerts
+
+Session bull / bear breakout, reference high / low swept, range exhausted, BSL / SSL swept, BSL / SSL
+run, buying / selling absorbed, and conditions turning favourable on either side. With the trade
+module on: long entry, short entry, TP1 reached, TP2 reached and stopped.
+
+## Settings worth knowing
+
+| Setting | Default | Notes |
+|---|---|---|
+| Market Mode | Auto | Force `24h sessions` or `Single session` if the automatic choice is wrong for a symbol |
+| Session Timezone / hours | New York; 18:00–00:00, 02:00–05:00, 07:00–10:00 | Hours are quoted in New York time so daylight saving is followed automatically |
+| Opening Range Length | 30 min | Single-session mode. The box needs a chart timeframe no larger than this |
+| Exhausted At | 85% | The `AVOID` threshold |
+| Swing Length | 10 | Bars each side for a chart-timeframe pool. Too many bands: raise it |
+| Higher Timeframe | 60 | Bumped automatically if it is not above the chart timeframe |
+| Taken Pools Kept | 3 | Grey swept/run bands left on the chart. 0 removes them at once |
+| Rows Per Average Range | 40 | Volume-profile resolution |
+| Dominance Threshold | 55% | Share of volume needed to call a side dominant |
+| Dashboard Detail | Full | `Compact` shows only the verdict, reason, what to look for and bias |
+
+Nothing here repaints. Breakouts, sweeps and pool resolutions are all decided on a closed bar, and the
+higher-timeframe swings are built from chart bars and only used once the bars confirming them have
+closed. The dashboard itself reads the live bar, so its text can change until that bar closes.
+
+---
+
+## Things worth knowing before you trade any of these
 
 **Nothing repaints, but confirmation is late by design.** A swing is only recognised `lookback` bars
 after it forms, and breaks are only recorded on closed bars. Nothing that appears will later vanish —
@@ -687,7 +856,7 @@ than move it to a bar that never made the high, and starts a ray, break line or 
 of the buffer instead of at its true origin. The price levels themselves are unaffected. You will
 only meet this on a very long intraday chart.
 
-**These are decision-support tools, not a strategy.** Neither script backtests, sizes a position, or
+**These are decision-support tools, not a strategy.** None of the scripts backtests, sizes a position, or
 places an order. The trade engine computes levels and records what would have happened; it does not
 size a position and it has no idea what your account can absorb. No indicator knows the future, and
 confluence between several lagging measurements is still lagging. Nothing here is financial advice.
@@ -697,7 +866,7 @@ confluence between several lagging measurements is still lagging. Nothing here i
 ## Repository layout
 
 ```
-src/                    the two Pine scripts
+src/                    the three Pine scripts
 docs/img/               diagrams used by this README
 docs/superpowers/
   specs/                design documents — what each feature does and why
