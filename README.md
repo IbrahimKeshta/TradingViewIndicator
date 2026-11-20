@@ -1156,6 +1156,18 @@ to about 41%. Filters tested and *not* found to help out of sample: `Require Con
 `Require Index Trend` and `Require Anchored VWAP`. Records:
 `docs/superpowers/plans/2026-11-03-ict-*.md` and `2026-11-04-ict-runner-retest.md`.
 
+**The EGX100 full-history backtest (2026-11-20)** ran on an offline Node port of the trade engine
+(`tools/backtest/`). The port reproduces TradingView's own results exactly on every chart it was
+checked against. **Why the stops get hit:** 53% of trades end at the first stop without reaching
+a target. Most of those never worked; only about 1 in 5 reaches TP1 within 20 bars after the
+stop. The ones that do recover are mostly *wick-only* stops, where the low pierced the stop but
+the day closed back above it. `Stop on Close Only` (an existing input) is the one change that held
+on both unseen tests: avg R +0.217 → +0.303 on 2023+ trades and +0.178 → +0.372 on 18
+never-opened stocks. The cost is that a single loss can be larger than −1R, because it exits at
+the close, and on a locked limit-down day far below the stop. No extra indicator helped: RSI, ADX,
+SMA200, EGX30 trend, weekly trend, relative strength, CMF and MFI were all tested. Record:
+`docs/superpowers/plans/2026-11-20-egx100-*.md`.
+
 **These are decision-support tools, not a strategy.** None of these scripts backtests, sizes a position, or
 places an order. The trade engine computes levels and records what would have happened; it does not
 size a position and it has no idea what your account can absorb. No indicator knows the future, and
@@ -1167,6 +1179,7 @@ confluence between several lagging measurements is still lagging. Nothing here i
 
 ```
 src/                    the Pine scripts
+tools/backtest/         offline Node port of the ICT trade engine, EGX data fetcher, analysis scripts
 docs/img/               diagrams used by this README
 docs/superpowers/
   specs/                design documents — what each feature does and why
