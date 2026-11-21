@@ -28,7 +28,7 @@ behind, the server catches it up by itself. It is reachable from this PC only.
 | Open trades | Every trade open as of the last finished close, priced at the latest price: stop now, the distance to it (% and R), next target, open R, and a "Would exit" or "Would hit TPn" flag. Trades closest to their stop come first. Click a row for the stock's trades. |
 | Last finished session | Entries and exits of the last session that closed, as the scanner reports them. |
 | Forward record | The out-of-sample test from `forward/egx-daily-log.json`, PB and TR separately. |
-| Day by day | Entries and exits of each of the last 60 sessions that had any. |
+| Day by day | Entries and exits of each of the last 60 sessions that had any. Trades in the forward log carry a "forward log" badge. |
 | Market evaluation | One row per stock, PB or TR: trades, win rate, total R, average R, all history and last 12 months, the last trade and any open trade. Sort by clicking a column; filter by name; click a row for the stock's full trade list. |
 
 ## Provisional and final
@@ -42,6 +42,10 @@ behind, the server catches it up by itself. It is reachable from this PC only.
 - **Nothing provisional reaches the disk.** Full downloads made during the session have today's forming bar trimmed
   off every CSV, in the server and in `scan-egx.mjs` alike. Run during the session, `scan-egx.mjs` scans up to the
   last finished bar.
+- A stock whose download fails keeps the data it has and is listed in the red banner as stale; it is never dropped,
+  so its logged trades are not mistaken for vanished ones (`scan-egx.mjs` does the same).
+- The end-of-day scan never runs without data, and never over a forward log it cannot read. Either problem shows in the
+  red banner and stays there until an end-of-day scan succeeds.
 - If a stock's recent bars disagree with the disk copy by more than 0.5% (a dividend re-adjusted its history), that
   stock alone is downloaded again in full.
 
