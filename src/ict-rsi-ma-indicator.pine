@@ -69,9 +69,9 @@ chochColor         = input.color(color.fuchsia, "CHoCH", group = "Structure Disp
 rayColor           = input.color(color.gray, "Rays", group = "Structure Display")
 
 // ---------------- Trade Engine ----------------
-presetInput        = input.string("Custom", "Preset", options = ["Custom", "EGX Daily"], group = "Trade Engine", tooltip = "Custom: every setting below is used exactly as set.\n\nEGX Daily: the best configuration found over 100 EGX stocks on daily bars, full history, after costs (2026-11-20). It FORCES these settings and ignores whatever their own boxes say: Stop on Close Only on, Runner on, Trailing Tier Major, Trail From Entry on, Long Trades Only on, Apply Costs on (with the slippage and commission set under Costs), Min Risk (ticks) 10.\n\nOn those stocks it took average R per trade from +0.10 to +0.48. Stop on Close and the runner settings each passed an out-of-sample test on their own; the combination was chosen from the full sample, so forward results are its real test. Measured on EGX daily charts only.")
+presetInput        = input.string("Custom", "Preset", options = ["Custom", "EGX Daily"], group = "Trade Engine", tooltip = "Custom: every setting below is used exactly as set.\n\nEGX Daily: the best configuration found over 100 EGX stocks on daily bars, full history, after costs (2026-11-20). It FORCES these settings and ignores whatever their own boxes say: Stop on Close Only on, Runner on, Trailing Tier Major, Trail From Entry on, Long Trades Only on, Apply Costs on (with the slippage and commission set under Costs), Min Risk (ticks) 10, and the killzone point counted as earned (see Score: Killzone).\n\nIt does not switch the Trailing Stop Model on or off: that model has its own slot and its own PERFORMANCE rows.\n\nOn those stocks it took average R per trade from +0.10 to +0.48. Stop on Close and the runner settings each passed an out-of-sample test on their own; the combination was chosen from the full sample, so forward results are its real test. Measured on EGX daily charts only.")
 minScore           = input.int(5, "Minimum Score", minval = 1, maxval = 15, group = "Trade Engine", tooltip = "How many scored points a setup needs, out of however many are switched on below. The panel shows both numbers — a disabled point is never counted in the denominator, so turning one off does not silently loosen or break the threshold.\n\nRaised from 4 to 5 when the confirmation points were added: at seven points, 4 would be a LOOSER gate than the old 4-of-5. TradingView keeps the value saved on an existing chart, so if this still reads 4, it was carried over and should be raised by hand.")
-scoreKillzone      = input.bool(true, "Score: Killzone", group = "Trade Engine", tooltip = "Turn off on single-session markets such as EGX, where a killzone means nothing. If both killzone sessions are disabled for display, this point excludes itself automatically whatever this is set to.")
+scoreKillzone      = input.bool(true, "Score: Killzone", group = "Trade Engine", tooltip = "One point when the signal bar falls inside a drawn killzone session. If both killzone sessions are disabled for display, this point excludes itself automatically whatever this is set to.\n\nOn EGX daily bars the bar opens inside the London window, so this point is earned on every bar: with it on, Minimum Score 5 means 4 of the other 6 points. Turning it off raises that to 5 of 6, which tested WORSE on 100 EGX stocks (+0.46R vs +0.51R per trade, fewer trades, worse in both periods). Leave it on for EGX daily. The EGX Daily preset counts it as earned whatever this is set to.")
 scoreMa            = input.bool(true, "Score: Moving Average", group = "Trade Engine")
 scoreMajorAgree    = input.bool(true, "Score: Major Trend Agreement", group = "Trade Engine", tooltip = "Whether the major tier agrees with the internal tier. A pullback entry against the major trend is a real setup — just a weaker one — so this scores rather than vetoes.")
 scoreBreakStrength = input.bool(true, "Score: Break Strength", group = "Trade Engine")
@@ -843,7 +843,11 @@ plot(trailFlipLong ? (close - trailLongStop) / trailAtr : trailFlipShort ? (trai
 
 // The killzone point disables itself when neither session is drawn: on a single-session
 // market a permanently-false point would make minScore unreachable.
-killzonePointOn = scoreKillzone and (showLondonKZ or showNewYorkKZ or showAsiaKZ)
+killzonePointOn = egxPreset or (scoreKillzone and (showLondonKZ or showNewYorkKZ or showAsiaKZ))
+// EGX Daily counts the point as earned on every bar. That is what it is on EGX daily bars with the default
+// sessions (the bar opens inside the London window: 4,225 of 4,225 tested entries), so the gate stays at the
+// tested "4 of the other 6" even if Score: Killzone or the session displays have been switched off.
+kzEarned = egxPreset or killzoneActive
 
 // One pass counts the enabled points and the achieved points together. Declaring a point in
 // only one of two parallel lists was the failure this prevents. Seven points now: the
@@ -853,7 +857,7 @@ scoreTally(bool isLong) =>
     got   = 0
     if killzonePointOn
         ofPts += 1
-        if killzoneActive
+        if kzEarned
             got += 1
     if momOn
         ofPts += 1
@@ -888,7 +892,7 @@ scoreTally(bool isLong) =>
 // already-reviewed gating logic above rather than refactored into it, so a diagnostic feature
 // carries no risk to the trade engine it is only watching.
 pointsRaw(bool isLong) =>
-    pKz   = killzoneActive
+    pKz   = kzEarned
     pMom  = isLong ? momLongOk : momShortOk
     pMa   = isLong ? maBullishConfirm : maBearishConfirm
     pMaj  = majorState.trend == intState.trend

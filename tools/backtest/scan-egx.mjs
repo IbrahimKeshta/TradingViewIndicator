@@ -32,6 +32,10 @@ const dataDir = path.resolve(root, args.data || 'data/egx-div');
 const logFile = path.resolve(root, args.log || 'forward/egx-daily-log.json');
 const outFile = path.resolve(root, args.out || 'forward/latest.md');
 const PRESET = 'egx-daily';
+// The trailing-stop entry model runs in its own slot and never changes the pullback trades, so including it only adds
+// rows (labelled TR). On by default to match charts that have it on; --no-trail scans the pullback model alone.
+const TRAIL = !args['no-trail'];
+const CFG = { ...PRESETS[PRESET], useTrailModel: TRAIL };
 
 // ---- 1. refresh data ----
 if (!args['no-fetch']) {
@@ -55,7 +59,7 @@ for (const s of symbols) {
   if (!bars.length) continue;
   lastDate[s] = bars[bars.length - 1].date;
   lastClose[s] = bars[bars.length - 1].close;
-  const res = runEngine(bars, PRESETS[PRESET], { symbol: s, mintick: meta[s]?.mintick ?? 0.01, indexBars });
+  const res = runEngine(bars, CFG, { symbol: s, mintick: meta[s]?.mintick ?? 0.01, indexBars });
   for (const t of res.trades) closedAll.push(t);
   for (const t of res.openTrades) {
     const risk = Math.abs(t.entry - t.initialStop);
@@ -71,7 +75,7 @@ const session = Object.values(lastDate).sort().pop();
 const stale = symbols.filter((s) => lastDate[s] < session);
 
 // ---- 3. forward log ----
-const key = (sym, openDate) => `${sym}|${openDate}`;
+const key = (sym, openDate, model) => `${sym}|${openDate}|${model}`;
 const riskPct = (entry, stop) => Math.abs(entry - stop) / entry;
 let log;
 if (fs.existsSync(logFile)) log = JSON.parse(fs.readFileSync(logFile, 'utf8'));
@@ -80,7 +84,7 @@ const start = log.start;
 
 const seen = new Set();
 const upsert = (sym, t, closed) => {
-  const k = key(sym, t.openDate);
+  const k = key(sym, t.openDate, t.model);
   seen.add(k);
   let e = log.trades[k];
   if (!e) {
@@ -111,57 +115,65 @@ const sgn = (x, d = 2) => (Number.isFinite(x) ? (x >= 0 ? '+' : '') + x.toFixed(
 const L = [];
 L.push(`# EGX Daily scan: session ${session}`);
 L.push('');
-L.push(`Preset \`${PRESET}\` (Stop on Close Only, Runner, Trailing Tier Major, Trail From Entry, Long Trades Only, costs on, Min Risk 10 ticks) over ${symbols.length} stocks, dividend-adjusted daily bars.`);
+L.push(`Preset \`${PRESET}\` (Stop on Close Only, Runner, Trailing Tier Major, Trail From Entry, Long Trades Only, costs on, Min Risk 10 ticks, Score: Killzone on) over ${symbols.length} stocks, dividend-adjusted daily bars.`);
+L.push(TRAIL
+  ? 'Models: **PB** = pullback model (the tested preset). **TR** = trailing-stop model (Enable Trailing Stop Model on the chart); it has its own slot and never changes the PB trades. Run with `--no-trail` for PB only.'
+  : 'Model: PB (pullback) only; the trailing-stop model is excluded (`--no-trail`).');
 if (stale.length) L.push(`Stale (last bar before ${session}): ${stale.map((s) => `${s} ${lastDate[s]}`).join(', ')}.`);
 if (missing.length) L.push(`No data: ${missing.join(', ')}.`);
 L.push('');
 L.push('Entries happen at the close of the signal bar, so a "new entry" below is a trade the indicator opened at this session\'s close. R is net of costs.');
-L.push('With Stop on Close Only, "Stop now" is hit only by a daily CLOSE at or below it, not by an intraday wick. The trade also exits at the close on an internal CHoCH against it ("Invalidated").');
+L.push('With Stop on Close Only, "Stop now" is hit only by a daily CLOSE at or below it, not by an intraday wick. A PB trade also exits at the close on an internal CHoCH against it ("Invalidated").');
 L.push('');
 
-const newOpen = openAll.filter((t) => t.openDate === session);
+const byModel = (a, b) => (a.model === b.model ? 0 : a.model === 'PB' ? -1 : 1);
+const newOpen = openAll.filter((t) => t.openDate === session).sort(byModel);
 L.push(`## New entries this session (${newOpen.length})`);
 L.push('');
 if (newOpen.length) {
-  L.push('| Stock | Entry | Stop | Risk % | TP1 | TP2 | TP3 | Grade |');
-  L.push('|---|---|---|---|---|---|---|---|');
-  for (const t of newOpen) L.push(`| ${t.symbol} | ${f(t.entry, 3)} | ${f(t.stop, 3)} | ${f(100 * riskPct(t.entry, t.stop), 1)} | ${f(t.tp1, 3)} | ${f(t.tp2, 3)} | ${f(t.tp3, 3)} | ${t.grade} |`);
+  L.push('| Stock | Model | Entry | Stop | Risk % | TP1 | TP2 | TP3 | Grade |');
+  L.push('|---|---|---|---|---|---|---|---|---|');
+  for (const t of newOpen) L.push(`| ${t.symbol} | ${t.model} | ${f(t.entry, 3)} | ${f(t.stop, 3)} | ${f(100 * riskPct(t.entry, t.stop), 1)} | ${f(t.tp1, 3)} | ${f(t.tp2, 3)} | ${f(t.tp3, 3)} | ${t.grade} |`);
 } else L.push('None.');
 L.push('');
 
-const closedNow = closedAll.filter((t) => t.closeDate === session);
+const closedNow = closedAll.filter((t) => t.closeDate === session).sort(byModel);
 L.push(`## Closed this session (${closedNow.length})`);
 L.push('');
 if (closedNow.length) {
-  L.push('| Stock | Opened | Reason | Exit | Targets hit | R |');
-  L.push('|---|---|---|---|---|---|');
-  for (const t of closedNow) L.push(`| ${t.symbol} | ${t.openDate} | ${t.reason} | ${f(t.exit, 3)} | ${t.tpHit} | ${sgn(t.r)} |`);
+  L.push('| Stock | Model | Opened | Reason | Exit | Targets hit | R |');
+  L.push('|---|---|---|---|---|---|---|');
+  for (const t of closedNow) L.push(`| ${t.symbol} | ${t.model} | ${t.openDate} | ${t.reason} | ${f(t.exit, 3)} | ${t.tpHit} | ${sgn(t.r)} |`);
 } else L.push('None.');
 L.push('');
 
 L.push(`## Open trades (${openAll.length})`);
 L.push('');
 if (openAll.length) {
-  L.push('| Stock | Opened | Bars | Entry | Stop now | Next target | Targets hit | Last close | Open R |');
-  L.push('|---|---|---|---|---|---|---|---|---|');
+  L.push('| Stock | Model | Opened | Bars | Entry | Stop now | Next target | Targets hit | Last close | Open R |');
+  L.push('|---|---|---|---|---|---|---|---|---|---|');
   const next = (t) => (t.tpHit < 1 ? t.tp1 : t.tpHit < 2 ? t.tp2 : t.tpHit < 3 ? t.tp3 : NaN);
-  for (const t of [...openAll].sort((a, b) => (a.openDate < b.openDate ? 1 : -1)))
-    L.push(`| ${t.symbol} | ${t.openDate} | ${t.bars} | ${f(t.entry, 3)} | ${f(t.curStop, 3)} | ${t.tpHit >= 3 ? 'runner' : f(next(t), 3)} | ${t.tpHit} | ${f(t.close, 3)} | ${sgn(t.openR)} |`);
+  for (const t of [...openAll].sort((a, b) => byModel(a, b) || (a.openDate < b.openDate ? 1 : -1)))
+    L.push(`| ${t.symbol} | ${t.model} | ${t.openDate} | ${t.bars} | ${f(t.entry, 3)} | ${f(t.curStop, 3)} | ${t.tpHit >= 3 ? 'runner' : f(next(t), 3)} | ${t.tpHit} | ${f(t.close, 3)} | ${sgn(t.openR)} |`);
 }
 L.push('');
 
 const fw = Object.values(log.trades);
-const fc = fw.filter((e) => e.status === 'closed');
-const fr = fc.reduce((a, e) => a + e.r, 0);
 L.push(`## Forward record since ${start}`);
 L.push('');
-L.push(`The out-of-sample test of the preset. Trades opened on or after ${start}, as logged on the day they were seen.`);
+L.push(`The out-of-sample test. Trades opened on or after ${start}, as logged on the day they were seen. Each model is judged on its own.`);
 L.push('');
-L.push(`- Closed: ${fc.length}, wins (R > 0): ${fc.filter((e) => e.r > 0).length}, total ${sgn(fr)}R, average ${fc.length ? sgn(fr / fc.length, 3) : '-'}R per trade`);
-L.push(`- Still open: ${fw.filter((e) => e.status === 'open').length}`);
+const REF = { PB: '+0.51R per trade, 43.6% wins (2,299 trades)', TR: '+0.35R per trade, 46.2% wins (1,926 trades)' };
+for (const m of ['PB', 'TR']) {
+  const mine = fw.filter((e) => e.model === m);
+  if (m === 'TR' && !TRAIL && !mine.length) continue;
+  const fc = mine.filter((e) => e.status === 'closed');
+  const fr = fc.reduce((a, e) => a + e.r, 0);
+  L.push(`- **${m}**: closed ${fc.length}, wins (R > 0) ${fc.filter((e) => e.r > 0).length}, total ${sgn(fr)}R, average ${fc.length ? sgn(fr / fc.length, 3) + 'R' : '-'} per trade; still open ${mine.filter((e) => e.status === 'open').length}. In-sample reference: ${REF[m]}.`);
+}
 const flagged = fw.filter((e) => e.revised || e.vanished);
-if (flagged.length) L.push(`- Flagged (data revised after logging): ${flagged.map((e) => `${e.symbol} ${e.openDate}${e.vanished ? ' vanished' : ' revised'}`).join(', ')}`);
-L.push('- For reference, the in-sample average on 100 stocks over full history was +0.48R per trade (42.5% wins). Expect a few dozen closed trades before the forward average means much.');
+if (flagged.length) L.push(`- Flagged (data revised after logging): ${flagged.map((e) => `${e.symbol} ${e.model} ${e.openDate}${e.vanished ? ' vanished' : ' revised'}`).join(', ')}`);
+L.push('- In-sample references are full history on these 100 stocks, dividend-adjusted. Expect a few dozen closed trades per model before a forward average means much.');
 L.push('');
 
 const text = L.join('\n');
