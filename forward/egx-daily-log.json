@@ -1,0 +1,9 @@
+{
+ "preset": "egx-daily",
+ "data": "TradingView daily, dividend-adjusted",
+ "start": "2026-11-21",
+ "created": "2026-11-19",
+ "trades": {},
+ "updated": "2026-11-19",
+ "lastRun": "2026-11-21T17:05:02.500Z"
+}
