@@ -1168,6 +1168,13 @@ the close, and on a locked limit-down day far below the stop. No extra indicator
 SMA200, EGX30 trend, weekly trend, relative strength, CMF and MFI were all tested. Record:
 `docs/superpowers/plans/2026-11-20-egx100-*.md`.
 
+**Stopped, then it rallied?** A trade-by-trade check of MASR, BTFH, EMFD, EFID, ORWE and EEII
+looked at what price did after each exit. After a stop or `Invalidated` exit, price went on to reach the
+next target within 40 bars about as often as it does from any random bar (34% vs 36% across all 100
+stocks), so the exits are not mistimed. EGX simply rises often in nominal terms. Removing the CHoCH
+`Invalidated` exit did not help the recommended settings. Record:
+`docs/superpowers/plans/2026-11-20-six-stock-deep-dive.md`.
+
 **These are decision-support tools, not a strategy.** None of these scripts backtests, sizes a position, or
 places an order. The trade engine computes levels and records what would have happened; it does not
 size a position and it has no idea what your account can absorb. No indicator knows the future, and

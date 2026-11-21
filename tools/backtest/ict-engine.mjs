@@ -130,6 +130,12 @@ export const DEFAULTS = Object.freeze({
   // S4 phantom-wick guard: on a bar whose open is within one tick of the previous close AND whose extreme toward the stop (low for longs,
   //     high for shorts) is within one tick of the open (a synthetic-open bar), the stop is tested against the close instead of the extreme.
   phantomGuard: false,
+  // Six-stock deep dive (docs/superpowers/plans/2026-11-20-six-stock-deep-dive.md): what closes a trade when an internal CHoCH goes against it.
+  //   'on'         : the Pine behaviour - any internal CHoCH against the trade closes it at the bar close ("Invalidated"). Default.
+  //   'off'        : no CHoCH exit at all (initial stop / trailing stop / targets only)
+  //   'major'      : only a CHoCH on the MAJOR tier (majorLookback pivots) against the trade closes it
+  //   'belowEntry' : an internal CHoCH against the trade closes it only if that bar also closes beyond the entry (long: close < entry)
+  invalidation: 'on',
   // Sensitivity (not a candidate): scale-free Min Risk floor, risk >= x% of the entry price (applied in addition to minRiskTicks; 0 = off).
   minRiskPct: 0,
   // Entry filters, evaluated at the signal bar (data through that bar's close only). null / 0 / false = off. NaN features fail the filter.
@@ -712,7 +718,13 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
       t.closePrice = t.tp3; t.closeReason = 'Target';
       return true;
     }
-    const chochAgainst = isLong ? (intSt.bearBreak && intSt.lastType === 'CHoCH') : (intSt.bullBreak && intSt.lastType === 'CHoCH');
+    let chochAgainst = isLong ? (intSt.bearBreak && intSt.lastType === 'CHoCH') : (intSt.bullBreak && intSt.lastType === 'CHoCH');
+    if (cfg.invalidation !== 'on') {
+      if (cfg.invalidation === 'off') chochAgainst = false;
+      else if (cfg.invalidation === 'major') chochAgainst = isLong ? (majorSt.bearBreak && majorSt.lastType === 'CHoCH') : (majorSt.bullBreak && majorSt.lastType === 'CHoCH');
+      else if (cfg.invalidation === 'belowEntry') chochAgainst = chochAgainst && (isLong ? C[i] < t.entry : C[i] > t.entry);
+      else throw new Error('bad invalidation ' + cfg.invalidation);
+    }
     if (chochAgainst) {
       t.closePrice = C[i]; t.closeReason = 'Invalidated';
       return true;
@@ -742,7 +754,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
       openTime: t.openTime, closeTime: bars[i].time,
       openIdx: t.openBar, closeIdx: i,
       side: t.side, grade: t.grade, score: t.score, of: t.scoreOf, zone,
-      entry: t.entry, stop: t.initialStop, tp1: t.tp1, tp2: t.tp2, tp3: t.tp3,
+      entry: t.entry, stop: t.initialStop, finalStop: t.stop, tp1: t.tp1, tp2: t.tp2, tp3: t.tp3,
       tpHit: t.tpHit, reason: t.closeReason, exit: t.closePrice,
       r, grossR: gross, costR: costs,
       mfeR: rr > 0 ? t.mfe / rr : 0, maeR: rr > 0 ? t.mae / rr : 0,

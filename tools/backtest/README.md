@@ -123,3 +123,17 @@ fDist20Atr, fWeekly30Dist, fCmf, fMfi`.
 
 New scripts: `egx100-common.mjs` (explicit holdout list, discovery split, stats), `analyze-failures.mjs` (base run + taxonomy),
 `candidates.mjs` (every candidate run through the engine + the pick rule). All take `--data <dir>`.
+
+## Six-stock deep dive (CHoCH "Invalidated" exit)
+
+Added for `docs/superpowers/plans/2026-11-20-six-stock-deep-dive.md`.
+
+| Item | Meaning |
+|---|---|
+| `invalidation` (engine option, default `'on'` = Pine behaviour) | what closes a trade on an internal CHoCH against it: `'on'` any internal CHoCH (booked at the close, "Invalidated"); `'off'` never; `'major'` only a Major-tier CHoCH; `'belowEntry'` an internal CHoCH only if the bar also closes beyond the entry (long: close < entry). Port-only; no Pine input. |
+| `finalStop` (trade record field) | the stop at exit, so a trailed stop can be told from the initial stop. Record-only. |
+| `fetch-egx.mjs ... --adjust dividends` (or `ADJ=dividends`) | price adjustment requested from TradingView; default `splits` (what `data/egx` holds), `dividends` is what the charts show with ADJ on (`data/egx-div`). The flag goes last; `_meta.json` is merged when a symbol list is given and records the adjustment. |
+| `six-stock.mjs` | per-trade analysis after Stop / Invalidated exits (max high in R, bars to the next target, lowest low, hold-with-original-stop test) against a base-rate control from every bar of the same stock. `--symbols all --lists no --tag pooled-100 --data data/egx` pools it over a universe. Output goes to `data/six-stock-out/` (git-ignored). |
+| `variants.mjs` | runs V1-V6 (invalidation variants on base and rec) over the six stocks, the other dividend-adjusted names and all of `data/egx`: trades, win %, avg / total R, PF, pre-2023 vs 2023+, breadth. |
+
+With the default `invalidation: 'on'` the engine output is unchanged (`validate.mjs --data data/egx-div --cut 2026-11-04 --combos base,r4,conf,idx,both,r1,r2,r3` still matches every chart-config read).

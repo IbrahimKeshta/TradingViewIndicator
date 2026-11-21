@@ -1,8 +1,8 @@
-// Download full daily OHLCV history (split-adjusted) for EGX stocks + indices
+// Download full daily OHLCV history (split-adjusted by default; ADJ=dividends or --adjust dividends for dividend-adjusted) for EGX stocks + indices
 // from TradingView's public websocket feed into CSV files.
 //
 // Usage (Node 20 needs the experimental WebSocket flag):
-//   node --experimental-websocket tools/backtest/fetch-egx.mjs [outDir] [SYM1,SYM2,...]
+//   node --experimental-websocket tools/backtest/fetch-egx.mjs [outDir] [SYM1,SYM2,...]  [--adjust splits|dividends]   (or ADJ=dividends; the flag goes LAST)
 //
 //   outDir   default: data/egx
 //   symbols  optional comma list of tickers (e.g. COMI,ABUK) or full TV ids
@@ -29,6 +29,12 @@ const pinePath = path.resolve(here, '../../src/egx-trust-indicator.pine');
 const outDir = path.resolve(process.argv[2] || 'data/egx');
 const only = process.argv[3] ? process.argv[3].split(',').map(s => s.trim()).filter(Boolean) : null;
 
+// Price adjustment sent to TradingView: 'splits' (default, what data/egx holds) or 'dividends' (what the charts show with ADJ on; data/egx-div).
+const ai = process.argv.indexOf('--adjust');
+const ADJ = (ai > 0 ? process.argv[ai + 1] : process.env.ADJ) || 'splits';
+if (!['splits', 'dividends', 'none'].includes(ADJ)) throw new Error('bad adjustment ' + ADJ);
+if (ai > 0) process.argv.splice(ai, 2);
+
 const STEP = 5000;        // bars per request
 const MAX_ROUNDS = 40;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -49,7 +55,7 @@ function fetchSymbol(symbol, timeoutMs = 90000) {
     ws.onopen = () => {
       ws.send(enc('set_auth_token', ['unauthorized_user_token']));
       ws.send(enc('chart_create_session', [cs, '']));
-      ws.send(enc('resolve_symbol', [cs, 'sds_sym_1', '=' + JSON.stringify({ symbol, adjustment: 'splits' })]));
+      ws.send(enc('resolve_symbol', [cs, 'sds_sym_1', '=' + JSON.stringify({ symbol, adjustment: ADJ })]));
       ws.send(enc('create_series', [cs, 'sds_1', 's1', 'sds_sym_1', '1D', STEP, '']));
     };
     ws.onmessage = e => {
@@ -137,7 +143,7 @@ for (const t of targets) {
         first: cairoDate.format(new Date(r.bars[0][0] * 1000)), last: cairoDate.format(new Date(r.bars[r.bars.length - 1][0] * 1000)),
         mintick: m.minmov / m.pricescale, pricescale: m.pricescale, minmov: m.minmov,
         timezone: m.timezone, session: m.session, description: m.description, type: m.type,
-        rounds: r.rounds,
+        rounds: r.rounds, adjustment: ADJ,
       };
       if (flags.length) rec.flags = flags;
       allMeta[t.key] = rec;
