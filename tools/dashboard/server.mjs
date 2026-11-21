@@ -155,7 +155,7 @@ export function createDashboard({
   function state() {
     const t = now(), c = cairoParts(t);
     const log = readLog();
-    if (!live) return { mode: 'starting', phase: phase || 'loading', today: c.date, cairoTime: c.minutes, feedNote: FEED_NOTE, error: lastError };
+    if (!live) return { mode: 'starting', phase: phase || 'loading', today: c.date, cairoTime: c.minutes, feedNote: FEED_NOTE, refreshing: true, error: lastError };
     const { withRun, withoutRun, bars, errors } = live;
     const liveSession = Object.values(withRun.lastDate).sort().pop();
     const finSession = Object.values(withoutRun.lastDate).sort().pop();
@@ -206,7 +206,7 @@ export function createDashboard({
   return { refresh, endOfDay, state, stock, tick, needsEndOfDay };
 }
 
-function serve(dash, port) {
+export function serve(dash, port) {
   const page = path.join(here, 'public', 'index.html');
   const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(obj)); };
   const server = http.createServer((req, res) => {

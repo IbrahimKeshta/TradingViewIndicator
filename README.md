@@ -320,6 +320,14 @@ and EGX70 stock after each session. It lists new entries, trades closed and ever
 and next target, and keeps an append-only log of every trade opened from 2026-11-21 on. The Pine script sees one chart
 at a time, so this is also the quickest way to see all of today's EGX Daily setups at once. See `forward/README.md`.
 
+The **EGX Daily dashboard** (`tools/dashboard`) puts all of this on one local web page; start it with
+`tools\dashboard\start.cmd`. While the session is open it refreshes every 5 minutes and shows what the close would do
+if prices held: open trades that would exit (a close at or below the stop, or a CHoCH), trades that would open, and
+targets that would be hit. After the close it runs the end-of-day scan. It also lists each day's entries and exits
+and evaluates every stock under the preset (trades, win rate, total and average R, all history and the last 12
+months). The live view is provisional and never logged. Its prices come from TradingView's public feed and may be
+delayed. See `tools/dashboard/README.md`.
+
 Two more exits were tested on top of it on 2026-11-21, and both failed, so neither is in the script.
 A **backup intraday stop** 1.5–3R from entry, meant to cap Stop on Close's bigger single losses,
 fired on bars that wicked deep and then closed back up. It booked those losses at the bar's low,

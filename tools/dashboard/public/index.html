@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EGX Daily dashboard</title>
+<link rel="icon" href="data:,">
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-0: #f4f4f2; --surface-1: #fcfcfb; --border: #dddcd7;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #77756f;
+    --pos: #2a78d6; --neg: #e34948; --mid: #f0efec;
+    --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+    --accent: #2a78d6; --row-hover: #eef4fc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-0: #121211; --surface-1: #1a1a19; --border: #33332f;
+      --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8d85;
+      --pos: #3987e5; --neg: #e66767; --mid: #383835; --accent: #3987e5; --row-hover: #1f2a38;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .viz-root { background: var(--surface-0); color: var(--text-primary); min-height: 100vh; padding: 16px 20px 40px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  .badge { font-weight: 600; font-size: 12px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface-1); }
+  .badge.live { border-color: var(--critical); }
+  .meta { color: var(--text-secondary); font-size: 13px; }
+  button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .55; cursor: default; }
+  button.on { border-color: var(--accent); font-weight: 600; }
+  section { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+  .note { color: var(--text-secondary); font-size: 13px; margin: 0 0 8px; }
+  .banner { padding: 8px 12px; border-radius: 6px; border: 1px solid var(--critical); margin-bottom: 12px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th:first-child, td:first-child, th.l, td.l { text-align: left; }
+  th { color: var(--text-secondary); font-weight: 600; font-size: 12px; position: sticky; top: 0; background: var(--surface-1); }
+  th.sort { cursor: pointer; user-select: none; }
+  th.sort:hover { color: var(--text-primary); }
+  tbody tr:hover { background: var(--row-hover); }
+  tr.click { cursor: pointer; }
+  .muted { color: var(--text-muted); }
+  .flag { font-weight: 600; white-space: nowrap; }
+  .flag .ic { display: inline-block; width: 1.2em; text-align: center; border-radius: 3px; margin-right: 4px; color: #fff; font-size: 11px; line-height: 1.5; }
+  .ic.crit { background: var(--critical); } .ic.good { background: var(--good); } .ic.warn { background: var(--warning); color: #0b0b0b; }
+  .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .tile { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+  .tile .big { font-size: 22px; font-weight: 600; }
+  .bar { display: inline-block; position: relative; width: 90px; height: 10px; vertical-align: middle; background: var(--mid); border-radius: 2px; }
+  .bar i { position: absolute; top: 0; height: 10px; }
+  .bar i.p { left: 50%; background: var(--pos); border-radius: 0 4px 4px 0; }
+  .bar i.n { right: 50%; background: var(--neg); border-radius: 4px 0 0 4px; }
+  .scroll { max-height: 560px; overflow: auto; }
+  details { border-bottom: 1px solid var(--border); padding: 4px 0; }
+  summary { cursor: pointer; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+  input[type=search] { font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); }
+  #detail { display: none; }
+  .empty { color: var(--text-muted); }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <header>
+    <h1>EGX Daily</h1>
+    <span id="mode" class="badge">…</span>
+    <span id="when" class="meta"></span>
+    <button id="refresh">Refresh now</button>
+    <span id="phase" class="meta"></span>
+  </header>
+  <div id="banner"></div>
+
+  <section id="decide" hidden>
+    <h2>Decide before the close (if it closed now)</h2>
+    <p class="note">Provisional: the preset run on today's unfinished bar as if the session ended at the last price. It changes until the close; nothing here is logged.</p>
+    <div class="grid3">
+      <div><h2 class="flag"><span class="ic crit" aria-hidden="true">✕</span>Would exit</h2><div id="p-exits"></div></div>
+      <div><h2 class="flag"><span class="ic good" aria-hidden="true">+</span>Would open</h2><div id="p-entries"></div></div>
+      <div><h2 class="flag"><span class="ic warn" aria-hidden="true">▲</span>Would hit a target</h2><div id="p-targets"></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="open-h">Open trades</h2>
+    <p class="note">Open as of the last finished close, priced at the latest price. With Stop on Close Only a trade exits on a daily <b>close</b> at or below "Stop now", not on an intraday wick; a PB trade also exits at the close on a CHoCH against it.</p>
+    <div class="scroll"><table id="open"></table></div>
+  </section>
+
+  <section>
+    <h2 id="final-h">Last finished session</h2>
+    <div class="grid3"><div><h2>Entries</h2><div id="f-entries"></div></div><div><h2>Exits</h2><div id="f-exits"></div></div></div>
+  </section>
+
+  <section>
+    <h2>Forward record</h2>
+    <p class="note" id="fw-note"></p>
+    <div class="grid3" id="forward"></div>
+  </section>
+
+  <section>
+    <h2>Day by day (last 60 sessions)</h2>
+    <div id="days" class="scroll"></div>
+  </section>
+
+  <section>
+    <h2>Market evaluation</h2>
+    <p class="note"><b>Past results per stock do not predict that stock's future; the edge is across the market.</b> Full history, dividend-adjusted, R net of costs.</p>
+    <div class="grid3" id="totals" style="margin-bottom:10px"></div>
+    <div class="controls">
+      <span class="meta">Model</span><button id="m-PB" class="on">PB pullback</button><button id="m-TR">TR trailing</button>
+      <input type="search" id="filter" placeholder="Filter stock" aria-label="Filter stock">
+      <span class="meta" id="eval-count"></span>
+    </div>
+    <div class="scroll"><table id="eval"></table></div>
+  </section>
+
+  <section id="detail">
+    <h2 id="detail-h"></h2>
+    <div class="scroll"><table id="detail-t"></table></div>
+  </section>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const num = (x, d = 2) => (x == null || !Number.isFinite(x) ? '–' : x.toFixed(d));
+const sgn = (x, d = 2) => (x == null || !Number.isFinite(x) ? '–' : (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(d));
+const px = (x) => (x == null || !Number.isFinite(x) ? '–' : x >= 100 ? x.toFixed(2) : x >= 1 ? x.toFixed(3) : x.toFixed(4));
+const cairo = new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Cairo', weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+const table = (el, head, rows, empty = 'None.') => {
+  if (!rows.length) { el.innerHTML = `<tbody><tr><td class="l empty">${empty}</td></tr></tbody>`; return; }
+  el.innerHTML = `<thead><tr>${head.map((h) => `<th class="${h.l ? 'l' : ''}">${h.t}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody>`;
+};
+const list = (el, items, fmt) => { el.innerHTML = items.length ? items.map((x) => `<div>${fmt(x)}</div>`).join('') : '<div class="empty">None.</div>'; };
+const rbar = (r, scale = 1.5) => {
+  if (r == null) return '<span class="bar" title="no trades"></span>';
+  const w = Math.min(50, (Math.abs(r) / scale) * 50);
+  return `<span class="bar" title="avg ${sgn(r)}R"><i class="${r >= 0 ? 'p' : 'n'}" style="width:${w}%"></i></span>`;
+};
+let S = null, model = 'PB', sortKey = 'totalR', sortDir = -1;
+
+async function load() {
+  try {
+    const r = await fetch('/api/state', { cache: 'no-store' });
+    S = await r.json();
+    render();
+  } catch (e) { $('banner').innerHTML = `<div class="banner">Cannot reach the dashboard server: ${esc(e.message)}. Is it still running?</div>`; }
+}
+
+function render() {
+  const modes = { live: 'LIVE · if it closed now', final: 'FINAL', pending: 'WAITING FOR END-OF-DAY SCAN', starting: 'STARTING' };
+  $('mode').textContent = modes[S.mode] || S.mode;
+  $('mode').className = 'badge' + (S.mode === 'live' ? ' live' : '');
+  $('refresh').disabled = !!S.refreshing;
+  $('phase').textContent = S.refreshing ? (S.phase || 'refreshing…') : '';
+  if (S.mode === 'starting') { $('when').textContent = S.phase || ''; return; }
+  $('when').textContent = `session ${S.mode === 'live' ? S.liveSession : S.session} · prices as of ${cairo.format(new Date(S.asOf))} Cairo · ${S.feedNote}`;
+  const warn = [];
+  if (S.error) warn.push(esc(S.error));
+  if (S.stale.length) warn.push('Stale: ' + S.stale.map((x) => `${esc(x.symbol)} (${esc(x.error)})`).join(', '));
+  if (S.missing.length) warn.push('No data: ' + S.missing.map(esc).join(', '));
+  $('banner').innerHTML = warn.length ? `<div class="banner">${warn.join('<br>')}</div>` : '';
+
+  // Decide before the close
+  $('decide').hidden = S.mode !== 'live';
+  if (S.mode === 'live') {
+    const p = S.provisional;
+    list($('p-exits'), p.exits, (t) => `<b>${esc(t.symbol)}</b> ${t.model} · ${esc(t.reason)} at ${px(t.exit)} · <b>${sgn(t.r)}R</b> <span class="muted">(opened ${t.openDate}, targets hit ${t.tpHit})</span>`);
+    list($('p-entries'), p.entries, (t) => `<b>${esc(t.symbol)}</b> ${t.model} · entry ${px(t.entry)} · stop ${px(t.stop)} · TP1 ${px(t.tp1)} <span class="muted">grade ${esc(t.grade)}</span>`);
+    list($('p-targets'), p.targets, (t) => `<b>${esc(t.symbol)}</b> ${t.model} · TP${t.to} ${px(t.level)} <span class="muted">(opened ${t.openDate})</span>`);
+  }
+
+  // Open trades
+  const open = [...S.open].sort((a, b) => (b.wouldExit - a.wouldExit) || (a.toStopR ?? 99) - (b.toStopR ?? 99));
+  $('open-h').textContent = `Open trades (${open.length})`;
+  table($('open'), [{ t: 'Stock', l: 1 }, { t: 'Model', l: 1 }, { t: 'Opened', l: 1 }, { t: 'Bars' }, { t: 'Entry' }, { t: 'Stop now' }, { t: 'Last' }, { t: 'To stop %' }, { t: 'To stop R' }, { t: 'Next target' }, { t: 'Hit' }, { t: 'Open R' }, { t: '', l: 1 }],
+    open.map((t) => `<tr class="click" data-sym="${esc(t.symbol)}"><td><b>${esc(t.symbol)}</b></td><td class="l">${t.model}</td><td class="l">${t.openDate}</td><td>${t.bars}</td><td>${px(t.entry)}</td><td>${px(t.curStop)}</td><td>${px(t.close)}</td><td>${num(t.toStopPct, 1)}</td><td>${num(t.toStopR)}</td><td>${t.next == null ? 'runner' : px(t.next)}</td><td>${t.tpHit}</td><td><b>${sgn(t.openR)}</b></td><td class="l">${
+      t.wouldExit ? '<span class="flag"><span class="ic crit" aria-hidden="true">✕</span>Would exit</span>' : t.wouldHit ? `<span class="flag"><span class="ic warn" aria-hidden="true">▲</span>Would hit TP${t.wouldHit}</span>` : ''}</td></tr>`), 'No open trades.');
+
+  // Last finished session
+  $('final-h').textContent = `Last finished session: ${S.session}${S.mode === 'final' ? ' (logged)' : S.mode === 'pending' ? ' (end-of-day scan pending)' : ''}`;
+  list($('f-entries'), S.final.entries, (t) => `<b>${esc(t.symbol)}</b> ${t.model} · entry ${px(t.entry)} · stop ${px(t.stop)} · TP1 ${px(t.tp1)}`);
+  list($('f-exits'), S.final.exits, (t) => `<b>${esc(t.symbol)}</b> ${t.model} · ${esc(t.reason)} at ${px(t.exit)} · <b>${sgn(t.r)}R</b> <span class="muted">(opened ${t.openDate})</span>`);
+
+  // Forward record
+  if (S.forward) {
+    $('fw-note').textContent = `The out-of-sample test: trades opened on or after ${S.forward.start}, logged on the day they were seen (last logged session ${S.forward.updated}). Expect a few dozen closed trades per model before an average means much.`;
+    $('forward').innerHTML = ['PB', 'TR'].map((m) => { const x = S.forward[m]; return `<div class="tile"><div class="meta">${m} · closed ${x.closed} · open ${x.open}</div><div class="big">${x.closed ? sgn(x.avgR, 3) + 'R' : '–'} <span class="meta">avg</span></div><div class="meta">total ${sgn(x.totalR)}R · wins ${x.wins} · in-sample ${esc(x.ref)}</div></div>`; }).join('')
+      + (S.forward.flagged.length ? `<div class="tile"><div class="meta">Flagged (data revised after logging)</div>${S.forward.flagged.map((f) => `${esc(f.symbol)} ${f.model} ${f.openDate} ${f.flag}`).join('<br>')}</div>` : '');
+  } else { $('fw-note').textContent = 'No forward log yet: it is created by the first end-of-day scan.'; $('forward').innerHTML = ''; }
+
+  // Day by day
+  $('days').innerHTML = S.days.length ? S.days.map((d, i) => `<details ${i < 5 ? 'open' : ''}><summary><b>${d.date}</b> <span class="muted">${d.entries.length} in · ${d.exits.length} out${d.exits.length ? ' · ' + sgn(d.exits.reduce((a, t) => a + t.r, 0)) + 'R' : ''}</span></summary>${
+    d.entries.map((t) => `<div>&nbsp;&nbsp;<span class="flag"><span class="ic good" aria-hidden="true">+</span>in</span> <b>${esc(t.symbol)}</b> ${t.model} at ${px(t.entry)}, stop ${px(t.stop)}</div>`).join('')}${
+    d.exits.map((t) => `<div>&nbsp;&nbsp;<span class="flag"><span class="ic crit" aria-hidden="true">✕</span>out</span> <b>${esc(t.symbol)}</b> ${t.model} · ${esc(t.reason)} at ${px(t.exit)} · <b>${sgn(t.r)}R</b> <span class="muted">(opened ${t.openDate})</span></div>`).join('')}</details>`).join('') : '<div class="empty">No activity.</div>';
+
+  renderEval();
+}
+
+const COLS = [
+  { k: 'symbol', t: 'Stock', l: 1 }, { k: 'n', t: 'Trades' }, { k: 'winPct', t: 'Win %' }, { k: 'totalR', t: 'Total R' }, { k: 'avgR', t: 'Avg R' },
+  { k: 'n12', t: '12m trades' }, { k: 'winPct12', t: '12m win %' }, { k: 'totalR12', t: '12m total R' }, { k: 'avgR12', t: '12m avg R' },
+  { k: 'last', t: 'Last trade', l: 1 }, { k: 'openN', t: 'Open', l: 1 },
+];
+function renderEval() {
+  const tot = S.evaluation.totals;
+  $('totals').innerHTML = ['PB', 'TR'].map((m) => { const a = tot[m], b = tot[m + '12']; return `<div class="tile"><div class="meta">${m === 'PB' ? 'PB pullback (the tested preset)' : 'TR trailing-stop model'}</div><div class="big">${sgn(a.avgR, 3)}R <span class="meta">avg over ${a.n.toLocaleString()} trades, ${num(a.winPct, 1)}% wins</span></div><div class="meta">last 12 months: ${b.n} trades, ${sgn(b.avgR, 3)}R avg, ${num(b.winPct, 1)}% wins, total ${sgn(b.totalR, 1)}R</div></div>`; }).join('');
+  const q = $('filter').value.trim().toUpperCase();
+  const rows = S.evaluation.rows.filter((r) => !q || r.symbol.includes(q)).map((r) => {
+    const a = r[model], b = r[model + '12'], o = r.open.filter((t) => t.model === model);
+    return { symbol: r.symbol, n: a.n, winPct: a.winPct, totalR: a.totalR, avgR: a.avgR, n12: b.n, winPct12: b.winPct, totalR12: b.totalR, avgR12: b.avgR,
+      last: r.last ? r.last.closeDate : '', lastObj: r.last, openN: o.length, openObj: o };
+  });
+  rows.sort((x, y) => { const a = x[sortKey], b = y[sortKey]; if (a == null && b == null) return 0; if (a == null) return 1; if (b == null) return -1; return (a < b ? -1 : a > b ? 1 : 0) * sortDir; });
+  $('eval-count').textContent = `${rows.length} stocks`;
+  $('eval').innerHTML = `<thead><tr>${COLS.map((c) => `<th class="sort ${c.l ? 'l' : ''}" data-k="${c.k}">${c.t}${sortKey === c.k ? (sortDir < 0 ? ' ▾' : ' ▴') : ''}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr class="click" data-sym="${esc(r.symbol)}">
+    <td><b>${esc(r.symbol)}</b></td><td>${r.n}</td><td>${num(r.winPct, 0)}</td><td>${sgn(r.totalR, 1)}</td><td>${sgn(r.avgR)} ${rbar(r.avgR)}</td>
+    <td>${r.n12}</td><td>${num(r.winPct12, 0)}</td><td>${sgn(r.totalR12, 1)}</td><td>${sgn(r.avgR12)} ${rbar(r.avgR12)}</td>
+    <td class="l">${r.lastObj ? `${r.lastObj.closeDate} <span class="muted">${r.lastObj.model} ${sgn(r.lastObj.r)}R</span>` : '<span class="muted">–</span>'}</td>
+    <td class="l">${r.openObj.map((t) => `since ${t.openDate}`).join(', ')}</td></tr>`).join('')}</tbody>`;
+}
+
+async function showStock(sym) {
+  const r = await fetch('/api/stock/' + encodeURIComponent(sym), { cache: 'no-store' });
+  if (!r.ok) return;
+  const d = await r.json();
+  const all = [...d.open.map((t) => ({ ...t, open: true })), ...d.closed];
+  $('detail').style.display = 'block';
+  $('detail-h').textContent = `${sym}: ${d.closed.length} closed trades, ${d.open.length} open (both models, newest first)`;
+  table($('detail-t'), [{ t: 'Model', l: 1 }, { t: 'Opened', l: 1 }, { t: 'Closed', l: 1 }, { t: 'Reason', l: 1 }, { t: 'Entry' }, { t: 'Stop' }, { t: 'Exit' }, { t: 'Hit' }, { t: 'R' }],
+    all.map((t) => `<tr><td class="l">${t.model}</td><td class="l">${t.openDate}</td><td class="l">${t.open ? '<b>open</b>' : t.closeDate}</td><td class="l">${t.open ? '' : esc(t.reason)}</td><td>${px(t.entry)}</td><td>${px(t.stop)}</td><td>${t.open ? '' : px(t.exit)}</td><td>${t.tpHit}</td><td><b>${t.open ? sgn(t.openR) : sgn(t.r)}</b></td></tr>`), 'No trades.');
+  $('detail').scrollIntoView({ behavior: 'smooth' });
+}
+
+$('refresh').onclick = async () => { $('refresh').disabled = true; await fetch('/api/refresh', { method: 'POST' }); setTimeout(load, 1500); };
+$('m-PB').onclick = () => { model = 'PB'; $('m-PB').classList.add('on'); $('m-TR').classList.remove('on'); renderEval(); };
+$('m-TR').onclick = () => { model = 'TR'; $('m-TR').classList.add('on'); $('m-PB').classList.remove('on'); renderEval(); };
+$('filter').oninput = () => S && renderEval();
+$('eval').onclick = (e) => {
+  const th = e.target.closest('th[data-k]');
+  if (th) { const k = th.dataset.k; if (sortKey === k) sortDir = -sortDir; else { sortKey = k; sortDir = k === 'symbol' || k === 'last' ? 1 : -1; } renderEval(); return; }
+  const tr = e.target.closest('tr[data-sym]'); if (tr) showStock(tr.dataset.sym);
+};
+$('open').onclick = (e) => { const tr = e.target.closest('tr[data-sym]'); if (tr) showStock(tr.dataset.sym); };
+load();
+setInterval(() => load(), 60000);
+// While a refresh runs, poll faster so the page updates when it ends.
+setInterval(() => { if (S && S.refreshing) load(); }, 5000);
+</script>
+</body>
+</html>
