@@ -168,3 +168,18 @@ Neither option goes into the Pine script. Only the preset ships.
 
 The binding constraint is unchanged: no unseen EGX data. Options for a real test of the preset: forward-log its trades
 from 2026-11-21, or fetch a different market as a fresh out-of-sample set.
+
+## Live TradingView check of the preset (2026-11-21, after the run)
+
+The edited indicator was pasted into the Pine Editor (length confirmed: `Line 2144`), added to the chart, and
+compiled with no error. With `Preset: EGX Daily` on EGX daily charts (last bar 2026-11-19), the PERFORMANCE panel
+header read `PERFORMANCE · EGX DAILY` and matched the Node port's `egx-daily` preset on `data/egx-div` exactly:
+
+| Chart | TradingView n / W / L / total R | Port n / wins / total R |
+|---|---|---|
+| COMI 1D | 41 / 22 / 19 / +35.36R | 41 / 22 / +35.36R |
+| ETEL 1D | 38 / 20 / 18 / +32.99R | 38 / 20 / +32.99R |
+
+The regenerated strategy twin (`src/ict-rsi-ma-strategy.pine`, 2383 lines) also compiled and ran on ETEL 1D with the
+preset carried over: 38 entries sent, 0 skipped, engine n 38, Tester +35.07R vs engine +32.99R. That gap is the
+tick-fill difference the README already describes. The layout was restored by a discard reload afterwards.
