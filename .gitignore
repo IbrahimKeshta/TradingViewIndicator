@@ -11,3 +11,6 @@
 # captured while driving TradingView. Session debris, and the snapshots contain
 # logged-in account state.
 .playwright-mcp/
+
+# Downloaded market data (tools/backtest/fetch-egx.mjs output)
+data/
