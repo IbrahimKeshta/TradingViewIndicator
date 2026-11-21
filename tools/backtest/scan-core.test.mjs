@@ -32,3 +32,17 @@ test('dropUnfinished drops only an unfinished last bar', () => {
   assert.equal(dropUnfinished(old, cairo('2026-11-22', '12:00')).length, 2);
   assert.deepEqual(dropUnfinished([], cairo('2026-11-22', '12:00')), []);
 });
+
+test('trimUnfinishedCsvs removes a forming last bar from every CSV, and nothing else', async () => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const { trimUnfinishedCsvs } = await import('./scan-core.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trim-'));
+  const head = 'time,open,high,low,close,volume,date\n';
+  fs.writeFileSync(path.join(dir, 'AAA.csv'), head + '1,1,1,1,1,1,2026-11-19\n2,1,1,1,1,1,2026-11-22\n');
+  fs.writeFileSync(path.join(dir, 'BBB.csv'), head + '1,1,1,1,1,1,2026-11-19\n');
+  const n = trimUnfinishedCsvs(dir, cairo('2026-11-22', '12:00'));
+  assert.equal(n, 1);
+  assert.equal(fs.readFileSync(path.join(dir, 'AAA.csv'), 'utf8'), head + '1,1,1,1,1,1,2026-11-19\n');
+  assert.equal(fs.readFileSync(path.join(dir, 'BBB.csv'), 'utf8'), head + '1,1,1,1,1,1,2026-11-19\n');
+  assert.equal(trimUnfinishedCsvs(dir, cairo('2026-11-22', '12:00')), 0);
+});

@@ -25,7 +25,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadSymbol, loadMeta, loadIndexBars } from './data.mjs';
 import { parseArgs } from './egx100-common.mjs';
-import { EGX_CFG, UNIVERSE, dropUnfinished, runUniverse, newLog, updateLog, renderLatest } from './scan-core.mjs';
+import { EGX_CFG, UNIVERSE, dropUnfinished, runUniverse, newLog, updateLog, renderLatest, trimUnfinishedCsvs } from './scan-core.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..');
@@ -43,6 +43,8 @@ if (!args['no-fetch']) {
   execFileSync(process.execPath, ['--experimental-websocket', path.join(here, 'fetch-egx.mjs'), dataDir], {
     env: { ...process.env, ADJ: 'dividends' }, stdio: ['ignore', 'ignore', 'inherit'],
   });
+  // Fetched during the session, the CSVs end in today's forming bar; keep nothing provisional on disk.
+  trimUnfinishedCsvs(dataDir, new Date());
 }
 
 // ---- 2. run the engine ----

@@ -4,6 +4,8 @@
 // The closed-session guard lives here too. A bar dated today (Cairo) is still forming until the session is over; it
 // counts as finished only from 15:00 Cairo (EGX closes at 14:30, plus time for the feed to settle). Anything that writes
 // the forward log must drop an unfinished last bar first, or a trade seen on a bar that has not closed gets logged.
+import fs from 'node:fs';
+import path from 'node:path';
 import { runEngine, PRESETS, EGX30_LIST, EGX70_LIST } from './ict-engine.mjs';
 
 export const PRESET = 'egx-daily';
@@ -177,3 +179,20 @@ export function renderLatest({ session, symbols, stale, missing, lastDate, close
 }
 
 export const nextTarget = (t) => (t.tpHit < 1 ? t.tp1 : t.tpHit < 2 ? t.tp2 : t.tpHit < 3 ? t.tp3 : NaN);
+
+// After a full download during the session the CSVs end in today's forming bar. Trim it so nothing on disk is
+// provisional (a later --no-fetch run on another day would otherwise take a partial bar as final). Returns the number
+// of files trimmed. The date is the last CSV column (fetch-egx.mjs format).
+export function trimUnfinishedCsvs(dir, now) {
+  let n = 0;
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.csv'))) {
+    const file = path.join(dir, f);
+    const lines = fs.readFileSync(file, 'utf8').trimEnd().split(/\r?\n/);
+    if (lines.length < 2) continue;
+    const date = lines[lines.length - 1].split(',').pop();
+    if (isBarFinished(date, now)) continue;
+    fs.writeFileSync(file, lines.slice(0, -1).join('\n') + '\n');
+    n++;
+  }
+  return n;
+}
