@@ -57,16 +57,21 @@ export function createDashboard({
   let meta, symbols, missing, disk, diskIndex;
   const load = () => {
     meta = loadMeta(dataDir);
-    symbols = universe.filter((s) => fs.existsSync(path.join(dataDir, s + '.csv')) && !meta[s]?.error);
+    // A stock whose last download failed keeps its CSV: it stays in (reported stale) so its logged trades are not
+    // mistaken for vanished ones.
+    symbols = universe.filter((s) => fs.existsSync(path.join(dataDir, s + '.csv')));
     missing = universe.filter((s) => !symbols.includes(s));
     disk = Object.fromEntries(symbols.map((s) => [s, loadSymbol(s, dataDir)]));
     diskIndex = loadIndexBars(dataDir);
   };
   load();
 
+  // null when there is no log yet; throws when the file cannot be parsed (never overwrite a log that cannot be read).
   const readLog = () => (fs.existsSync(logFile) ? JSON.parse(fs.readFileSync(logFile, 'utf8')) : null);
+  const tryLog = () => { try { return { ok: true, log: readLog() }; } catch (e) { return { ok: false, log: null, error: 'forward log unreadable: ' + String(e.message || e) }; } };
   let live = null;          // { bars, index, errors, withRun, withoutRun, at }
-  let inflight = null, phase = null, lastError = null;
+  let eodRunning = null;
+  let inflight = null, phase = null, lastError = null, eodError = null;
 
   const tvSym = (k, fallback) => meta[k]?.tvSymbol || fallback;
 
@@ -112,6 +117,7 @@ export function createDashboard({
 
   function refresh() {
     if (inflight) return inflight;
+    if (eodRunning) return eodRunning;   // the end-of-day run refreshes when it ends; never fetch alongside its download
     inflight = (async () => {
       try { compute(await pullTails()); lastError = null; }
       catch (e) { lastError = String(e.message || e); }
@@ -122,9 +128,8 @@ export function createDashboard({
 
   // Newest session with a finished bar, from the merged data.
   const finishedSession = () => (live ? Object.values(live.withoutRun.lastDate).sort().pop() : Object.values(disk).map((b) => b.length && b[b.length - 1].date).filter(Boolean).sort().pop());
-  const needsEndOfDay = () => { const log = readLog(); const fin = finishedSession(); return !!fin && (!log || !log.updated || log.updated < fin); };
+  const needsEndOfDay = () => { const { ok, log } = tryLog(); const fin = finishedSession(); return ok && !!fin && (!log || !log.updated || log.updated < fin); };
 
-  let eodRunning = null;
   function endOfDay() {
     if (eodRunning) return eodRunning;
     eodRunning = (async () => {
@@ -137,6 +142,7 @@ export function createDashboard({
         const index = Object.fromEntries(Object.entries(diskIndex).map(([k, b]) => [k, dropUnfinished(b, t)]));
         const { closedAll, openAll, lastDate } = runUniverse(barsBySym, meta, index, cfg);
         const session = Object.values(lastDate).sort().pop();
+        if (!symbols.length || !session) throw new Error('no data to scan on disk');
         const stale = symbols.filter((s) => lastDate[s] < session);
         const log = readLog() || newLog(session);
         updateLog(log, closedAll, openAll, session);
@@ -144,8 +150,8 @@ export function createDashboard({
         fs.writeFileSync(logFile, JSON.stringify(log, null, 1) + '\n');
         fs.mkdirSync(path.dirname(outFile), { recursive: true });
         fs.writeFileSync(outFile, renderLatest({ session, symbols, stale, missing, lastDate, closedAll, openAll, log, trail }) + '\n');
-        lastError = null;
-      } catch (e) { lastError = 'end-of-day scan failed: ' + String(e.message || e); }
+        eodError = null;
+      } catch (e) { eodError = 'end-of-day scan failed: ' + String(e.message || e); }
       finally { phase = null; eodRunning = null; }
       await refresh();
     })();
@@ -154,11 +160,13 @@ export function createDashboard({
 
   function state() {
     const t = now(), c = cairoParts(t);
-    const log = readLog();
-    if (!live) return { mode: 'starting', phase: phase || 'loading', today: c.date, cairoTime: c.minutes, feedNote: FEED_NOTE, refreshing: true, error: lastError };
+    const { log, error: logError } = tryLog();
+    const error = [eodError, lastError, logError].filter(Boolean).join(' · ') || null;
+    if (!live) return { mode: 'starting', phase: phase || 'loading', today: c.date, cairoTime: c.minutes, feedNote: FEED_NOTE, refreshing: true, error };
     const { withRun, withoutRun, bars, errors } = live;
     const liveSession = Object.values(withRun.lastDate).sort().pop();
     const finSession = Object.values(withoutRun.lastDate).sort().pop();
+    if (!finSession) return { mode: 'nodata', phase, today: c.date, cairoTime: c.minutes, feedNote: FEED_NOTE, missing, refreshing: !!(inflight || eodRunning), error: error || 'no data on disk yet: run tools/backtest/scan-egx.mjs once' };
     const forming = liveSession === c.date && !isBarFinished(c.date, t);
     const mode = forming ? 'live' : log && log.updated === finSession ? 'final' : 'pending';
     const prov = forming ? provisional(withRun, withoutRun, c.date) : { exits: [], entries: [], targets: [] };
@@ -170,20 +178,25 @@ export function createDashboard({
       const k = `${o.symbol}|${o.openDate}|${o.model}`;
       return { ...o, close, lastDate: b[b.length - 1].date, openR: risk > 0 ? (o.side === 'long' ? close - o.entry : o.entry - close) / risk : 0, wouldExit: exitKeys.has(k), wouldHit: tgtKeys.get(k)?.to ?? null };
     }));
+    const markLogged = (x) => ({ ...x, logged: !!log?.trades?.[`${x.symbol}|${x.openDate}|${x.model}`] });
     const sessionDates = [...new Set(Object.values(bars).flatMap((b) => b.map((x) => x.date)))].filter((d) => d <= finSession);
     const staleRows = [
       ...Object.entries(errors).map(([symbol, error]) => ({ symbol, error })),
-      ...symbols.filter((s) => !errors[s] && withRun.lastDate[s] < liveSession).map((s) => ({ symbol: s, error: `last bar ${withRun.lastDate[s]}` })),
+      ...symbols.filter((s) => !errors[s] && meta[s]?.error).map((s) => ({ symbol: s, error: `download failed: ${meta[s].error}` })),
+      ...symbols.filter((s) => !errors[s] && !meta[s]?.error && withRun.lastDate[s] < liveSession).map((s) => ({ symbol: s, error: `last bar ${withRun.lastDate[s]}` })),
     ];
     return {
       mode, phase, today: c.date, cairoTime: c.minutes, liveSession, session: finSession, asOf: live.at, feedNote: FEED_NOTE,
       provisional: prov,
       open,
       final: { session: finSession, entries: [...withoutRun.closedAll, ...withoutRun.openAll].filter((x) => x.openDate === finSession), exits: withoutRun.closedAll.filter((x) => x.closeDate === finSession) },
-      days: dayByDay(withoutRun.closedAll, withoutRun.openAll, sessionDates, 60),
+      // Trades in the forward log (the out-of-sample record) are marked logged.
+      days: dayByDay(withoutRun.closedAll, withoutRun.openAll, sessionDates, 60).map((d) => ({
+        ...d, entries: d.entries.map(markLogged), exits: d.exits.map(markLogged),
+      })),
       evaluation: evaluate(withoutRun.closedAll, withoutRun.openAll, finSession, symbols),
       forward: log ? { start: log.start, updated: log.updated, ...forwardRecord(log) } : null,
-      stale: staleRows, missing, refreshing: !!(inflight || eodRunning), error: lastError,
+      stale: staleRows, missing, refreshing: !!(inflight || eodRunning), error,
     };
   }
 
@@ -210,6 +223,10 @@ export function serve(dash, port) {
   const page = path.join(here, 'public', 'index.html');
   const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(obj)); };
   const server = http.createServer((req, res) => {
+    try { route(req, res); }
+    catch (e) { console.error(e); if (!res.headersSent) json(res, 500, { error: String(e.message || e) }); else res.end(); }
+  });
+  const route = (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (req.method === 'GET' && url.pathname === '/') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); res.end(fs.readFileSync(page)); return; }
     if (req.method === 'GET' && url.pathname === '/api/state') { json(res, 200, dash.state()); return; }
@@ -217,7 +234,7 @@ export function serve(dash, port) {
     if (req.method === 'GET' && m) { const s = dash.stock(m[1]); json(res, s ? 200 : 404, s || { error: 'unknown stock' }); return; }
     if (req.method === 'POST' && url.pathname === '/api/refresh') { dash.refresh().then(() => { if (dash.needsEndOfDay()) dash.endOfDay(); }); json(res, 202, { started: true }); return; }
     json(res, 404, { error: 'not found' });
-  });
+  };
   server.listen(port, '127.0.0.1', () => console.log(`EGX Daily dashboard: http://127.0.0.1:${port}`));
   return server;
 }

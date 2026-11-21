@@ -54,7 +54,9 @@ const now = new Date();
 const meta = loadMeta(dataDir);
 const indexBars = loadIndexBars(dataDir);
 for (const k of Object.keys(indexBars)) indexBars[k] = dropUnfinished(indexBars[k], now);
-const symbols = UNIVERSE.filter((s) => fs.existsSync(path.join(dataDir, s + '.csv')) && !meta[s]?.error);
+// A stock whose last download failed keeps its old CSV and stays in (listed as stale), so its logged trades are not
+// mistaken for vanished ones.
+const symbols = UNIVERSE.filter((s) => fs.existsSync(path.join(dataDir, s + '.csv')));
 const missing = UNIVERSE.filter((s) => !symbols.includes(s));
 const barsBySym = {};
 for (const s of symbols) barsBySym[s] = dropUnfinished(loadSymbol(s, dataDir), now);

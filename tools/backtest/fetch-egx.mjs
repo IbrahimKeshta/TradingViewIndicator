@@ -129,7 +129,8 @@ if (only) {
 
 fs.mkdirSync(outDir, { recursive: true });
 const metaPath = path.join(outDir, '_meta.json');
-const allMeta = only && fs.existsSync(metaPath) ? JSON.parse(fs.readFileSync(metaPath, 'utf8')) : {};
+const prevMeta = fs.existsSync(metaPath) ? JSON.parse(fs.readFileSync(metaPath, 'utf8')) : {};
+const allMeta = only ? { ...prevMeta } : {};
 
 for (const t of targets) {
   let lastErr = null, ok = false;
@@ -152,7 +153,9 @@ for (const t of targets) {
       ok = true; break;
     } catch (e) { lastErr = e; console.log(t.key.padEnd(10) + ' ' + cand.padEnd(18) + ' FAIL ' + e.message); await sleep(300); }
   }
-  if (!ok) allMeta[t.key] = { list: t.list, bars: 0, error: String(lastErr && lastErr.message || lastErr), tried: t.candidates };
+  // A failed download leaves the old CSV in place; keep the old record (mintick above all) next to the error, so the
+  // stock can still be scanned on the bars it has.
+  if (!ok) allMeta[t.key] = { ...(prevMeta[t.key] || { list: t.list, bars: 0 }), error: String(lastErr && lastErr.message || lastErr), tried: t.candidates };
   fs.writeFileSync(metaPath, JSON.stringify(allMeta, null, 1));
   await sleep(400);
 }

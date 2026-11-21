@@ -111,3 +111,67 @@ test('a re-adjusted history triggers a full download of that stock only', async 
   await dash.refresh();
   assert.deepEqual(refetched, ['BBB']);
 });
+
+test('no data on disk: state() does not throw and endOfDay writes nothing', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dash-empty-'));
+  const data = path.join(dir, 'data'); fs.mkdirSync(data);
+  const logFile = path.join(dir, 'log.json'), outFile = path.join(dir, 'latest.md');
+  const dash = createDashboard({ dataDir: data, logFile, outFile, universe: ['AAA'], now: () => cairo('2026-11-22', '16:00'), fetchTail: async () => [], fullFetch: async () => {} });
+  await dash.refresh();
+  const s = dash.state();
+  assert.equal(s.mode, 'nodata');
+  await dash.endOfDay();
+  assert.equal(fs.existsSync(logFile), false);
+  assert.equal(fs.existsSync(outFile), false);
+  assert.match(dash.state().error, /no data/);
+});
+
+test('a half-written forward log does not break state()', async () => {
+  const fx = fixture();
+  fs.writeFileSync(fx.logFile, '{ truncated');
+  const dash = createDashboard({ dataDir: fx.data, logFile: fx.logFile, outFile: fx.outFile, universe: ['AAA', 'BBB'], now: () => cairo('2026-11-22', '12:00'),
+    fetchTail: async (sym) => tailOf(fx.bars[sym.split(':')[1]]), fullFetch: async () => {} });
+  await dash.refresh();
+  const s = dash.state();
+  assert.equal(s.mode, 'live');
+  assert.match(s.error, /forward log/);
+  assert.equal(dash.needsEndOfDay(), false, 'never runs the end-of-day scan over an unreadable log');
+});
+
+test('a stock whose download failed but whose CSV is on disk stays in, reported stale', async () => {
+  const fx = fixture();
+  fs.writeFileSync(path.join(fx.data, '_meta.json'), JSON.stringify({ AAA: { mintick: 0.01 }, BBB: { mintick: 0.01, error: 'timeout' } }));
+  const dash = createDashboard({ dataDir: fx.data, logFile: fx.logFile, outFile: fx.outFile, universe: ['AAA', 'BBB'], now: () => cairo('2026-11-22', '12:00'),
+    fetchTail: async (sym) => tailOf(fx.bars[sym.split(':')[1]]), fullFetch: async () => {} });
+  await dash.refresh();
+  const s = dash.state();
+  assert.equal(s.evaluation.rows.length, 2);
+  assert.ok(s.stale.some((x) => x.symbol === 'BBB' && /download failed: timeout/.test(x.error)));
+});
+
+test('day-by-day marks trades that are in the forward log', async () => {
+  const fx = fixture();
+  fs.writeFileSync(fx.logFile, JSON.stringify({ preset: 'egx-daily', start: '2026-09-01', created: '2026-09-01', trades: {} }));
+  const dash = createDashboard({ dataDir: fx.data, logFile: fx.logFile, outFile: fx.outFile, universe: ['AAA', 'BBB'], now: () => cairo('2026-11-22', '16:00'),
+    fetchTail: async (sym) => fx.bars[sym.split(':')[1]].slice(-30), fullFetch: async () => {} });
+  await dash.endOfDay();
+  const items = dash.state().days.flatMap((d) => [...d.entries, ...d.exits]);
+  assert.ok(items.length > 0, 'fixture has trades in the last 60 sessions');
+  for (const t of items) assert.equal(t.logged, t.openDate >= '2026-09-01', `${t.symbol} ${t.openDate}`);
+  assert.ok(items.some((t) => t.logged));
+});
+
+test('a refresh asked for during the end-of-day download joins it instead of fetching', async () => {
+  const fx = fixture();
+  let release, tails = 0;
+  const dash = createDashboard({ dataDir: fx.data, logFile: fx.logFile, outFile: fx.outFile, universe: ['AAA', 'BBB'], now: () => cairo('2026-11-22', '16:00'),
+    fetchTail: async (sym) => { tails++; return fx.bars[sym.split(':')[1]].slice(-30); },
+    fullFetch: () => new Promise((r) => { release = r; }) });
+  const eod = dash.endOfDay();
+  await new Promise((r) => setTimeout(r, 10));
+  const joined = dash.refresh();
+  assert.equal(tails, 0, 'no tail fetch while the full download runs');
+  release();
+  await eod; await joined;
+  assert.ok(fs.existsSync(fx.logFile));
+});

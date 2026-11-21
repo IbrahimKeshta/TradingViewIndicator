@@ -143,6 +143,8 @@ const rbar = (r, scale = 1.5) => {
   const w = Math.min(50, (Math.abs(r) / scale) * 50);
   return `<span class="bar" title="avg ${sgn(r)}R"><i class="${r >= 0 ? 'p' : 'n'}" style="width:${w}%"></i></span>`;
 };
+// Trades in the forward log (the out-of-sample record) carry a badge in the day-by-day list.
+const fwd = (t) => (t.logged ? ' <span class="badge" title="in the forward log">forward log</span>' : '');
 let S = null, model = 'PB', sortKey = 'totalR', sortDir = -1;
 
 async function load() {
@@ -154,12 +156,16 @@ async function load() {
 }
 
 function render() {
-  const modes = { live: 'LIVE · if it closed now', final: 'FINAL', pending: 'WAITING FOR END-OF-DAY SCAN', starting: 'STARTING' };
+  const modes = { live: 'LIVE · if it closed now', final: 'FINAL', pending: 'WAITING FOR END-OF-DAY SCAN', starting: 'STARTING', nodata: 'NO DATA' };
   $('mode').textContent = modes[S.mode] || S.mode;
   $('mode').className = 'badge' + (S.mode === 'live' ? ' live' : '');
   $('refresh').disabled = !!S.refreshing;
   $('phase').textContent = S.refreshing ? (S.phase || 'refreshing…') : '';
-  if (S.mode === 'starting') { $('when').textContent = S.phase || ''; return; }
+  if (S.mode === 'starting' || S.mode === 'nodata') {
+    $('when').textContent = S.phase || '';
+    $('banner').innerHTML = S.error ? `<div class="banner">${esc(S.error)}</div>` : '';
+    return;
+  }
   $('when').textContent = `session ${S.mode === 'live' ? S.liveSession : S.session} · prices as of ${cairo.format(new Date(S.asOf))} Cairo · ${S.feedNote}`;
   const warn = [];
   if (S.error) warn.push(esc(S.error));
@@ -197,8 +203,8 @@ function render() {
 
   // Day by day
   $('days').innerHTML = S.days.length ? S.days.map((d, i) => `<details ${i < 5 ? 'open' : ''}><summary><b>${d.date}</b> <span class="muted">${d.entries.length} in · ${d.exits.length} out${d.exits.length ? ' · ' + sgn(d.exits.reduce((a, t) => a + t.r, 0)) + 'R' : ''}</span></summary>${
-    d.entries.map((t) => `<div>&nbsp;&nbsp;<span class="flag"><span class="ic good" aria-hidden="true">+</span>in</span> <b>${esc(t.symbol)}</b> ${t.model} at ${px(t.entry)}, stop ${px(t.stop)}</div>`).join('')}${
-    d.exits.map((t) => `<div>&nbsp;&nbsp;<span class="flag"><span class="ic crit" aria-hidden="true">✕</span>out</span> <b>${esc(t.symbol)}</b> ${t.model} · ${esc(t.reason)} at ${px(t.exit)} · <b>${sgn(t.r)}R</b> <span class="muted">(opened ${t.openDate})</span></div>`).join('')}</details>`).join('') : '<div class="empty">No activity.</div>';
+    d.entries.map((t) => `<div>&nbsp;&nbsp;<span class="flag"><span class="ic good" aria-hidden="true">+</span>in</span> <b>${esc(t.symbol)}</b> ${t.model} at ${px(t.entry)}, stop ${px(t.stop)}${fwd(t)}</div>`).join('')}${
+    d.exits.map((t) => `<div>&nbsp;&nbsp;<span class="flag"><span class="ic crit" aria-hidden="true">✕</span>out</span> <b>${esc(t.symbol)}</b> ${t.model} · ${esc(t.reason)} at ${px(t.exit)} · <b>${sgn(t.r)}R</b> <span class="muted">(opened ${t.openDate})</span>${fwd(t)}</div>`).join('')}</details>`).join('') : '<div class="empty">No activity.</div>';
 
   renderEval();
 }
