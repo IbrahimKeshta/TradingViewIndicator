@@ -72,6 +72,7 @@ chochColor         = input.color(color.fuchsia, "CHoCH", group = "Structure Disp
 rayColor           = input.color(color.gray, "Rays", group = "Structure Display")
 
 // ---------------- Trade Engine ----------------
+presetInput        = input.string("Custom", "Preset", options = ["Custom", "EGX Daily"], group = "Trade Engine", tooltip = "Custom: every setting below is used exactly as set.\n\nEGX Daily: the best configuration found over 100 EGX stocks on daily bars, full history, after costs (2026-11-20). It FORCES these settings and ignores whatever their own boxes say: Stop on Close Only on, Runner on, Trailing Tier Major, Trail From Entry on, Long Trades Only on, Apply Costs on (with the slippage and commission set under Costs), Min Risk (ticks) 10.\n\nOn those stocks it took average R per trade from +0.10 to +0.48. Stop on Close and the runner settings each passed an out-of-sample test on their own; the combination was chosen from the full sample, so forward results are its real test. Measured on EGX daily charts only.")
 minScore           = input.int(5, "Minimum Score", minval = 1, maxval = 15, group = "Trade Engine", tooltip = "How many scored points a setup needs, out of however many are switched on below. The panel shows both numbers — a disabled point is never counted in the denominator, so turning one off does not silently loosen or break the threshold.\n\nRaised from 4 to 5 when the confirmation points were added: at seven points, 4 would be a LOOSER gate than the old 4-of-5. TradingView keeps the value saved on an existing chart, so if this still reads 4, it was carried over and should be raised by hand.")
 scoreKillzone      = input.bool(true, "Score: Killzone", group = "Trade Engine", tooltip = "Turn off on single-session markets such as EGX, where a killzone means nothing. If both killzone sessions are disabled for display, this point excludes itself automatically whatever this is set to.")
 scoreMa            = input.bool(true, "Score: Moving Average", group = "Trade Engine")
@@ -82,10 +83,10 @@ stopBufferMult     = input.float(0.25, "Stop Buffer (x ATR)", minval = 0.0, step
 minRiskAtr         = input.float(1.0, "Minimum Risk (x ATR)", minval = 0.0, step = 0.1, group = "Trade Engine", tooltip = "Reject a zone-touch setup whose entry-to-stop distance is below this multiple of the Structure ATR — the same floor the trailing model already applies to its own flips (Trail Minimum Risk), and for the same reason: a stop that thin sits inside a single bar's ordinary range, so the R multiple it produces is inflated on winners and enormous on losers, not a real read of the setup.\n\nSet to 0 to disable the floor and take every zone touch, which is what produced the earlier record.")
 minTargetR         = input.float(1.0, "Minimum Target Distance (R)", minval = 0.1, step = 0.1, group = "Trade Engine", tooltip = "Structural levels closer than this are skipped. A target 0.3R away is a winner on paper and not worth the spread.")
 trailTierInput     = input.string("Internal", "Trailing Tier", options = ["Internal", "Major"], group = "Trade Engine", tooltip = "Which tier's swings the stop trails behind once TP1 is hit. Internal trails tightly; Major gives the trade room.")
-stopOnCloseOnly    = input.bool(false, "Stop on Close Only", group = "Trade Engine", tooltip = "Exit only when a bar CLOSES beyond the stop, instead of the moment its wick touches. On thin or wicky instruments — EGX dailies especially — an intrabar touch hands back trades that the close never confirmed.\n\nThe exit is then recorded at that bar's close, not at the stop price, because the close is where the decision was actually made. That is a worse fill than the stop level and it is the honest one: the trade is giving up the extra distance in exchange for surviving wicks.")
-runnerMode         = input.bool(false, "Runner (no exit at TP3)", group = "Trade Engine", tooltip = "Treat TP3 as a waypoint rather than the exit. The last third keeps running behind the trailing stop until the stop or a CHoCH takes it out, which is what lets one trade pay for several stopped ones on a trending instrument.\n\nThe scale-out accounting follows: with this on, a third leaves at TP1 and a third at TP2, and the FINAL third is priced at wherever the trade actually closed instead of at TP3.")
-trailFromEntry     = input.bool(false, "Trail From Entry", group = "Trade Engine", tooltip = "Run the structural trail from the moment the trade opens, and skip the jump to breakeven at TP1.\n\nDefault behaviour jams the stop to entry on TP1, which on a strong continuation hands the trade back at 0R on the first ordinary pullback. With this on the stop instead follows the same swings it always would — looser early, and it can still lose a full R after TP1, which is the trade being made.")
-longOnly           = input.bool(false, "Long Trades Only", group = "Trade Engine", tooltip = "For cash-equity charts where shorting is unavailable. Bearish setups still mark and alert, but open no trade.")
+stopOnCloseOnlyIn  = input.bool(false, "Stop on Close Only", group = "Trade Engine", tooltip = "Exit only when a bar CLOSES beyond the stop, instead of the moment its wick touches. On thin or wicky instruments — EGX dailies especially — an intrabar touch hands back trades that the close never confirmed.\n\nThe exit is then recorded at that bar's close, not at the stop price, because the close is where the decision was actually made. That is a worse fill than the stop level and it is the honest one: the trade is giving up the extra distance in exchange for surviving wicks.")
+runnerModeIn       = input.bool(false, "Runner (no exit at TP3)", group = "Trade Engine", tooltip = "Treat TP3 as a waypoint rather than the exit. The last third keeps running behind the trailing stop until the stop or a CHoCH takes it out, which is what lets one trade pay for several stopped ones on a trending instrument.\n\nThe scale-out accounting follows: with this on, a third leaves at TP1 and a third at TP2, and the FINAL third is priced at wherever the trade actually closed instead of at TP3.")
+trailFromEntryIn   = input.bool(false, "Trail From Entry", group = "Trade Engine", tooltip = "Run the structural trail from the moment the trade opens, and skip the jump to breakeven at TP1.\n\nDefault behaviour jams the stop to entry on TP1, which on a strong continuation hands the trade back at 0R on the first ordinary pullback. With this on the stop instead follows the same swings it always would — looser early, and it can still lose a full R after TP1, which is the trade being made.")
+longOnlyIn         = input.bool(false, "Long Trades Only", group = "Trade Engine", tooltip = "For cash-equity charts where shorting is unavailable. Bearish setups still mark and alert, but open no trade.")
 showTradeLevels    = input.bool(true, "Show Trade Levels", group = "Trade Engine")
 showTradeHistory   = input.bool(true, "Show Trade History", group = "Trade Engine", tooltip = "Leaves a result label in R at each closed trade's exit bar — the cheapest possible track record.")
 showTradePanel     = input.bool(true, "Show Trade Panel Rows", group = "Trade Engine")
@@ -113,11 +114,25 @@ idxRegimeLen       = input.int(50, "Index MA Length", minval = 2, group = "Index
 idxSlopeLen        = input.int(10, "Index Slope Lookback (bars)", minval = 1, group = "Index Filter")
 
 // ---------------- Costs ----------------
-applyCosts         = input.bool(false, "Apply Costs", group = "Costs", tooltip = "Deduct slippage and commission from every closed trade's R. Off by default so existing charts keep their numbers.")
+applyCostsIn       = input.bool(false, "Apply Costs", group = "Costs", tooltip = "Deduct slippage and commission from every closed trade's R. Off by default so existing charts keep their numbers.")
 slippagePct        = input.float(0.1, "Slippage per Side (%)", minval = 0, step = 0.05, group = "Costs")
 commissionPer      = input.float(2.0, "Commission per Order", minval = 0, step = 0.5, group = "Costs", tooltip = "In the chart's currency.")
 positionSize       = input.float(100000, "Position Size", minval = 1, step = 10000, group = "Costs", tooltip = "Only used to turn the per-order commission into R.")
-minRiskTicks       = input.int(0, "Min Risk (ticks)", minval = 0, group = "Costs", tooltip = "Reject setups whose stop is closer than this many ticks, in both models. 0 = off. On split-adjusted EGX history a whole stop can sit inside one tick, and a few such trades can dominate Total R.")
+minRiskTicksIn     = input.int(0, "Min Risk (ticks)", minval = 0, group = "Costs", tooltip = "Reject setups whose stop is closer than this many ticks, in both models. 0 = off. On split-adjusted EGX history a whole stop can sit inside one tick, and a few such trades can dominate Total R.")
+
+// ---- Preset resolution ----
+// The engine reads only these resolved names, never the *In inputs above, so a preset cannot be
+// half-applied. With Custom they equal the inputs exactly, so existing charts are unchanged.
+egxPreset          = presetInput == "EGX Daily"
+stopOnCloseOnly    = egxPreset or stopOnCloseOnlyIn
+runnerMode         = egxPreset or runnerModeIn
+trailFromEntry     = egxPreset or trailFromEntryIn
+longOnly           = egxPreset or longOnlyIn
+applyCosts         = egxPreset or applyCostsIn
+trailTier          = egxPreset ? "Major" : trailTierInput
+minRiskTicks       = egxPreset ? 10 : minRiskTicksIn
+// Shown in the PERFORMANCE header, so a screenshot always says which settings produced its numbers.
+presetTag          = egxPreset ? " · EGX DAILY" : ""
 
 // ---------------- Validation ----------------
 testStart          = input.time(timestamp("01 Jan 2024 00:00 +0200"), "Test Start", group = "Validation", tooltip = "Data Window totals split closed trades into Tuning (entered before) and Test (entered on or after). A trade entered before and closed after is counted in neither, only as straddle.")
@@ -1279,7 +1294,7 @@ newestUnbroken(array<SwingPoint> pts) =>
 // lookback bars after the fact. That lag is inherent to non-repainting pivots, not a defect.
 // The tier is chosen by picking between two float RESULTS, never between two arrays.
 trailAnchor(bool isLong) =>
-    useMajor = trailTierInput == "Major"
+    useMajor = trailTier == "Major"
     result = float(na)
     if isLong
         result := useMajor ? newestUnbroken(majorLows) : newestUnbroken(intLows)
@@ -2066,9 +2081,9 @@ if barstate.islast
         if trRows > 0
             tradePanelBlock(trailTrade, trailOpenR, "TRAIL ", trBase)
         if pbStatsRows > 0
-            statsPanelBlock(MODEL_PULLBACK, useTrailModel ? "PERFORMANCE · PULLBACK" : "PERFORMANCE", pbStatsBase)
+            statsPanelBlock(MODEL_PULLBACK, (useTrailModel ? "PERFORMANCE · PULLBACK" : "PERFORMANCE") + presetTag, pbStatsBase)
         if trStatsRows > 0
-            statsPanelBlock(MODEL_TRAIL, "PERFORMANCE · TRAIL", trStatsBase)
+            statsPanelBlock(MODEL_TRAIL, "PERFORMANCE · TRAIL" + presetTag, trStatsBase)
         if pbPointRows > 0
             pointStatsPanelBlock(MODEL_PULLBACK, useTrailModel ? "POINTS · PULLBACK" : "POINTS", pbPointBase)
         if trPointRows > 0

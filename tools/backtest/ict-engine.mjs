@@ -138,6 +138,13 @@ export const DEFAULTS = Object.freeze({
   invalidation: 'on',
   // Sensitivity (not a candidate): scale-free Min Risk floor, risk >= x% of the entry price (applied in addition to minRiskTicks; 0 = off).
   minRiskPct: 0,
+  // 2026-11-21 exit tests (docs/superpowers/plans/2026-11-21-egx-daily-exit-tests.md). Both 0 = off.
+  // B backup stop: with Stop on Close Only, also exit INTRABAR when price reaches entry -/+ k x initial risk (fixed at entry),
+  //   filled at that level or at the open if the bar opens beyond it. Tested before the close-based stop. Reason 'Hard Stop'.
+  hardStopR: 0,
+  // T time stop: before TP1, once the trade has been open >= N bars, exit at the close of the first bar closing against the
+  //   entry (long: close < entry). Reason 'Time'.
+  timeStopBars: 0,
   // Entry filters, evaluated at the signal bar (data through that bar's close only). null / 0 / false = off. NaN features fail the filter.
   filtRsiMin: null, filtRsiMax: null,        // RSI(rsiLength) in [min, max]
   filtAdxMin: 0,                             // ADX(14) >= x
@@ -166,6 +173,8 @@ export const EGX70_LIST = ',ACTF,ATLC,AMER,ARAB,AMIA,AIDC,AIHC,ARCC,ASCM,ASPI,AI
 export const PRESETS = Object.freeze({
   'tv-base': { longOnly: true, applyCosts: true, minRiskTicks: 10 },
   'tv-r4': { longOnly: true, applyCosts: true, minRiskTicks: 10, runnerMode: true, trailTier: 'Major', trailFromEntry: true },
+  // The Pine "Preset: EGX Daily" input: tv-r4 + Stop on Close Only (sweep row 13).
+  'egx-daily': { longOnly: true, applyCosts: true, minRiskTicks: 10, runnerMode: true, trailTier: 'Major', trailFromEntry: true, stopOnCloseOnly: true },
   'pine-default': {},
 });
 
@@ -702,6 +711,15 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
     t.mae = Math.max(t.mae, isLong ? t.entry - L[i] : H[i] - t.entry);
     const phantom = cfg.phantomGuard && i > 0 && Math.abs(O[i] - C[i - 1]) <= mintick + 1e-9 && Math.abs((isLong ? L[i] : H[i]) - O[i]) <= mintick + 1e-9;
     const closeTest = cfg.stopOnCloseOnly || phantom;
+    if (cfg.hardStopR > 0 && cfg.stopOnCloseOnly) {
+      const r0 = Math.abs(t.entry - t.initialStop);
+      const lvl = isLong ? t.entry - cfg.hardStopR * r0 : t.entry + cfg.hardStopR * r0;
+      if (isLong ? L[i] <= lvl : H[i] >= lvl) {
+        t.closePrice = isLong ? Math.min(lvl, O[i]) : Math.max(lvl, O[i]);
+        t.closeReason = 'Hard Stop';
+        return true;
+      }
+    }
     const stopHit = closeTest ? (isLong ? C[i] <= t.stop : C[i] >= t.stop) : (isLong ? L[i] <= t.stop : H[i] >= t.stop);
     if (stopHit) {
       t.closePrice = closeTest ? C[i] : (isLong ? Math.min(t.stop, O[i]) : Math.max(t.stop, O[i]));
@@ -727,6 +745,10 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
     }
     if (chochAgainst) {
       t.closePrice = C[i]; t.closeReason = 'Invalidated';
+      return true;
+    }
+    if (cfg.timeStopBars > 0 && t.tpHit < 1 && i - t.openBar >= cfg.timeStopBars && (isLong ? C[i] < t.entry : C[i] > t.entry)) {
+      t.closePrice = C[i]; t.closeReason = 'Time';
       return true;
     }
     if (t.chandelier || cfg.trailFromEntry || t.tpHit >= 1) {
