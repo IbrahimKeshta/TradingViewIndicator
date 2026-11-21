@@ -17,8 +17,9 @@ node tools/backtest/debug-bar.mjs VLMRA 2022-04-17 --data data/egx-div     # eng
 
 | File | What |
 |---|---|
-| `ict-engine.mjs` | `runEngine(bars, config, {symbol, mintick, indexBars})` returns every closed trade. `DEFAULTS` equals the Pine input defaults; `PRESETS` has `tv-base` (daily, Long Only, costs on, Min Risk 10 ticks) and `tv-r4` (+ Runner, Trailing Tier Major, Trail From Entry). |
+| `ict-engine.mjs` | `runEngine(bars, config, {symbol, mintick, indexBars})` returns every closed trade. `DEFAULTS` equals the Pine input defaults; `PRESETS` has `tv-base` (daily, Long Only, costs on, Min Risk 10 ticks) and `tv-r4` (+ Runner, Trailing Tier Major, Trail From Entry), and `egx-daily` (tv-r4 + Stop on Close Only, the Pine `Preset: EGX Daily`). Off-by-default exit keys `hardStopR` and `timeStopBars` exist for the 2026-11-21 test only; both failed and are not in Pine. |
 | `run.mjs` | CLI: config over a symbol list, per-symbol n / wins (net R > 0) / total R, optional `--out` CSV + JSON (one row per trade). `--cut DATE` and `--max-bars N` truncate history. |
+| `exit-tests.mjs` | Backup-stop and time-stop grids against `egx-daily`, with the pass rules of `docs/superpowers/plans/2026-11-21-egx-daily-exit-tests.md`. |
 | `validate.mjs` | Acceptance test against `docs/superpowers/plans/2026-11-02-egx-trust-raw-results.tsv`. |
 | `compare-log.mjs` | Trade-by-trade diff against a Pine `Log Closed Trades` export. |
 | `data.mjs`, `debug-bar.mjs` | CSV loading, state dump. |

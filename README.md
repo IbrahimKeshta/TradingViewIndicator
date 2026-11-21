@@ -280,6 +280,41 @@ final third is priced at wherever the trade actually closed rather than at TP3. 
 runner would book a gain at TP3 it never took and stay capped at TP3's R — the exact understatement
 the mode exists to remove.
 
+### The EGX Daily preset
+
+`Preset` at the top of **Trade Engine** has two choices. **Custom** (the default) uses every setting
+exactly as you set it, so a chart you already have does not change. **EGX Daily** switches on the
+best combination found over 100 EGX stocks on daily bars, full history, after costs. It forces these
+settings and ignores what their own boxes say:
+
+| Forced by EGX Daily | Value |
+|---|---|
+| Stop on Close Only | on |
+| Runner (no exit at TP3) | on |
+| Trailing Tier | Major |
+| Trail From Entry | on |
+| Long Trades Only | on |
+| Apply Costs | on (with the Slippage and Commission set under **Costs**) |
+| Min Risk (ticks) | 10 |
+
+The PERFORMANCE header then reads `PERFORMANCE · EGX DAILY`, so a screenshot always says which
+settings made its numbers.
+
+On those 100 stocks the preset took average R per trade from +0.10 to +0.48 and profit factor from
+1.24 to 1.80, with the smallest drawdown of anything tested and 86% of stocks profitable. Be clear
+about what that is: Stop on Close and the runner settings each passed an out-of-sample test on
+their own, but the combination was picked from the full sample, and there is no unseen EGX data
+left to test it on. Forward results are its real test. It was measured on EGX daily charts only.
+
+Two more exits were tested on top of it on 2026-11-21, and both failed, so neither is in the script.
+A **backup intraday stop** 1.5–3R from entry, meant to cap Stop on Close's bigger single losses,
+fired on bars that wicked deep and then closed back up. It booked those losses at the bar's low,
+where Stop on Close would have taken the better close: about −1.3R instead of −0.9R at the 1.5R
+setting. It lowered average R and raised the drawdown. A **time stop** (leave a trade that is still
+below entry after 5, 10 or 20 bars) lowered average R at every setting, because many eventual
+winners spend their first weeks under water. The record is in
+`docs/superpowers/plans/2026-11-21-egx-daily-exit-tests.md`.
+
 ## The second entry model
 
 The pullback engine above has a structural blind spot, and it is not a tuning problem. Order blocks
@@ -619,6 +654,7 @@ claiming to quote a price or an R figure.
 
 | Setting | Default | What it does |
 |---|---|---|
+| Preset | Custom | **EGX Daily** forces Stop on Close Only, Runner, Trailing Tier Major, Trail From Entry, Long Trades Only, Apply Costs and Min Risk 10 ticks, whatever their own boxes say. See [The EGX Daily preset](#the-egx-daily-preset) |
 | Minimum Score | 5 | Points needed, out of however many are enabled below |
 | Score: Killzone | on | **Turn off on single-session markets like EGX** |
 | Show Asia Killzone | off | On for 24-hour markets like crypto — off by default so it doesn't change existing saved charts |
@@ -682,7 +718,9 @@ non-EGX symbols.
 | Test Start | 01 Jan 2024 | Trades entered before this time count as Tuning, trades entered on or after it as Test. A trade entered before and closed after is counted in neither, only as straddle. The Data Window shows N, wins and R for each side per model (`DBG PB Tune N` … `DBG TR Test R`, plus `DBG Straddle N`), and the trade log ends with a period field |
 
 Costs and the tick floor are off by default, so existing charts keep their numbers; turn them on for
-honest EGX results, where a whole stop can sit inside one tick of split-adjusted history. The index
+honest EGX results, where a whole stop can sit inside one tick of split-adjusted history. The EGX
+Daily preset turns both on for you (Min Risk at 10 ticks); slippage, commission and position size
+still come from this group. The index
 filter uses the same constituent lists (dated 2026-11-01) and the same EGX30 stand-in before
 mid-2020 as the EGX Trust Score script.
 
