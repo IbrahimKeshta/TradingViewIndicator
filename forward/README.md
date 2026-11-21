@@ -3,6 +3,17 @@
 The EGX Daily preset of the ICT script was chosen on all available EGX history, so no unseen EGX data was left to test
 it on. This folder is that test: every trade the preset opens **from 2026-11-21 on**, logged on the day it is seen.
 
+Two models are scanned and recorded separately, each tagged in every table and in the log:
+
+- **PB**, the pullback model: the tested preset.
+- **TR**, the trailing-stop model, which charts show when `Enable Trailing Stop Model` is on. It has its own trade
+  slot and never changes the PB trades. Under the preset's settings it averaged +0.35R per trade in-sample, against
+  +0.51R for PB. `--no-trail` scans PB alone.
+
+To make a chart show exactly what the scanner lists, use `Preset: EGX Daily`. The preset counts the killzone point
+as earned, so turning `Score: Killzone` off on the chart no longer changes the trades. Turn `Enable Trailing Stop
+Model` on to see the TR rows too.
+
 ## Files
 
 | File | What |

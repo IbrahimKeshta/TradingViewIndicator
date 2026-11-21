@@ -210,6 +210,12 @@ instead of `5/7` — the threshold adjusts rather than quietly loosening. The sa
 automatically for points that cannot apply: turn off both killzone sessions and the killzone point
 removes itself, and on a symbol that reports no volume at all the participation point removes itself.
 
+> **On EGX daily charts, leave the killzone point on.** An EGX daily bar opens inside the London
+> window, so the point is earned on every bar (4,225 of 4,225 tested entries): with it on, `Minimum
+> Score` 5 really means 4 of the other 6 points. Switching it off raises that to 5 of 6, and over
+> 100 EGX stocks that tested worse: +0.46R vs +0.51R per trade, 28% fewer trades, and worse both
+> before and after 2023. The EGX Daily preset counts the point as earned whatever the box says.
+
 **Three of the five confirmations share votes, on purpose.** RSI, MACD and Stochastic all measure
 momentum from the same price series — counted separately they would cast three of ten votes for
 what is really one opinion, and a setup could clear the threshold on momentum agreeing with itself.
@@ -296,9 +302,12 @@ settings and ignores what their own boxes say:
 | Long Trades Only | on |
 | Apply Costs | on (with the Slippage and Commission set under **Costs**) |
 | Min Risk (ticks) | 10 |
+| Score: Killzone point | counted as earned (it is on every EGX daily bar; switching it off tested worse) |
 
 The PERFORMANCE header then reads `PERFORMANCE · EGX DAILY`, so a screenshot always says which
-settings made its numbers.
+settings made its numbers. The preset does not touch `Enable Trailing Stop Model`: that model keeps its own
+slot and its own PERFORMANCE · TRAIL rows. Under the preset's settings it averaged +0.35R per trade over
+1,926 trades on the same 100 stocks (in-sample), against +0.51R for the pullback model.
 
 On those 100 stocks the preset took average R per trade from +0.10 to +0.48 and profit factor from
 1.24 to 1.80, with the smallest drawdown of anything tested and 86% of stocks profitable. Be clear
@@ -661,7 +670,7 @@ claiming to quote a price or an R figure.
 |---|---|---|
 | Preset | Custom | **EGX Daily** forces Stop on Close Only, Runner, Trailing Tier Major, Trail From Entry, Long Trades Only, Apply Costs and Min Risk 10 ticks, whatever their own boxes say. See [The EGX Daily preset](#the-egx-daily-preset) |
 | Minimum Score | 5 | Points needed, out of however many are enabled below |
-| Score: Killzone | on | **Turn off on single-session markets like EGX** |
+| Score: Killzone | on | **Leave on for EGX daily**: the point is earned on every EGX daily bar, and turning it off tested worse (see above). The EGX Daily preset counts it as earned |
 | Show Asia Killzone | off | On for 24-hour markets like crypto — off by default so it doesn't change existing saved charts |
 | Score: Moving Average | on | Whether price is on the trade's side of the MA |
 | Score: Major Trend Agreement | on | Whether the major tier agrees with the internal one |
