@@ -11,6 +11,8 @@ node tools/backtest/run.mjs --symbols VLMRA --config '{"useTrailModel":true,"lon
 node tools/backtest/validate.mjs --data data/egx-div --cut 2026-11-04 --combos base,r4,conf,idx,both,r1,r2,r3
 node tools/backtest/compare-log.mjs --data data/egx-div --symbol VLMRA --log <Pine-logs-export.csv> --cfg '{...}'
 node tools/backtest/debug-bar.mjs VLMRA 2022-04-17 --data data/egx-div     # engine state on a date
+node --experimental-websocket tools/backtest/scan-egx.mjs                   # EGX Daily scan + forward log (see forward/README.md)
+ADJ=dividends node --experimental-websocket tools/backtest/fetch-egx.mjs data/egx-div   # all EGX30/EGX70, dividend-adjusted
 ```
 
 ## Files
@@ -19,6 +21,7 @@ node tools/backtest/debug-bar.mjs VLMRA 2022-04-17 --data data/egx-div     # eng
 |---|---|
 | `ict-engine.mjs` | `runEngine(bars, config, {symbol, mintick, indexBars})` returns every closed trade. `DEFAULTS` equals the Pine input defaults; `PRESETS` has `tv-base` (daily, Long Only, costs on, Min Risk 10 ticks) and `tv-r4` (+ Runner, Trailing Tier Major, Trail From Entry), and `egx-daily` (tv-r4 + Stop on Close Only, the Pine `Preset: EGX Daily`). Off-by-default exit keys `hardStopR` and `timeStopBars` exist for the 2026-11-21 test only; both failed and are not in Pine. |
 | `run.mjs` | CLI: config over a symbol list, per-symbol n / wins (net R > 0) / total R, optional `--out` CSV + JSON (one row per trade). `--cut DATE` and `--max-bars N` truncate history. |
+| `scan-egx.mjs` | Daily scanner and forward log for the EGX Daily preset: refreshes dividend-adjusted bars for every EGX30/EGX70 stock, lists new entries, closes and open trades (with the current stop and next target), writes `forward/latest.md` and appends to `forward/egx-daily-log.json`. See `forward/README.md`. |
 | `exit-tests.mjs` | Backup-stop and time-stop grids against `egx-daily`, with the pass rules of `docs/superpowers/plans/2026-11-21-egx-daily-exit-tests.md`. |
 | `validate.mjs` | Acceptance test against `docs/superpowers/plans/2026-11-02-egx-trust-raw-results.tsv`. |
 | `compare-log.mjs` | Trade-by-trade diff against a Pine `Log Closed Trades` export. |

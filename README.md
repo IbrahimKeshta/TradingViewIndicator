@@ -306,6 +306,11 @@ about what that is: Stop on Close and the runner settings each passed an out-of-
 their own, but the combination was picked from the full sample, and there is no unseen EGX data
 left to test it on. Forward results are its real test. It was measured on EGX daily charts only.
 
+That forward test is running. `tools/backtest/scan-egx.mjs` runs the same engine with this preset over every EGX30
+and EGX70 stock after each session. It lists new entries, trades closed and every open trade with its current stop
+and next target, and keeps an append-only log of every trade opened from 2026-11-21 on. The Pine script sees one chart
+at a time, so this is also the quickest way to see all of today's EGX Daily setups at once. See `forward/README.md`.
+
 Two more exits were tested on top of it on 2026-11-21, and both failed, so neither is in the script.
 A **backup intraday stop** 1.5–3R from entry, meant to cap Stop on Close's bigger single losses,
 fired on bars that wicked deep and then closed back up. It booked those losses at the bar's low,

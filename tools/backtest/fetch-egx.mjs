@@ -26,14 +26,15 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pinePath = path.resolve(here, '../../src/egx-trust-indicator.pine');
-const outDir = path.resolve(process.argv[2] || 'data/egx');
-const only = process.argv[3] ? process.argv[3].split(',').map(s => s.trim()).filter(Boolean) : null;
-
 // Price adjustment sent to TradingView: 'splits' (default, what data/egx holds) or 'dividends' (what the charts show with ADJ on; data/egx-div).
+// Parsed and removed BEFORE the positional arguments are read: otherwise, with no symbol list, '--adjust' itself was taken as one.
 const ai = process.argv.indexOf('--adjust');
 const ADJ = (ai > 0 ? process.argv[ai + 1] : process.env.ADJ) || 'splits';
 if (!['splits', 'dividends', 'none'].includes(ADJ)) throw new Error('bad adjustment ' + ADJ);
 if (ai > 0) process.argv.splice(ai, 2);
+
+const outDir = path.resolve(process.argv[2] || 'data/egx');
+const only = process.argv[3] ? process.argv[3].split(',').map(s => s.trim()).filter(Boolean) : null;
 
 const STEP = 5000;        // bars per request
 const MAX_ROUNDS = 40;
