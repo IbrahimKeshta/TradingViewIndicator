@@ -2,17 +2,21 @@
 
 # TradingView Indicators
 
-Three Pine Script v6 indicators for TradingView, written to be read as much as used. All are single
-self-contained files — no libraries, no external data, nothing to install beyond pasting the script
-into TradingView.
+Four Pine Script v6 indicators for TradingView, written to be read as much as used. Each is a single
+self-contained file — no libraries, no data source beyond what TradingView itself serves, nothing to
+install beyond pasting the script into TradingView. The confluence indicator also has a generated strategy twin, for running its
+trades through TradingView's Strategy Tester.
 
 | Script | What it does | Pane |
 |---|---|---|
 | [`src/ict-rsi-ma-indicator.pine`](src/ict-rsi-ma-indicator.pine) | Market structure, order blocks, fair value gaps and session killzones, scored into graded trade setups with an entry zone, a stop, targets and a trailing stop | On the price chart |
+| [`src/ict-rsi-ma-strategy.pine`](src/ict-rsi-ma-strategy.pine) | The same script as a strategy — identical engine, plus orders — for the Strategy Tester. Generated; see [Backtesting](#backtesting-in-the-strategy-tester) | On the price chart |
 | [`src/gann-angles.pine`](src/gann-angles.pine) | Gann price levels (three modes) projected from an automatic or manual anchor, plus Gann time cycles | On the price chart |
+| [`src/egx-trust-indicator.pine`](src/egx-trust-indicator.pine) | Long-only pullback entries for Egyptian Exchange stocks, gated by the EGX30 or EGX70 index trend. Each entry carries a trust score, a running track record per score band, a stop, a first target and a trail, with a results panel split into tuning and test periods | On the price chart |
 | [`src/session-orderflow.pine`](src/session-orderflow.pine) | Session ranges, liquidity pools, a developing volume profile and an estimated volume delta, reduced to a favourable / wait / avoid reading of current conditions. Context first; an optional experimental trade module is off by default | On the price chart |
 
-They are independent. Run any one on its own, or several together.
+They are independent. Run any one on its own, or several together. TradingView caps how many
+indicators one chart can hold on its lower plan tiers, so check yours before stacking all four.
 
 ---
 
@@ -389,6 +393,8 @@ is the one thing to act on, in the order the gate applies its checks:
 | `no trend` | The internal tier has no direction yet |
 | `in range` | Price is inside a major range — the engine stands down |
 | `htf bias` | `Require HTF Bias` is on and higher-timeframe structure points the other way, or has no direction yet |
+| `index trend` | `Require Index Trend` is on and the stock's EGX index trends against the trade, or has no reading yet |
+| `anchored vwap` | `Require Anchored VWAP` is on and the close is on the wrong side of the anchored VWAP, or there is no anchor yet |
 | `awaiting confirmation` | `Require Confirmation` is on and a touch is being watched for a same-direction candle. Clears itself, one way or the other, within `Confirmation Max Wait` bars |
 | `no zone touch` | **The common one.** Price has not traded back into an FVG or order block. This is a hard requirement, not a scored point: no amount of score tuning produces a trade while it reads this |
 | `score short` | Everything structural is met and the score is below `Minimum Score` |
@@ -443,6 +449,140 @@ panel a way to compare settings, not a fixed track record.
 
 > **On cash-equity markets where you can't short**, set `Long Trades Only`. Bearish setups still mark
 > and still alert, so you keep the information — they just don't open a trade.
+
+## Backtesting in the Strategy Tester
+
+The PERFORMANCE rows report in R and stop there. `src/ict-rsi-ma-strategy.pine` is the same script
+declared as a strategy, so TradingView's Strategy Tester can add what the panel cannot: an equity
+curve, drawdown, commission, slippage and position sizing in money.
+
+It is also a check on the panel. Every number in PERFORMANCE is the engine grading its own work; the
+Tester is a second accounting of the same trades by TradingView's broker emulator.
+
+Install it the same way as the indicator — paste, **Add to chart** — and open the **Strategy Tester**
+tab. It counts as one of your chart's indicators. It has no alerts; keep the indicator for those.
+
+**The order layer decides nothing.** It reports the engine's trades as orders: a market entry at the
+close of the bar a trade opens, three exits of one third each at the three targets, and a resting
+stop moved every bar to wherever the engine's stop is. The scale-out in thirds is the same convention
+the PERFORMANCE rows already use — here the thirds are real orders.
+
+Two exit modes change the shape of those orders. With `Stop on Close Only` there is no resting
+stop at all — it would fill on a wick, which is what the mode exists to ignore — and the trade
+leaves at the close of the bar the engine stops it. With `Runner (no exit at TP3)` the last third
+has no order at the third target and leaves by the stop.
+
+Order prices are rounded to the symbol's tick and quantities down to its minimum tradable size,
+so that on data whose bars sit on ticks (crypto, unadjusted prices) the Tester triggers on the same
+bars the engine does. On adjusted history it mostly does, not always — see the differences below.
+As a strategy the script recalculates
+once per bar close; its panels and drawings do not update mid-bar the way the indicator's do.
+
+**One model per run.** A strategy holds one net position per symbol, and the two entry models can be
+open at once and in opposite directions. `Backtest Model` picks which one sends orders. The other
+still draws and still reports in the panel.
+
+### Two ways to run it
+
+**To check the Tester against the panel** — leave everything at its default. `Sizing` is
+`Fixed Cash Risk`, so every trade risks the same amount and *Net Profit ÷ Risk per Trade* is the
+result in R. The **BACKTEST** table does the division for you and sets the two side by side:
+
+| Row | Meaning |
+|---|---|
+| Entries sent | Orders the layer has placed |
+| Skipped trades | Engine trades that sent no order: risk under `Minimum Risk (ticks)`, or too small to buy one minimum unit. `Entries sent` + `Skipped trades` should equal `Engine n` (plus one while a trade is open) |
+| Engine n | The selected model's closed trades, as in PERFORMANCE |
+| Tester R | Strategy Tester net profit ÷ `Risk per Trade (cash)` |
+| Engine R, sent trades | The engine's own result over exactly the trades that were sent, with their count. **This is the number `Tester R` should match** |
+| Engine Total R | The selected model's Total R over every trade, as in PERFORMANCE |
+| Capped trades | Trades shrunk by `Max Position`. They risk less than 1R in the Tester but count at full R in `Engine R, sent trades`, so a run with capped trades is not like for like |
+| Diverged trades | Trades where the Tester filled a target or a stop the engine had not counted. Each can differ from the engine by a whole third of the position or more |
+| Comparable | The two sides only agree exactly while no trade is open, and only under `Fixed Cash Risk` |
+
+### Why some trades are skipped: price granularity
+
+The engine measures everything in R, so it is indifferent to price scale. The Tester fills in whole
+ticks. On split- and dividend-adjusted history those two part company: a stock at 8.00 today can be
+shown at 0.09 twenty years back, where the whole entry-to-stop distance is less than one 0.01 tick.
+The Tester then enters at 0.09 and stops at 0.08 for a loss of 1.7R on a trade the engine recorded
+as a 2.3R winner. Neither is wrong about its own arithmetic — the Tester simply cannot represent
+that trade.
+
+`Minimum Risk (ticks)` (default 10) keeps such trades out of the Tester and counts them as skipped,
+and `Engine R, sent trades` gives the engine's figure for the remainder, so the comparison is like
+for like. Measured on MASR 1D with every trade sent: under 2 ticks of risk the two sides disagreed
+by up to 4R on a single trade; from 10 ticks up they typically differed by a few hundredths of an R,
+with the Tester reading about 0.016R per trade lower between 10 and 20 ticks. That lean is the cost
+of each stop filling up to a tick worse, and it adds up over many trades. The floor of 10 is a
+compromise between coverage and accuracy, not a measured optimum: raise it to 20 for a stricter
+comparison on fewer trades.
+
+Expect many skips on an EGX daily chart with a long history, and almost none on crypto. A large gap
+between `Engine Total R` and `Engine R, sent trades` is worth noticing in its own right: it means
+much of that chart's recorded R comes from trades with a very small price distance to the stop.
+
+**To see realistic results** — set `Sizing` to `% of Equity Risk`, set `Max Position (% of equity)`
+to 100 on a cash-equity market, and enter your broker's real commission and slippage in the
+strategy's **Properties** tab. Turn `Long Trades Only` on where you cannot short.
+
+### Where the Tester and the panel will differ
+
+These are expected. Anything else is a bug.
+
+- **A stop and a target inside one bar.** The engine always books the stop first. The Tester infers
+  the path from the bar's shape and may fill the target first. With `Stop on Close Only` this stops
+  being occasional: any bar that wicks to a target and then closes through the stop is a full stop
+  to the engine and a banked third to the Tester, so expect the Tester to read better in that mode.
+- **A stop moved to a price the market is already through.** After the first target the stop jumps
+  to entry; if that bar closes back beyond entry, the engine waits for the next bar to trade down
+  to the stop, while the Tester treats the order as already triggered. The trade ends either way,
+  but the bar and the price can differ.
+- **A gap through a target.** The engine books the target price; the Tester fills at the better open.
+- **A target reached by less than a tick.** On adjusted history a bar's high can sit between the
+  engine's target and the next whole tick. The engine counts the target; the Tester's limit is not
+  reached, so that third is closed at the bar's close instead (marked `Target catch-up` in the
+  trade list) — a slightly different price for the same exit.
+- **Quantity rounding.** The position is rounded down to whole tradable units, so it risks slightly
+  less than `Risk per Trade` and `Tester R` reads slightly small. Negligible at hundreds of units,
+  material at a handful — if the Tester's trade list shows single-digit quantities, raise
+  `Risk per Trade`. A position under three units cannot be split in thirds and leaves in one piece.
+- **Trade count.** The Tester lists each one-third exit as its own trade, so its count runs up to
+  three times the panel's n. Compare `Entries sent`, not the Tester's trade count.
+- **A trade still open.** It is in `Entries sent` but not yet in n, and thirds it has banked are in
+  net profit but not yet in Total R.
+- **A fill the engine never counted.** On adjusted history the Tester rounds each bar to the nearest
+  tick before testing an order, so a high just short of a target can still fill the limit, and a
+  low just short of a stop can still trigger it — sometimes a bar before the engine. A fill cannot
+  be undone; the trade is counted under `Diverged trades`. Seen on MASR 1D: a first target filled
+  that the engine never reached, leaving that trade 0.64R better in the Tester than in the engine.
+- **Capped and skipped trades**, and **costs** once you set commission or slippage.
+
+### Settings
+
+| Setting | Default | What it does |
+|---|---|---|
+| Backtest Model | Pullback | Which entry model sends orders. Selecting Trail does not switch the trail model on — `Enable Trailing Stop Model` does |
+| Sizing | Fixed Cash Risk | `Fixed Cash Risk` for the cross-check, `% of Equity Risk` for compounding |
+| Risk per Trade (cash) | 1000 | Cash lost if the initial stop is hit |
+| Risk per Trade (% of equity) | 1.0 | Share of current equity lost if the initial stop is hit |
+| Max Position (% of equity) | 0 | Caps position value; 0 is no cap. Sizing by risk with a tight stop can ask for more than the account holds |
+| Minimum Risk (ticks) | 10 | Trades whose entry-to-stop distance is under this many ticks send no order. 0 sends everything. See *price granularity* above |
+| Show Backtest Panel | on | The BACKTEST table |
+| Backtest Panel Position | Bottom Left | If it matches `Panel Position`, one table hides the other |
+
+### The strategy file is generated
+
+Never edit `src/ict-rsi-ma-strategy.pine`. It is built from the indicator plus
+`src/strategy-layer.pine`, so the two scripts cannot drift apart:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-strategy.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-strategy.ps1 -Check
+```
+
+The first rebuilds it; run it after any change to the indicator or the layer. The second changes
+nothing and reports whether the committed file is stale — run it before trusting a Tester number.
 
 ## Alerts
 
@@ -512,6 +652,39 @@ are identical to running without them.
 | Min FVG Size (× ATR) | 0.3 | Minimum gap height for an FVG |
 | Require Confirmation | off | Don't trade the touch bar. Remember the touch and wait for a candle that closes in the trade's direction, up to Confirmation Max Wait bars later — using the original touch's zone and stop throughout |
 | Confirmation Max Wait (bars) | 3 | A touch with no confirming candle within this many bars is abandoned, not taken late |
+| Require Anchored VWAP | off | Longs need the close above the VWAP anchored at the latest major swing low (buyers since that low are in profit); shorts need the close below the VWAP anchored at the latest major swing high. Applies to both entry models. The anchor only moves once the swing is confirmed, so history never sees a swing early. Needs volume |
+| Show Anchored VWAP | off | Draws both anchored VWAP lines. Display only |
+
+**Index Filter** — EGX symbols only, off by default; applies to both entry models. Ignored on
+non-EGX symbols.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Require Index Trend | off | Longs need the stock's index (EGX30 or EGX70 EWI) not trending Down; shorts need it not trending Up. Up = index close above its MA with the MA rising over the slope lookback; Down = the mirror |
+| Index | Auto | Auto picks EGX30 or EGX70 from the constituent lists; EGX30 / EGX70 force one |
+| Index MA Length | 50 | Length of the index moving average |
+| Index Slope Lookback (bars) | 10 | How far back the MA is compared with itself to call it rising or falling |
+
+**Costs** — off by default.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Apply Costs | off | Deducts slippage and commission from every closed trade's R, so the panel, the grade and point stats and the log all show net R |
+| Slippage per Side (%) | 0.1 | Charged once at entry and once at the averaged exit |
+| Commission per Order | 2.0 | In the chart's currency; one order for the entry, one per target reached and one for the remaining thirds |
+| Position Size | 100000 | Only used to turn the per-order commission into R |
+| Min Risk (ticks) | 0 | Rejects setups whose stop is closer than this many ticks, in both models. 0 = off |
+
+**Validation** — splits the closed-trade totals in two.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Test Start | 01 Jan 2024 | Trades entered before this time count as Tuning, trades entered on or after it as Test. A trade entered before and closed after is counted in neither, only as straddle. The Data Window shows N, wins and R for each side per model (`DBG PB Tune N` … `DBG TR Test R`, plus `DBG Straddle N`), and the trade log ends with a period field |
+
+Costs and the tick floor are off by default, so existing charts keep their numbers; turn them on for
+honest EGX results, where a whole stop can sit inside one tick of split-adjusted history. The index
+filter uses the same constituent lists (dated 2026-11-01) and the same EGX30 stand-in before
+mid-2020 as the EGX Trust Score script.
 
 **Confirmations** — three more scored points, five indicators.
 
@@ -664,6 +837,421 @@ Turn the switch off for literal unscaled Gann, dialled by hand with `Scale Facto
 
 The two tables must sit in **different screen corners** — TradingView draws only one table per
 position, so if `Table Position` and `Time Table Position` match, one hides the other.
+
+---
+
+# EGX Trust Score
+
+## The idea
+
+A pullback in a stock that is itself in an uptrend, inside a market that is not falling, is one of
+the older and plainer setups there is. This indicator looks for exactly that on Egyptian Exchange
+stocks: a sharp oversold dip, then a first sign of recovery, taken only when the index and the stock
+agree that the trend is up. It is **long only** and built for the daily chart, though every length is
+counted in bars so it runs on any timeframe up to monthly.
+
+Each entry arrives with a **trust score** (0 to 100) built from six independent factors, and with the
+running **track record** of how entries in that score band have actually done on this chart so far.
+The score is never fitted to results. The track record is the check on whether the score means
+anything.
+
+## Which index it reads
+
+An EGX stock is judged against the index it belongs to, so the script has to know which one that is.
+Pine cannot look up index membership, so the EGX30 and EGX70 constituent lists are written into the
+script itself and stamped with a `LIST_DATE` constant, shown at the top of the panel as
+`lists 2026-11-01`.
+
+`Index` has three settings:
+
+| Setting | What happens |
+|---|---|
+| **Auto** *(default)* | The stock's ticker is looked up in the built-in lists. The panel reads `EGX30 (Auto)` or `EGX70 (Auto)` |
+| **EGX30** / **EGX70** | You choose. The panel reads `(Override)`. Use this when the lists are stale |
+| *(Auto, ticker in neither list)* | Falls back to EGX30 as a proxy for the market and the panel reads `EGX30 (Unlisted)` in orange. Treat the regime reading as approximate |
+
+EGX rebalances both indices **twice a year**, so the lists go stale. To refresh them, open the
+current constituents for EGX 30 and EGX 70 EWI on egx.com.eg, replace the `EGX30_LIST` and
+`EGX70_LIST` strings at the top of the script, and bump `LIST_DATE` in the same edit. The tickers sit
+between commas on purpose, so `VLMR` can never match inside `VLMRA`. In between rebalances, `Index`
+set to EGX30 or EGX70 gets you the right answer without touching the code.
+
+The index is read from `EGX_DLY:EGX30` or `EGX_DLY:EGX70EWI`, on the chart's own timeframe and
+without lookahead, so on a historical bar the index value is the one that bar could actually have
+seen.
+
+TradingView's EGX 70 EWI history starts in mid-2020. Before that, an EGX70 stock is gated by EGX30's
+trend instead. The Index row in STATUS then reads `· EGX30 proxy to <date>` (in orange). This is a
+stand-in for history TradingView doesn't have, not a claim that EGX30 and EGX70 move together.
+
+## The index regime and the three gates
+
+The index is classified on every bar:
+
+| Regime | Rule |
+|---|---|
+| **Up** | The index closes above its `Index MA Length` average, and that average is above its own value `Slope Lookback (bars)` bars ago |
+| **Down** | The index closes below the average, and the average is below its value `Slope Lookback (bars)` bars ago |
+| **Neutral** | Anything else |
+
+A setup can only **start** when all three gates are open, and it is dropped if the regime or
+liquidity gate closes while it waits:
+
+1. **Regime gate.** The regime is not Down. If the index has no data for that bar the gate stays
+   **shut** rather than passing as "not Down", so a missing index can never quietly let trades through.
+2. **Trend gate.** The stock closes above its `Long MA Length` average. If the chart has fewer bars
+   than that, the gate is **skipped**, not failed, and the panel says so: `skipped (<200 bars)`.
+3. **Liquidity gate.** The 20-bar average of close × volume is at least `Min Avg Value Traded (EGP)`.
+   Thin EGX70 names do not fill anywhere near their chart prices, so a setup in one is ignored rather
+   than recorded as a trade nobody could have made.
+
+### Optional filters
+
+Three more hard filters sit in the `Filters` input group. Each one that is switched on must also pass
+on the setup bar, as part of the same gate. **All three are off by default**, and with all three off
+the trade selection is exactly the three gates above.
+
+| Filter | Requires | Why |
+|---|---|---|
+| `Require Index Up` | The regime is **Up**, not merely "not Down" | In v1 tuning, trades taken in a Neutral regime won less often than those taken in an Up regime |
+| `Weekly Trend Filter` | The last **completed** weekly close is above its `Weekly MA Length` (default 30) week average | The daily dip should sit inside a weekly uptrend. It reads only the previous finished week (`close[1]` with `lookahead_on`, the standard non-repainting form) and is ignored on weekly and longer charts |
+| `ADX Filter` | ADX (`ADX Length`, default 14) is at or above `ADX Minimum` (default 20) | The stock must actually be trending, not just drifting |
+
+## Setup and confirmation
+
+With the gates open, a **setup** arms on the first bar where RSI (length `RSI Length`) falls below
+`RSI Oversold Below`. The setup then waits for a recovery. A setup never confirms on its own oversold
+bar: a bar that is both an extreme dip and a close above the prior high is a contradiction in
+practice, and allowing it would let one bar be both the dip and the turn.
+
+| Rule | Detail |
+|---|---|
+| **Confirmation window** | A confirming candle must close within `Confirmation Window (bars)` bars after the most recent oversold bar |
+| **Re-arming** | A further oversold bar while the setup is alive restarts the confirmation window from that bar and moves the cancel reference to that bar's low. Without it, a 3-bar window would make the 5-bar expiry meaningless |
+| **Expiry** | `Setup Expiry (bars)` after the **first** oversold bar, however many re-arms happened |
+| **Cancel** | A close more than `Cancel Below Setup Low (x ATR)` ATRs below the latest oversold bar's low; or the regime turning Down; or liquidity falling below the floor |
+
+A **confirming candle** is any one of these:
+
+- a close above the previous bar's high;
+- a bullish engulfing candle;
+- a hammer: lower wick at least twice the body, close in the top third of the bar's range.
+
+The entry is the **close of the confirming bar**. Only one trade runs at a time, and while one is
+open, setups are not armed.
+
+## Stop, Target 1, trail and exits
+
+| | Where it comes from |
+|---|---|
+| **Stop** | The lowest low from the start of the setup to the entry, minus `Stop Buffer (x ATR)` ATRs, rounded **down to a whole tick** |
+| **Risk floor** | The larger of `Min Risk (x ATR)` ATRs and `Min Risk (ticks)` ticks. A stop closer than that is pushed out to the floor |
+| **Risk cap** | A setup whose stop would sit further than `Max Risk (x ATR)` ATRs away is **skipped**, not taken with a wide stop |
+| **Target 1** | Entry plus `Target 1 (R)` times the risk. Half the position exits here and the stop on the other half moves to breakeven |
+| **Trail** | After Target 1: a chandelier trail, `Trail (x ATR)` ATRs below the highest high of the *earlier* bars, never below breakeven. It uses the **previous bar's ATR** and earlier bars only, because raising it with the current bar's own high, or widening it with the current bar's range, and then testing the current low would assume the favourable order inside the bar |
+| **Time stop** | A trade that has not reached Target 1 after `Time Stop (bars)` bars exits at the close |
+
+Stops are rounded to a tick because a stop between ticks only fills at the tick below it, so booking
+the unrounded price would understate losses on low-priced names.
+
+**What counts as a win.** A trade is a win when its **net R after costs is greater than 0**, however it
+ended. Target 1 still drives the half exit and the move to breakeven, but reaching it does not by
+itself make a win. That is the only definition used anywhere in the panel, the band rows, the track
+record, the result label colour and the trade log. A high win rate is easy to reach with a tiny
+target and a wide stop, which is why **Avg R** and **Total R**, after costs, sit beside it.
+
+**Exit warnings.** Two conditions end an open trade at that bar's close, and the trade is booked at
+whatever R that close gives, after costs:
+
+- the index regime turns **Down**; or
+- the stock **closes below its `Medium MA Length` average after having been above it**, at the entry
+  or on any bar since. The "after having been above" matters: a dip is often bought *below* the
+  average, and without it every such trade would be stopped out on its next bar for merely being there.
+
+On the chart, the orange `EXIT` marker is drawn on the bar where the stock **crosses** under the
+medium average or the regime first turns Down, whether or not you hold a trade. It marks the event
+once, not every bar spent under the average, so it is a warning for any holder, while the trade
+engine applies the stricter rule above to its own simulated position.
+
+Bar-by-bar scripts cannot see the order of events inside a bar, so they assume the unfavourable one:
+a bar that touches both the stop and Target 1 counts as **stopped**. A gap through the stop fills at
+the open, worse than the stop; a gap through Target 1 fills at the open, better than the target. On
+the bar that reaches Target 1, if price also trades back to the entry, the second half is assumed to
+exit at breakeven on that same bar.
+
+When a trade closes, a label shows the result in R and the reason: `Stop`, `Breakeven`, `Trail`,
+`Time`, `Exit: Index` or `Exit: Trend`.
+
+## The trust score
+
+Six factor groups, **equal weight**, each worth full credit (1) or half credit (0.5) or nothing (0).
+They are measured on the confirming bar. The score is the sum scaled to 0 to 100.
+
+| Factor | Full credit | Half credit |
+|---|---|---|
+| **Index Regime** | Up | Neutral |
+| **Stock Trend** | Close above the medium MA, which is above the long MA | Above the long MA only |
+| **Relative Strength** | The stock/index ratio is above its `Relative Strength MA Length` average **and** that average is rising | Above the average only |
+| **Support Location** | Two or more supports within 1 ATR of the pullback low | One support |
+| **Participation** | Average volume during the pullback below the 20-bar average **and** confirming-bar volume above it | Either one |
+| **Confirmation Strength** | Bullish engulfing, or a close in the top 25% of the bar's range | Any other valid confirming candle |
+
+The supports considered are the last confirmed swing low (`Swing Pivot Length` bars either side),
+the 20-bar average, the medium MA, and the 38.2% to 61.8% retracement of the last swing up. Each kind
+counts once. Momentum oscillators are deliberately absent: RSI, MACD and Stochastic read the same
+price series, so they would be one opinion counted several times.
+
+**The weights are never fitted.** If a factor proves anti-predictive on the tuning period, you switch
+it off with its `Score:` input, and the score rescales over the factors that remain; it is not
+re-weighted to chase results. The inputs are `Score: Index Regime`, `Score: Stock Trend`,
+`Score: Relative Strength`, `Score: Support Location`, `Score: Participation` and
+`Score: Confirmation Strength`.
+
+Scores fall into three **bands**: **Low** below 50, **Mid** 50 to 74, **High** 75 and above.
+
+### The track record on the label
+
+The score says how good the setup looks. The label also says how entries of that quality have really
+done on this chart:
+
+```
+BUY · Trust 83 · High 9/12 (75%)
+```
+
+The first number is the trust score, then the band, then **wins / closed trades** in that band so
+far and the win rate. Those counts pool both the tuning and test periods and use only trades that had
+**already closed** before the signal bar, so a label never includes its own outcome. (The numbers
+above only show the format; they are not a measured result.) With fewer than
+`Track Record Minimum Trades` closed trades in the band, the label reads `High — building history`
+instead of quoting a win rate off a handful of trades.
+
+## Reading the panel
+
+The panel has a STATUS block and a RESULTS block, and a costs footer.
+
+**STATUS** — what the script is doing right now.
+
+| Row | Meaning |
+|---|---|
+| `EGX TRUST` / `lists ...` | Header, and the date of the built-in constituent lists |
+| `Index` | Which index, and how it was chosen: `(Auto)`, `(Override)` or `(Unlisted)` |
+| `Regime` | `Up`, `Neutral`, `Down` or `No data` |
+| `Trend gate` | `Above 200 MA`, `Below 200 MA`, or `skipped (<200 bars)` |
+| `Liquidity` | The 20-bar average value traded, in millions of EGP per bar, green when the gate is open |
+| `Setup` | `Watching`, `Armed (n bars)` or `In trade` |
+| `Filters` | `off` when no optional filter is enabled; otherwise each enabled filter with its state on the last bar, for example `Idx↑ ✓ · Wk ✗ · ADX ✓`. Green when every enabled filter passes, red when any fails, gray when off |
+
+**RESULTS** — two columns. **Tuning** counts trades entered before `Test Start`; **Test** counts
+trades entered from that time onward.
+
+| Row | Meaning |
+|---|---|
+| `Trades` | Closed trades |
+| `Win %` | Share of trades with net R above 0 after costs, with the number of wins in brackets |
+| `Avg R` | Average result per trade, in R, after costs |
+| `Total R` | Sum of results, in R, after costs |
+| `Max loss run` | The longest run of consecutive non-wins |
+| `High (n·win·avg·tot)` | For High-band trades: count, win %, Avg R, then total R |
+| `Mid` | The same four figures for the Mid band |
+| `Low` | The same four figures for the Low band |
+
+A `—` means there are no trades yet. Trades entered before `Test Start` but closed after it were
+decided partly on Test-period prices, so they are counted in **neither** column; they appear only in
+the `straddle` count on the footer. The last line of the panel repeats the cost assumptions in force
+and that count, for example `costs 0.10%/side + 2.0 EGP/order · straddle 1`.
+
+The panel only renders on the last bar, and results are whatever history TradingView loaded. Read `n`
+before you trust a percentage, as with the other indicators.
+
+## Costs
+
+Results include trading costs, so a strategy cannot look good only because it was free.
+
+- `Slippage per Side (%)` is charged on the entry and again on each exit, as a percentage of price.
+- `Commission per Order (EGP)` is charged per order: two orders for a trade that exits in one piece,
+  **three** when Target 1 split the exit into two.
+- `Position Size (EGP)` is used for one thing only: converting the per-order commission into R.
+
+Each result is blended across the two halves: half at Target 1 and half at the final exit if Target 1
+was reached, otherwise the whole position at the exit.
+
+## Validation: tune on one period, judge on the other
+
+The `Test Start` date (`Validation` group, default 1 January 2024) splits the history in two.
+
+- **Tuning** is every trade entered before it. This is the column to look at while you adjust
+  settings or decide whether to switch a score factor off.
+- **Test** is every trade entered from it onward. This is the part you do **not** tune on. Once you
+  adjust settings by looking at a period, that period is no longer evidence of how the indicator will
+  do on data it has never seen.
+
+The rule that keeps the test column honest: **tune on the Tuning column only**, and read the Test
+column once you have finished. Looking at Test, changing a setting and looking again turns it back
+into a second tuning set.
+
+### Trade log
+
+`Log Trades` (off by default, in `Display`) writes one CSV line per closed trade to TradingView's
+Pine Logs: symbol, entry and exit date and price, R, win flag, close reason, trust score and band, the
+six factor values, best and worst excursion in R, bars held, and the period (`Tuning`, `Test` or `Straddle`, the last for a trade entered before `Test Start` that closed after it).
+Pine Logs only work on a **personal, unpublished copy** of the script; TradingView disables
+`log.*()` on published or invite-only scripts. The log is what lets you recompute the panel's totals
+outside TradingView and check that they match.
+
+## Alerts
+
+Set these up with the alarm-clock icon → *Condition: EGX Trust Score*.
+
+| Alert | Fires when |
+|---|---|
+| EGX Trust Entry | A trade opened. The chart label shows the trust score and track record; the stop and Target 1 are drawn as lines |
+| EGX Exit Warning | The index regime turned Down, or the stock crossed under its medium MA |
+| EGX Trade Closed | The trade ended. The result label carries the R and the reason |
+
+As with the other indicators, alert messages can't carry script values, so they point you at the
+chart rather than quoting a price.
+
+## Settings
+
+**Index**
+
+| Setting | Default | What it does |
+|---|---|---|
+| Index | Auto | Auto looks the ticker up in the built-in lists; EGX30 or EGX70 overrides when the lists are stale |
+| Index MA Length | 50 | The average the regime is measured against |
+| Slope Lookback (bars) | 10 | An average counts as rising when it is above its own value this many bars ago. Shared by the regime and the relative-strength trend |
+
+**Stock Trend**
+
+| Setting | Default | What it does |
+|---|---|---|
+| Long MA Length | 200 | The trend gate average |
+| Medium MA Length | 50 | The average used by the trend factor, support and the trend exit |
+| Relative Strength MA Length | 50 | The average the stock/index ratio is compared with |
+| Min Avg Value Traded (EGP) | 2,000,000 | The liquidity gate. Setups below it are ignored |
+
+**Setup**
+
+| Setting | Default | What it does |
+|---|---|---|
+| RSI Length | 2 | A very short RSI, so it only reaches extremes on real dips |
+| RSI Oversold Below | 15 | RSI(2) falling below this arms a setup |
+| Confirmation Window (bars) | 3 | How long after the latest oversold bar a confirming candle can still count |
+| Setup Expiry (bars) | 5 | Hard cap counted from the first oversold bar |
+| Cancel Below Setup Low (x ATR) | 0.5 | A close this far below the latest oversold low cancels the setup |
+| Swing Pivot Length | 5 | Bars either side for swing lows and highs, used as support and for the retracement zone |
+
+**Trade**
+
+| Setting | Default | What it does |
+|---|---|---|
+| ATR Length | 14 | The ATR every "x ATR" setting is measured in |
+| Stop Buffer (x ATR) | 0.25 | How far below the setup's lowest low the stop sits |
+| Min Risk (x ATR) | 0.5 | Risk floor in ATRs |
+| Min Risk (ticks) | 10 | Risk floor in ticks. The effective floor is the larger of the two |
+| Max Risk (x ATR) | 3.0 | Setups needing a wider stop than this are skipped |
+| Target 1 (R) | 1.0 | Where half the position exits and the stop moves to breakeven. It does not define a win |
+| Trail (x ATR) | 3.5 | Chandelier trail for the second half |
+| Time Stop (bars) | 20 | Exit at the close if Target 1 has not been reached by then |
+
+**Costs**
+
+| Setting | Default | What it does |
+|---|---|---|
+| Slippage per Side (%) | 0.1 | Charged on each side of each leg |
+| Commission per Order (EGP) | 2.0 | Per order |
+| Position Size (EGP) | 100,000 | Only used to convert the commission into R |
+
+**Trust Score**
+
+| Setting | Default | What it does |
+|---|---|---|
+| Score: Index Regime / Stock Trend / Relative Strength / Support Location / Participation / Confirmation Strength | on | One switch per factor. A factor switched off leaves both the sum and the denominator, so the score is still out of 100 |
+| Track Record Minimum Trades | 10 | Below this many closed trades in a band, the label says `building history` |
+
+**Filters**
+
+| Setting | Default | What it does |
+|---|---|---|
+| Require Index Up | off | Setups need the regime to be Up, not merely not Down |
+| Weekly Trend Filter | off | Setups need the last completed weekly close above its weekly average. Ignored on weekly and longer charts |
+| Weekly MA Length | 30 | The weekly average, in weeks |
+| ADX Filter | off | Setups need ADX at or above `ADX Minimum` |
+| ADX Length | 14 | Length for ADX and its directional movement |
+| ADX Minimum | 20 | The ADX threshold |
+
+**Validation**
+
+| Setting | Default | What it does |
+|---|---|---|
+| Test Start | 2024-01-01 | Trades entered before it count under Tuning, from it onward under Test. Tune by the Tuning column only |
+
+**Display**
+
+| Setting | Default | What it does |
+|---|---|---|
+| Show Panel | on | The STATUS and RESULTS table |
+| Panel Position | Top Right | Which corner |
+| Show Trade Labels | on | The `BUY` entry labels and the result labels |
+| Log Trades | off | One CSV line per closed trade in Pine Logs. Personal, unpublished copies only |
+
+## Known limits
+
+**Survivorship bias.** The constituent lists are today's. They are applied to **all** history, so a
+stock that was in the index in 2019 and has since dropped out is judged against the index it is in
+now, and stocks that dropped out or were delisted never appear at all. Results on old history are
+flattered by knowing which stocks stayed.
+
+**Split-adjusted history has coarse ticks.** EGX history on TradingView is split-adjusted, and that
+can put a whole stop inside a single tick, so a stop and its risk are only as precise as the tick
+size allows. `Min Risk (ticks)` and the tick-rounded stop exist to blunt this, but on low-priced or
+heavily adjusted names, results on old bars are less reliable than on recent ones.
+
+**Long only.** There are no short entries and no short-side exit logic. The index regime being Down
+simply stops new trades and ends open ones.
+
+### Validation results
+
+The indicator was validated live on TradingView, daily charts, with the settings `RSI Oversold Below`
+15 and `Target 1 (R)` 0.75. Those settings were chosen on the 15 tuning charts (trades before
+2024-01-01) and then read once out of sample: the same 15 charts from 2024-01-01 onward, plus 10
+charts never looked at before.
+
+- **Out-of-sample, 25 charts, 973 trades:** win rate **55.2%**, total **+18.43R** after costs (about
+  +0.02R per trade), positive on 13 of the 25 charts.
+- **The 80% win-rate target was not met.**
+- **No trust band reached 80%.** The High band won 56.9%. On the tuning data the trust score did not
+  separate winners from losers: every factor sat between 52% and 58%.
+- **80% is not reachable with this design.** An 80% win rate would need Target 1 near 0.2R, where
+  the losses outweigh the wins after costs.
+- Validation stopped after round 1, because nothing in the tuning evidence justified a rule change.
+
+Those results used v1's win definition (Target 1 reached); v2 counts a win as net R > 0.
+
+Read plainly: this is a decision-support tool whose measured edge is about breakeven. It finds a
+reasonable pullback entry and measures it honestly; it does not predict which entries will win. Use
+the trust score and the track record to see how the setup behaves on your own charts, not as a
+promise. The full record, including the tuning grid and the biases above, is in
+`docs/superpowers/plans/2026-11-02-egx-trust-validation.md`.
+
+### v2 validation results
+
+v2 moved the goal to profit first: an average of at least +0.15R per trade, and a win rate of at
+least 50% where a win is net R > 0 after costs. It was tuned on the same 15 charts and then read once
+on 10 stocks never seen before (batch C).
+
+- **None of the three filters helped.** Require Index Up, Weekly Trend Filter and ADX Filter each had
+  to add at least 0.03R per trade on the tuning charts. None did, so all three stay off.
+- **The picked exits are `Target 1 (R)` 1.0 and `Trail (x ATR)` 3.5.** These are now the defaults.
+- **The profit bar was not met.** On the 10 unseen stocks: 442 trades, **51.6%** win rate, **+0.055R**
+  per trade, and 7 of the 10 charts profitable. The win-rate and chart-count bars passed; +0.055R is
+  well short of +0.15R.
+- **The 2024+ period on the tuning charts did better** (+0.254R per trade), but those charts had
+  already been seen, and that stretch was a strong EGX bull run, so it is not decisive.
+- **Wider exits were the only lever that helped, and extra indicators did not.**
+
+Read plainly: on stocks it has never seen, the system stays positive after costs, but the edge is
+thin. The full record is in `docs/superpowers/plans/2026-11-02-egx-trust-v2-validation.md`.
 
 ---
 
@@ -856,17 +1444,58 @@ than move it to a bar that never made the high, and starts a ray, break line or 
 of the buffer instead of at its true origin. The price levels themselves are unaffected. You will
 only meet this on a very long intraday chart.
 
-**These are decision-support tools, not a strategy.** None of the scripts backtests, sizes a position, or
-places an order. The trade engine computes levels and records what would have happened; it does not
-size a position and it has no idea what your account can absorb. No indicator knows the future, and
-confluence between several lagging measurements is still lagging. Nothing here is financial advice.
+**The EGX Trust Score has limits of its own** — survivorship bias in the constituent lists, coarse
+ticks on split-adjusted history, and long only. Its measured out-of-sample edge is about breakeven
+(55.2% win rate, +0.02R per trade); under v2 it measured +0.055R per trade on 10 unseen stocks,
+which missed the +0.15R profit bar. They are set out under *Known limits* and *Validation results*
+in its section above, and they matter before you rely on its trust score.
+
+**The ICT confluence indicator on EGX daily, measured on stocks it was never tuned on** (long only,
+`Apply Costs` on, `Min Risk (ticks)` 10): the plain pullback model averaged **+0.161R per trade after
+costs** over 40 unseen stocks and 1,277 trades, at a win rate of about 42–46%. Three exit settings together,
+`Runner (no exit at TP3)` on, `Trailing Tier` Major and `Trail From Entry` on, raised that to +0.363R
+per trade on the last 20 of those stocks, against +0.243R for the plain settings on the same 20. Read that
+carefully: it comes from fewer, bigger winners, not from winning more often. It took 25% fewer trades,
+added about 13% to total R, beat the plain settings on only 9 of the 20 stocks, and dropped the win rate
+to about 41%. Filters tested and *not* found to help out of sample: `Require Confirmation`,
+`Require Index Trend` and `Require Anchored VWAP`. Records:
+`docs/superpowers/plans/2026-11-03-ict-*.md` and `2026-11-04-ict-runner-retest.md`.
+
+**The EGX100 full-history backtest (2026-11-20)** ran on an offline Node port of the trade engine
+(`tools/backtest/`). The port reproduces TradingView's own results exactly on every chart it was
+checked against. **Why the stops get hit:** 53% of trades end at the first stop without reaching
+a target. Most of those never worked; only about 1 in 5 reaches TP1 within 20 bars after the
+stop. The ones that do recover are mostly *wick-only* stops, where the low pierced the stop but
+the day closed back above it. `Stop on Close Only` (an existing input) is the one change that held
+on both unseen tests: avg R +0.217 → +0.303 on 2023+ trades and +0.178 → +0.372 on 18
+never-opened stocks. The cost is that a single loss can be larger than −1R, because it exits at
+the close, and on a locked limit-down day far below the stop. No extra indicator helped: RSI, ADX,
+SMA200, EGX30 trend, weekly trend, relative strength, CMF and MFI were all tested. Record:
+`docs/superpowers/plans/2026-11-20-egx100-*.md`.
+
+**Stopped, then it rallied?** A trade-by-trade check of MASR, BTFH, EMFD, EFID, ORWE and EEII
+looked at what price did after each exit. After a stop or `Invalidated` exit, price went on to reach the
+next target within 40 bars about as often as it does from any random bar (34% vs 36% across all 100
+stocks), so the exits are not mistimed. EGX simply rises often in nominal terms. Removing the CHoCH
+`Invalidated` exit did not help the recommended settings. Record:
+`docs/superpowers/plans/2026-11-20-six-stock-deep-dive.md`.
+
+**These are decision-support tools, not a trading system.** None of these indicators sizes a position or
+places an order. The trade engine computes levels and records what would have happened. The strategy
+twin runs those same trades through TradingView's Strategy Tester with a position size, but a
+backtest is still a record of the past under assumed fills — it has no idea what your account can
+absorb, and it places no live orders. No indicator knows the future, and confluence between several
+lagging measurements is still lagging. Nothing here is financial advice.
 
 ---
 
 ## Repository layout
 
 ```
-src/                    the three Pine scripts
+src/                    the Pine scripts, the order layer fragment (strategy-layer.pine)
+                        and the generated strategy (ict-rsi-ma-strategy.pine — never edit)
+tools/                  build-strategy.ps1, which generates the strategy, and its tests
+tools/backtest/         offline Node port of the ICT trade engine, EGX data fetcher, analysis scripts
 docs/img/               diagrams used by this README
 docs/superpowers/
   specs/                design documents — what each feature does and why
