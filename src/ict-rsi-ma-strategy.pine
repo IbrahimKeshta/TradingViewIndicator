@@ -103,6 +103,24 @@ dispMult           = input.float(1.0, "Displacement (x ATR)", minval = 0.1, step
 fvgMinAtr          = input.float(0.3, "Min FVG Size (x ATR)", minval = 0.0, step = 0.05, group = "Trade Filters", tooltip = "Minimum gap height, in Structure ATR.")
 requireConfirmation = input.bool(false, "Require Confirmation", group = "Trade Filters", tooltip = "Root-cause finding 2026-09-17: over half of all pullback trades never even reach 1R in their favor before failing, drifting adversely for several bars rather than failing instantly — the signature of a touch that fires before the reversal has actually started.\n\nWith this on, a zone touch is remembered rather than traded immediately. Entry only fires once a later bar (up to Confirmation Max Wait bars after the touch) closes in the trade's direction without the zone having invalidated first. The entry price, stop and targets still come from the ORIGINAL touch's zone, not the confirmation bar — only the timing of the decision moves.\n\nOff by default; with it off the engine enters on the touch bar exactly as it always has.")
 confirmMaxWait      = input.int(3, "Confirmation Max Wait (bars)", minval = 1, maxval = 20, group = "Trade Filters", tooltip = "A touch that hasn't produced a same-direction candle within this many bars is abandoned — that trade is never taken, not taken late.")
+requireAvwap        = input.bool(false, "Require Anchored VWAP", group = "Trade Filters", tooltip = "Longs need the close above the VWAP anchored at the latest major swing low: the average price paid by everyone who bought since that low is below price, so they are in profit. Shorts need the close below the VWAP anchored at the latest major swing high. Applies to both entry models.\n\nThe anchor moves only once a swing is confirmed (Major Swing Lookback bars after it forms), so a past bar never sees a swing it could not have known about. Needs volume: with no anchored VWAP reading yet, the setup is blocked.")
+showAvwap           = input.bool(false, "Show Anchored VWAP", group = "Trade Filters", tooltip = "Draw both anchored VWAP lines. Display only; the filter works with this off.")
+
+// ---------------- Index Filter ----------------
+requireIndexTrend  = input.bool(false, "Require Index Trend", group = "Index Filter", tooltip = "EGX symbols only. Longs need the stock's index (EGX30 or EGX70 EWI) not trending Down; shorts need it not trending Up. Up = index close above its MA with the MA rising over the slope lookback; Down = the mirror. Ignored on non-EGX symbols.")
+indexMode          = input.string("Auto", "Index", options = ["Auto", "EGX30", "EGX70"], group = "Index Filter")
+idxRegimeLen       = input.int(50, "Index MA Length", minval = 2, group = "Index Filter")
+idxSlopeLen        = input.int(10, "Index Slope Lookback (bars)", minval = 1, group = "Index Filter")
+
+// ---------------- Costs ----------------
+applyCosts         = input.bool(false, "Apply Costs", group = "Costs", tooltip = "Deduct slippage and commission from every closed trade's R. Off by default so existing charts keep their numbers.")
+slippagePct        = input.float(0.1, "Slippage per Side (%)", minval = 0, step = 0.05, group = "Costs")
+commissionPer      = input.float(2.0, "Commission per Order", minval = 0, step = 0.5, group = "Costs", tooltip = "In the chart's currency.")
+positionSize       = input.float(100000, "Position Size", minval = 1, step = 10000, group = "Costs", tooltip = "Only used to turn the per-order commission into R.")
+minRiskTicks       = input.int(0, "Min Risk (ticks)", minval = 0, group = "Costs", tooltip = "Reject setups whose stop is closer than this many ticks, in both models. 0 = off. On split-adjusted EGX history a whole stop can sit inside one tick, and a few such trades can dominate Total R.")
+
+// ---------------- Validation ----------------
+testStart          = input.time(timestamp("01 Jan 2024 00:00 +0200"), "Test Start", group = "Validation", tooltip = "Data Window totals split closed trades into Tuning (entered before) and Test (entered on or after). A trade entered before and closed after is counted in neither, only as straddle.")
 
 logTrades          = input.bool(false, "Log Closed Trades", group = "Trade Engine", tooltip = "Writes one CSV line per closed trade to the Pine Logs panel: times, zone type, levels, result in R, best and worst excursion in R, bars held, and the seven confirmation points. For diagnosing losing trades one by one. Off by default.")
 showPointStats     = input.bool(false, "Show Confirmation Point Stats", group = "Trade Engine", tooltip = "Per-confirmation-point breakdown: average R on closed trades where that point was true at entry, versus where it was false — independent of whether the point currently counts toward the score, so it also shows what a disabled point would have correlated with.\n\nOff by default: adds up to 7 rows per model to the panel, and exists to answer one question (does this specific point actually track the trades that worked) rather than for everyday use.")
@@ -356,8 +374,6 @@ plot(majorTrendCode, "DBG Major Trend (1/-1/0)", display = display.data_window)
 plot(intTrendCode, "DBG Internal Trend (1/-1/0)", display = display.data_window)
 plot(inRange ? 1 : 0, "DBG In Range (1/0)", display = display.data_window)
 plot(lastEventCode, "DBG Last Major Event (1=BOS 2=CHoCH)", display = display.data_window)
-plot(array.size(majorHighs), "DBG Major Highs Kept", display = display.data_window)
-plot(array.size(majorLows), "DBG Major Lows Kept", display = display.data_window)
 plot(majorState.lastStrength, "DBG Last Major Strength (xATR)", display = display.data_window)
 
 // ============================================================
@@ -716,15 +732,8 @@ ichiCloudBottom = math.min(ichiSpanA[ichiDisp], ichiSpanB[ichiDisp])
 ichiReady       = not na(ichiCloudTop) and not na(ichiCloudBottom)
 ichiBullConfirm = ichiReady and close > ichiCloudTop
 ichiBearConfirm = ichiReady and close < ichiCloudBottom
-
-// Data Window readouts — the verification surface for this block.
-plot(macdBullConfirm ? 1 : macdBearConfirm ? -1 : 0, "DBG MACD (1/-1/0)", display = display.data_window)
-plot(stochBullConfirm ? 1 : stochBearConfirm ? -1 : 0, "DBG Stoch (1/-1/0)", display = display.data_window)
-plot(volumeSeen ? 1 : 0, "DBG Volume Available (1/0)", display = display.data_window)
-plot(volSurge ? 1 : 0, "DBG Volume Surge (1/0)", display = display.data_window)
-plot(climaxLong ? 1 : 0, "DBG Climax Long (1/0)", display = display.data_window)
-plot(climaxShort ? 1 : 0, "DBG Climax Short (1/0)", display = display.data_window)
-plot(ichiBullConfirm ? 1 : ichiBearConfirm ? -1 : 0, "DBG Ichimoku (1/-1/0)", display = display.data_window)
+// The per-indicator Data Window readouts were dropped to stay inside Pine's 64-plot limit; the
+// panel's Confirm row still shows the grouped Momentum and Ichimoku votes.
 
 // ---- group votes ----
 // At least half the enabled members, rounded up: 2 of 3, 1 of 2, 1 of 1. Never a strict
@@ -755,10 +764,6 @@ partShortOk      = partShortHits >= partNeed
 // history, and a permanently-dark point in the denominator would grade early setups
 // harshly for a reason that says nothing about them.
 ichiOn = scoreIchimoku and ichiReady
-
-plot(momOn ? 1 : 0, "DBG Momentum Point Enabled (1/0)", display = display.data_window)
-plot(partOn ? 1 : 0, "DBG Participation Point Enabled (1/0)", display = display.data_window)
-plot(ichiOn ? 1 : 0, "DBG Ichimoku Point Enabled (1/0)", display = display.data_window)
 
 // ---- the cloud ----
 // plot() cannot live inside an `if`, so the toggle plots na instead: nothing is drawn and the
@@ -926,8 +931,92 @@ htfShortOk = not htfActive or htfBias == -1
 
 plot(htfBias, "DBG HTF Bias (1/-1/0)", display = display.data_window)
 
-bullHardOk = intState.trend == "up" and effBullHit and not inRange and htfLongOk and barstate.isconfirmed
-bearHardOk = intState.trend == "down" and effBearHit and not inRange and htfShortOk and barstate.isconfirmed
+// ---- index map ----
+// Pine cannot fetch index membership, so the constituents live here and go stale at every
+// semi-annual EGX rebalance. Refresh both strings from egx.com.eg (Current Constituents for
+// EGX 30 and EGX 70 EWI) and bump LIST_DATE together. The commas on both ends make the
+// substring test exact: ",VLMR," cannot match inside ",VLMRA,". Same lists as the EGX Trust
+// Score script.
+LIST_DATE  = "2026-11-01"
+EGX30_LIST = ",ABUK,ADIB,ALCN,AMOC,BTFH,CLHO,COMI,EAST,EFID,HRHO,EFIH,EGAL,EMFD,FWRY,GBCO,HELI,ISPH,JUFO,MCQE,MFPC,ORAS,ORHD,PHDC,CCAP,RAYA,SKPC,TMGH,ETEL,RMDA,VLMR,VLMRA,"
+EGX70_LIST = ",ACTF,ATLC,AMER,ARAB,AMIA,AIDC,AIHC,ARCC,ASCM,ASPI,AIFI,BONY,COSG,POUL,CSAG,PRCL,CNFN,CIEB,DAPH,DSCW,EGCH,EGTS,PHAR,MPRC,ETRS,EHDR,ELKA,KABO,OBRI,ELSH,ELEC,NIPH,UEGC,SWDY,ENGC,EXPA,ZEOT,GDWA,GOUR,GPIM,HDBK,IEEC,ICFC,ISMQ,IDRE,ISMA,LCSW,MCRO,MASR,MPCO,MEPA,MPCI,MBSC,ATQA,MTIE,NCCW,OFH,OIH,ORWE,PRDC,SIPC,SDTI,SCEM,OCDI,SVCE,TAQA,MOED,VALU,UNIP,ZMID,"
+
+tickerKey = "," + syminfo.ticker + ","
+inEgx30   = str.contains(EGX30_LIST, tickerKey)
+inEgx70   = str.contains(EGX70_LIST, tickerKey)
+indexName = indexMode != "Auto" ? indexMode : inEgx70 and not inEgx30 ? "EGX70" : "EGX30"
+indexHow  = indexMode != "Auto" ? "Override" : inEgx30 or inEgx70 ? "Auto" : "Unlisted"
+indexSym  = indexName == "EGX70" ? "EGX_DLY:EGX70EWI" : "EGX_DLY:EGX30"
+
+// ---- index regime ----
+// Same timeframe as the chart, no lookahead: on a historical bar the index value is the one
+// that bar could actually have seen. Both requests are unconditional and at global scope, so
+// the filter's on/off state can never change what they do.
+// ignore_invalid_symbol: the gate is inactive off EGX, so a failed lookup must never break a non-EGX chart.
+[ownClose, ownMa, ownMaPast] = request.security(indexSym, timeframe.period, [close, ta.sma(close, idxRegimeLen), ta.sma(close, idxRegimeLen)[idxSlopeLen]], lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+[c30, ma30, past30]          = request.security("EGX_DLY:EGX30", timeframe.period, [close, ta.sma(close, idxRegimeLen), ta.sma(close, idxRegimeLen)[idxSlopeLen]], lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+
+// EGX 70 EWI only has history on TradingView from mid-2020. Until it can give a full regime
+// reading, an EGX70 stock falls back to EGX30 as the market trend instead of losing every
+// earlier bar to "no data".
+ownReady  = not na(ownClose) and not na(ownMa) and not na(ownMaPast)
+useProxy  = indexName == "EGX70" and not ownReady
+idxClose  = useProxy ? c30 : ownClose
+idxMa     = useProxy ? ma30 : ownMa
+idxMaPast = useProxy ? past30 : ownMaPast
+
+// 1 = Up, -1 = Down, 0 = neither, na = no index reading yet.
+int idxRegime = na(idxMa) or na(idxMaPast) or na(idxClose) ? na : idxClose > idxMa and idxMa > idxMaPast ? 1 : idxClose < idxMa and idxMa < idxMaPast ? -1 : 0
+
+isEgx      = syminfo.prefix == "EGX_DLY" or syminfo.prefix == "EGX"
+idxActive  = requireIndexTrend and isEgx
+idxLongOk  = not idxActive or (not na(idxRegime) and idxRegime != -1)
+idxShortOk = not idxActive or (not na(idxRegime) and idxRegime != 1)
+
+// ---- anchored VWAP ----
+// One VWAP from the latest major swing low (long side) and one from the latest major swing high
+// (short side). A swing is only known majorLookback bars after it forms, so on the confirming bar
+// the sums are rebuilt from the pivot bar forward, and from then on each bar adds itself. Before
+// that bar the previous anchor stays in force, so no bar reads a swing it could not have seen.
+// The var sums roll back on every realtime tick, so adding the developing bar is safe.
+var float avLoPV = na
+var float avLoV  = na
+var float avHiPV = na
+var float avHiV  = na
+avBarPV = hlc3 * nz(volume)
+if barstate.isconfirmed and not na(majorLowRaw)
+    s = 0.0
+    v = 0.0
+    for i = 0 to majorLookback
+        s += hlc3[i] * nz(volume[i])
+        v += nz(volume[i])
+    avLoPV := s
+    avLoV  := v
+else if not na(avLoPV)
+    avLoPV += avBarPV
+    avLoV  += nz(volume)
+if barstate.isconfirmed and not na(majorHighRaw)
+    s = 0.0
+    v = 0.0
+    for i = 0 to majorLookback
+        s += hlc3[i] * nz(volume[i])
+        v += nz(volume[i])
+    avHiPV := s
+    avHiV  := v
+else if not na(avHiPV)
+    avHiPV += avBarPV
+    avHiV  += nz(volume)
+avwapLow  = not na(avLoV) and avLoV > 0 ? avLoPV / avLoV : na
+avwapHigh = not na(avHiV) and avHiV > 0 ? avHiPV / avHiV : na
+
+avwapLongOk  = not requireAvwap or (not na(avwapLow) and close > avwapLow)
+avwapShortOk = not requireAvwap or (not na(avwapHigh) and close < avwapHigh)
+
+plot(showAvwap ? avwapLow : na, "Anchored VWAP (swing low)", color = color.new(color.aqua, 0), linewidth = 2)
+plot(showAvwap ? avwapHigh : na, "Anchored VWAP (swing high)", color = color.new(color.fuchsia, 0), linewidth = 2)
+
+bullHardOk = intState.trend == "up" and effBullHit and not inRange and htfLongOk and idxLongOk and avwapLongOk and barstate.isconfirmed
+bearHardOk = intState.trend == "down" and effBearHit and not inRange and htfShortOk and idxShortOk and avwapShortOk and barstate.isconfirmed
 
 var int    setupScoreVal = 0
 var int    setupOfVal    = 0
@@ -978,7 +1067,9 @@ gateTouch = gateLong ? effBullHit : effBearHit
 // requirement is already met and the daily close is all that is outstanding.
 gateHtfOk    = gateLong ? htfLongOk : htfShortOk
 gateAwaiting = requireConfirmation and (gateLong ? pendingBullActive : pendingBearActive)
-gateReason = na(intState.trend) ? "no trend" : inRange ? "in range" : not gateHtfOk ? "htf bias" : gateAwaiting ? "awaiting confirmation" : not gateTouch ? "no zone touch" : gateScore < minScore ? "score short" : not barstate.isconfirmed ? "bar not closed" : "READY"
+gateIdxOk    = gateLong ? idxLongOk : idxShortOk
+gateAvwapOk  = gateLong ? avwapLongOk : avwapShortOk
+gateReason = na(intState.trend) ? "no trend" : inRange ? "in range" : not gateHtfOk ? "htf bias" : not gateIdxOk ? "index trend" : not gateAvwapOk ? "anchored vwap" : gateAwaiting ? "awaiting confirmation" : not gateTouch ? "no zone touch" : gateScore < minScore ? "score short" : not barstate.isconfirmed ? "bar not closed" : "READY"
 gateReady  = gateReason == "READY"
 
 plot(bullTouch.hit ? 1 : 0, "DBG Bull Zone Touch (1/0)", display = display.data_window)
@@ -1130,6 +1221,10 @@ type Trade
     // parameter mutation does (closeReason, mutated the same way inside advanceTrade(), works
     // fine). Rather than chase that further, this sidesteps it.
     string zoneTier
+    // Entry bar time, snapshotted at open so the log never has to index history by bar offset.
+    // Declared before the defaulted fields below: positional Trade.new calls cannot skip a
+    // defaulted field and still fill a later one.
+    int    openTime
     // Best and worst excursion from entry, in price, over the bars after the entry bar. On the
     // exit bar the whole bar counts, since intrabar order is unknown. Defaults let every existing
     // positional Trade.new call skip them.
@@ -1233,6 +1328,30 @@ blendedResultR(Trade t) =>
         total += legR(t.tp3, t.entry, rr, isLong)
     total / 3.0
 
+// Round-trip cost of a trade in R, under the same scale-out-in-thirds convention as
+// blendedResultR: the exit prices are the targets reached plus closePrice for the thirds that
+// remain, and the averaged exit carries one side of slippage (the other side is the entry).
+// Commission is charged per order: the entry, one per target leg, and one for the remaining
+// thirds. Zero when costs are off, so every number is unchanged by default.
+costR(Trade t) =>
+    rr        = math.abs(t.entry - t.initialStop)
+    legsAtTps = t.runner and t.tpHit > 2 ? 2 : t.tpHit
+    cost      = 0.0
+    if applyCosts and rr > 0
+        exitSum = (3 - legsAtTps) * t.closePrice
+        if legsAtTps >= 1
+            exitSum += t.tp1
+        if legsAtTps >= 2
+            exitSum += t.tp2
+        if legsAtTps >= 3
+            exitSum += t.tp3
+        avgExit = exitSum / 3.0
+        slipR   = slippagePct / 100.0 * (t.entry + avgExit) / rr
+        orders  = 1 + legsAtTps + (3 - legsAtTps > 0 ? 1 : 0)
+        commR   = orders * commissionPer / ((positionSize / t.entry) * rr)
+        cost    := slipR + commR
+    cost
+
 // A=0, B=1, C=2. Anything unrecognised lands in C rather than erroring — an out-of-range index
 // on a 3-slot array would be a runtime failure on a chart, which is a bad trade for strictness.
 gradeIndex(string g) =>
@@ -1266,6 +1385,18 @@ var array<int>   statPointCountTrue  = array.new<int>(14, 0)
 var array<float> statPointSumRTrue   = array.new<float>(14, 0.0)
 var array<int>   statPointCountFalse = array.new<int>(14, 0)
 var array<float> statPointSumRFalse  = array.new<float>(14, 0.0)
+
+// Tuning / Test split, per model. A trade is placed by its ENTRY time against Test Start: before
+// it is Tuning, from it onward is Test. A trade entered before and closed on or after Test Start
+// belongs to neither and is only counted in the straddle total, so the Tuning column never sees
+// a result that was decided inside the Test window.
+var array<int>   splitTuneN    = array.new<int>(2, 0)
+var array<int>   splitTuneW    = array.new<int>(2, 0)
+var array<float> splitTuneR    = array.new<float>(2, 0.0)
+var array<int>   splitTestN    = array.new<int>(2, 0)
+var array<int>   splitTestW    = array.new<int>(2, 0)
+var array<float> splitTestR    = array.new<float>(2, 0.0)
+var array<int>   splitStraddle = array.new<int>(2, 0)
 
 // ---- one bar of exit processing for one slot ----
 // The whole exit block, lifted verbatim from the single-slot version with `activeTrade` renamed
@@ -1365,8 +1496,23 @@ targetJustHit := pbHitTarget or trHitTarget
 // silently zero the track record, and the panel would disagree with the chart for reasons
 // nobody could see.
 recordResult(Trade t, int model) =>
-    r  = blendedResultR(t)
+    r  = blendedResultR(t) - costR(t)
     gi = model * 3 + gradeIndex(t.grade)
+    // Period by ENTRY time. Entered from Test Start on: Test. Entered earlier but closing on or
+    // after it: straddle, in neither column. Otherwise: Tuning. A win is net R above zero.
+    openTime = t.openTime
+    if openTime >= testStart
+        array.set(splitTestN, model, array.get(splitTestN, model) + 1)
+        array.set(splitTestR, model, array.get(splitTestR, model) + r)
+        if r > 0
+            array.set(splitTestW, model, array.get(splitTestW, model) + 1)
+    else if time >= testStart
+        array.set(splitStraddle, model, array.get(splitStraddle, model) + 1)
+    else
+        array.set(splitTuneN, model, array.get(splitTuneN, model) + 1)
+        array.set(splitTuneR, model, array.get(splitTuneR, model) + r)
+        if r > 0
+            array.set(splitTuneW, model, array.get(splitTuneW, model) + 1)
     array.set(statTrades, model, array.get(statTrades, model) + 1)
     array.set(statSumR,   model, array.get(statSumR,   model) + r)
     if r > 0
@@ -1403,7 +1549,9 @@ if trClosed
 // One CSV line per closed trade in the Pine Logs panel — the raw material for diagnosing losses
 // trade by trade, which the aggregate panel cannot do. Header:
 // TRADE,model,symbol,tf,open,close,side,grade,score,of,zone,entry,stop,tp1,tp2,tp3,tpHit,reason,
-// exit,R,mfeR,maeR,bars,riskAtr,kz,mom,ma,maj,brk,part,ichi
+// exit,R,mfeR,maeR,bars,riskAtr,kz,mom,ma,maj,brk,part,ichi,period
+// R is net of costs when Apply Costs is on. period is Tuning, Test or Straddle, by entry time
+// against Test Start.
 b2(bool v) =>
     v ? "1" : "0"
 
@@ -1411,10 +1559,13 @@ logTrade(Trade t, string model, float r) =>
     rr = math.abs(t.entry - t.initialStop)
     zone = t.zoneTier == "NONE" ? "-" : t.zoneTier == "" ? "FVG" : "OB-" + t.zoneTier
     tf = "yyyy-MM-dd HH:mm"
-    line = str.format("TRADE,{0},{1},{2},{3},{4},{5},{6},{7},{8},{9}", model, syminfo.ticker, timeframe.period, str.format_time(time[bar_index - t.openBar], tf, syminfo.timezone), str.format_time(time, tf, syminfo.timezone), t.side, t.grade, t.score, t.scoreOf, zone)
+    line = str.format("TRADE,{0},{1},{2},{3},{4},{5},{6},{7},{8},{9}", model, syminfo.ticker, timeframe.period, str.format_time(t.openTime, tf, syminfo.timezone), str.format_time(time, tf, syminfo.timezone), t.side, t.grade, t.score, t.scoreOf, zone)
     line += str.format(",{0},{1},{2},{3},{4},{5},{6},{7}", str.tostring(t.entry), str.tostring(t.initialStop), str.tostring(t.tp1), str.tostring(t.tp2), str.tostring(t.tp3), t.tpHit, t.closeReason, str.tostring(t.closePrice))
     line += str.format(",{0},{1},{2},{3},{4}", str.tostring(r, "0.00"), str.tostring(rr > 0 ? t.mfe / rr : 0.0, "0.00"), str.tostring(rr > 0 ? t.mae / rr : 0.0, "0.00"), bar_index - t.openBar, str.tostring(structAtr > 0 ? rr / structAtr : 0.0, "0.00"))
     line += "," + b2(t.ptKillzone) + "," + b2(t.ptMomentum) + "," + b2(t.ptMa) + "," + b2(t.ptMajorAgree) + "," + b2(t.ptBreakStrength) + "," + b2(t.ptParticipation) + "," + b2(t.ptIchimoku)
+    // Same placement rule as recordResult: by entry time, straddle when it closes past Test Start.
+    period = t.openTime >= testStart ? "Test" : time >= testStart ? "Straddle" : "Tuning"
+    line += "," + period
     log.info(line)
     line
 
@@ -1461,6 +1612,9 @@ pullbackRiskOk(float risk) =>
     if risk > 0
         if not na(structAtr)
             ok := risk >= minRiskAtr * structAtr
+    // Optional tick floor on top of the ATR floor; 0 = off.
+    if ok and minRiskTicks > 0
+        ok := risk >= minRiskTicks * syminfo.mintick
     ok
 
 canOpen = na(activeTrade)
@@ -1473,7 +1627,7 @@ if canOpen and longSetup
         if pullbackRiskOk(risk)
             tg   = selectTargets(true, close, risk, minTargetR)
             [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(true)
-            activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, effBullTier)
+            activeTrade := Trade.new("long", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, effBullTier, time)
             tradeOpened := true
             openedSide  := "long"
 if na(activeTrade) and shortSetup and not longOnly
@@ -1485,7 +1639,7 @@ if na(activeTrade) and shortSetup and not longOnly
         if pullbackRiskOk(risk)
             tg   = selectTargets(false, close, risk, minTargetR)
             [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(false)
-            activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, effBearTier)
+            activeTrade := Trade.new("short", setupGradeVal, setupScoreVal, setupOfVal, close, st, st, zTop, zBot, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, false, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, effBearTier, time)
             tradeOpened := true
             openedSide  := "short"
 
@@ -1503,8 +1657,8 @@ trailStructOk(bool isLong) =>
         ok := not inRange and intState.trend == (isLong ? "up" : "down")
     ok
 
-trailLongEntry  = useTrailModel and barstate.isconfirmed and trailFlipLong  and trailStructOk(true)  and (not trailUseScore or scoreLong  >= minScore)
-trailShortEntry = useTrailModel and barstate.isconfirmed and trailFlipShort and trailStructOk(false) and (not trailUseScore or scoreShort >= minScore) and not longOnly
+trailLongEntry  = useTrailModel and barstate.isconfirmed and trailFlipLong  and trailStructOk(true)  and (not trailUseScore or scoreLong  >= minScore) and idxLongOk and avwapLongOk
+trailShortEntry = useTrailModel and barstate.isconfirmed and trailFlipShort and trailStructOk(false) and (not trailUseScore or scoreShort >= minScore) and not longOnly and idxShortOk and avwapShortOk
 
 // A flip can fire with the close sitting almost exactly on its own trail, and nothing in the
 // model bounds that distance. While the stop stayed frozen at its entry value that only inflated
@@ -1519,6 +1673,9 @@ trailRiskOk(float risk) =>
     if risk > 0
         if not na(trailAtr)
             ok := risk >= trailMinRiskAtr * trailAtr
+    // Optional tick floor on top of the ATR floor; 0 = off.
+    if ok and minRiskTicks > 0
+        ok := risk >= minRiskTicks * syminfo.mintick
     ok
 
 if na(trailTrade) and trailLongEntry
@@ -1533,7 +1690,7 @@ if na(trailTrade) and trailLongEntry
         // zoneTop/zoneBottom carry entry and stop: this model has no zone, and those two fields
         // are what the trade box is drawn from.
         [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(true)
-        trailTrade := Trade.new("long", gradeFor(scoreLong, ofPtsLong), scoreLong, ofPtsLong, close, st, st, close, st, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, "NONE")
+        trailTrade := Trade.new("long", gradeFor(scoreLong, ofPtsLong), scoreLong, ofPtsLong, close, st, st, close, st, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, "NONE", time)
         tradeOpened := true
         if na(openedSide)
             openedSide := "long"
@@ -1543,7 +1700,7 @@ if na(trailTrade) and trailShortEntry
     if trailRiskOk(risk)
         tg   = selectTargets(false, close, risk, trailMinTargetR)
         [pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi] = pointsRaw(false)
-        trailTrade := Trade.new("short", gradeFor(scoreShort, ofPtsShort), scoreShort, ofPtsShort, close, st, st, st, close, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, "NONE")
+        trailTrade := Trade.new("short", gradeFor(scoreShort, ofPtsShort), scoreShort, ofPtsShort, close, st, st, st, close, tg.p1, tg.p2, tg.p3, tg.liq1, tg.liq2, tg.liq3, bar_index, 0, na, na, runnerMode, trailUsesOwnStop, pKz, pMom, pMa, pMaj, pBrk, pPart, pIchi, "NONE", time)
         tradeOpened := true
         if na(openedSide)
             openedSide := "short"
@@ -1945,9 +2102,22 @@ plot(dbgTradeSide, "DBG Trade Side (1=long -1=short)", display = display.data_wi
 plot(dbgTpHit, "DBG TP Hit (0-3)", display = display.data_window)
 plot(dbgTradeStop, "DBG Trade Stop", display = display.data_window)
 plot(tradeOpenR, "DBG Open R", display = display.data_window)
-plot(setupScoreVal, "DBG Setup Score", display = display.data_window)
-plot(setupOfVal, "DBG Setup Of", display = display.data_window)
-plot(ofPtsLong, "DBG Enabled Points", display = display.data_window)
+// Tuning / Test totals per model, net of costs when Apply Costs is on. Tune settings by the Tuning
+// figures only and read the Test figures once. Straddle is the trades that were entered before
+// Test Start and closed after it, summed over both models; they are in neither column.
+plot(array.get(splitTuneN, MODEL_PULLBACK), "DBG PB Tune N", display = display.data_window)
+plot(array.get(splitTuneW, MODEL_PULLBACK), "DBG PB Tune Wins", display = display.data_window)
+plot(array.get(splitTuneR, MODEL_PULLBACK), "DBG PB Tune R", display = display.data_window)
+plot(array.get(splitTestN, MODEL_PULLBACK), "DBG PB Test N", display = display.data_window)
+plot(array.get(splitTestW, MODEL_PULLBACK), "DBG PB Test Wins", display = display.data_window)
+plot(array.get(splitTestR, MODEL_PULLBACK), "DBG PB Test R", display = display.data_window)
+plot(array.get(splitTuneN, MODEL_TRAIL), "DBG TR Tune N", display = display.data_window)
+plot(array.get(splitTuneW, MODEL_TRAIL), "DBG TR Tune Wins", display = display.data_window)
+plot(array.get(splitTuneR, MODEL_TRAIL), "DBG TR Tune R", display = display.data_window)
+plot(array.get(splitTestN, MODEL_TRAIL), "DBG TR Test N", display = display.data_window)
+plot(array.get(splitTestW, MODEL_TRAIL), "DBG TR Test Wins", display = display.data_window)
+plot(array.get(splitTestR, MODEL_TRAIL), "DBG TR Test R", display = display.data_window)
+plot(array.get(splitStraddle, MODEL_PULLBACK) + array.get(splitStraddle, MODEL_TRAIL), "DBG Straddle N", display = display.data_window)
 
 // ============================================================
 // STRATEGY TESTER ORDER LAYER
