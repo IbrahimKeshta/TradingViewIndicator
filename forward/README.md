@@ -18,7 +18,7 @@ Model` on to see the TR rows too.
 
 | File | What |
 |---|---|
-| `latest.md` | The latest scan: new entries, trades closed, every open trade with its current stop and next target, and the forward record so far. Overwritten on every run. |
+| `latest.md` | The latest scan: new entries, trades closed (R and Result %), every open trade with its current stop, next target, open R and open %, and the forward record so far. Overwritten on every run. Result % is R times the risk % at entry (net of costs, partial exits included); open % is the price move from entry. |
 | `egx-daily-log.json` | The forward log. Append-only: a trade is written the first time it is seen and never rewritten, and its close is added once. |
 
 ## Running it
@@ -30,7 +30,11 @@ node --experimental-websocket tools/backtest/scan-egx.mjs
 
 This downloads fresh dividend-adjusted daily bars for every EGX30/EGX70 stock from TradingView's public feed (no login,
 a few minutes), runs the engine with the EGX Daily preset, and writes both files. Run it after the EGX close
-(14:30 Cairo time) on trading days. `--no-fetch` scans the data already on disk.
+(14:30 Cairo time) on trading days. `--no-fetch` scans the data already on disk. A bar dated today counts as finished
+only from 15:00 Cairo: run earlier, the scan stops at the last finished bar and nothing from the forming bar is logged.
+
+The dashboard (`tools/dashboard`, see its README) does the same end-of-day scan by itself after 15:00. It also shows
+what the close would do while the session is open.
 
 The engine is the Node port in `tools/backtest/`, which matches the Pine script trade for trade on dividend-adjusted
 data, so `latest.md` shows what the indicator shows on each chart with `Preset: EGX Daily`.
