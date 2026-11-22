@@ -20,7 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadSymbol, loadMeta, loadIndexBars } from '../backtest/data.mjs';
 import { parseArgs } from '../backtest/egx100-common.mjs';
 import {
-  EGX_CFG, UNIVERSE, cairoParts, isBarFinished, dropUnfinished, runUniverse, newLog, updateLog, renderLatest, forwardRecord, trimUnfinishedCsvs,
+  EGX_CFG, UNIVERSE, cairoParts, isBarFinished, dropUnfinished, runUniverse, newLog, updateLog, renderLatest, forwardRecord, trimUnfinishedCsvs, resultPct, openPct,
 } from '../backtest/scan-core.mjs';
 import { fetchTail as feedTail, mergeTail } from './live-feed.mjs';
 import { provisional, openRows, dayByDay, evaluate } from './state.mjs';
@@ -178,7 +178,7 @@ export function createDashboard({
       const k = `${o.symbol}|${o.openDate}|${o.model}`;
       return { ...o, close, lastDate: b[b.length - 1].date, openR: risk > 0 ? (o.side === 'long' ? close - o.entry : o.entry - close) / risk : 0, wouldExit: exitKeys.has(k), wouldHit: tgtKeys.get(k)?.to ?? null };
     }));
-    const markLogged = (x) => ({ ...x, logged: !!log?.trades?.[`${x.symbol}|${x.openDate}|${x.model}`] });
+    const markLogged = (x) => ({ ...x, resultPct: resultPct(x), logged: !!log?.trades?.[`${x.symbol}|${x.openDate}|${x.model}`] });
     const sessionDates = [...new Set(Object.values(bars).flatMap((b) => b.map((x) => x.date)))].filter((d) => d <= finSession);
     const staleRows = [
       ...Object.entries(errors).map(([symbol, error]) => ({ symbol, error })),
@@ -187,9 +187,9 @@ export function createDashboard({
     ];
     return {
       mode, phase, today: c.date, cairoTime: c.minutes, liveSession, session: finSession, asOf: live.at, feedNote: FEED_NOTE,
-      provisional: prov,
+      provisional: { ...prov, exits: prov.exits.map(withPct) },
       open,
-      final: { session: finSession, entries: [...withoutRun.closedAll, ...withoutRun.openAll].filter((x) => x.openDate === finSession), exits: withoutRun.closedAll.filter((x) => x.closeDate === finSession) },
+      final: { session: finSession, entries: [...withoutRun.closedAll, ...withoutRun.openAll].filter((x) => x.openDate === finSession), exits: withoutRun.closedAll.filter((x) => x.closeDate === finSession).map(withPct) },
       // Trades in the forward log (the out-of-sample record) are marked logged.
       days: dayByDay(withoutRun.closedAll, withoutRun.openAll, sessionDates, 60).map((d) => ({
         ...d, entries: d.entries.map(markLogged), exits: d.exits.map(markLogged),
@@ -203,7 +203,11 @@ export function createDashboard({
   function stock(sym) {
     if (!live || !symbols.includes(sym)) return null;
     const { withoutRun } = live;
-    return { symbol: sym, closed: withoutRun.closedAll.filter((t) => t.symbol === sym).sort((a, b) => (a.openDate < b.openDate ? 1 : -1)), open: withoutRun.openAll.filter((t) => t.symbol === sym) };
+    return {
+      symbol: sym,
+      closed: withoutRun.closedAll.filter((t) => t.symbol === sym).sort((a, b) => (a.openDate < b.openDate ? 1 : -1)).map(withPct),
+      open: withoutRun.openAll.filter((t) => t.symbol === sym).map((t) => ({ ...t, openPct: openPct(t) })),
+    };
   }
 
   // Scheduler step, called every minute by the server. Returns what it started (for logs and tests).
@@ -218,6 +222,9 @@ export function createDashboard({
 
   return { refresh, endOfDay, state, stock, tick, needsEndOfDay };
 }
+
+// A closed trade with its result in % of entry (see resultPct).
+const withPct = (t) => ({ ...t, resultPct: resultPct(t) });
 
 export function serve(dash, port) {
   const page = path.join(here, 'public', 'index.html');

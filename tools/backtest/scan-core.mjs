@@ -60,6 +60,11 @@ export function runUniverse(barsBySym, meta, indexBars, cfg) {
 }
 
 export const tradeKey = (sym, openDate, model) => `${sym}|${openDate}|${model}`;
+// A closed trade's result in % of the entry price: R (blended over the TP1/TP2/TP3 scale-outs, net of costs) times the
+// initial risk as a % of entry. null when R is not a number.
+export const resultPct = (t) => (Number.isFinite(t.r) && t.entry > 0 ? 100 * t.r * Math.abs(t.entry - t.stop) / t.entry : null);
+// An open trade's price move from entry to the last close, in %, signed so that a gain is positive for either side.
+export const openPct = (t) => (t.entry > 0 ? 100 * (t.side === 'short' ? -1 : 1) * (t.close - t.entry) / t.entry : null);
 export const riskPct = (entry, stop) => Math.abs(entry - stop) / entry;
 
 export function newLog(session, start = '2026-11-21') {
@@ -129,6 +134,7 @@ export function renderLatest({ session, symbols, stale, missing, lastDate, close
   if (missing.length) L.push(`No data: ${missing.join(', ')}.`);
   L.push('');
   L.push('Entries happen at the close of the signal bar, so a "new entry" below is a trade the indicator opened at this session\'s close. R is net of costs.');
+  L.push('Result % is R times the risk % at entry (net of costs, partial exits included). Open % is the price move from entry to the last close.');
   L.push('With Stop on Close Only, "Stop now" is hit only by a daily CLOSE at or below it, not by an intraday wick. A PB trade also exits at the close on an internal CHoCH against it ("Invalidated").');
   L.push('');
 
@@ -146,19 +152,19 @@ export function renderLatest({ session, symbols, stale, missing, lastDate, close
   L.push(`## Closed this session (${closedNow.length})`);
   L.push('');
   if (closedNow.length) {
-    L.push('| Stock | Model | Opened | Reason | Exit | Targets hit | R |');
-    L.push('|---|---|---|---|---|---|---|');
-    for (const t of closedNow) L.push(`| ${t.symbol} | ${t.model} | ${t.openDate} | ${t.reason} | ${f(t.exit, 3)} | ${t.tpHit} | ${sgn(t.r)} |`);
+    L.push('| Stock | Model | Opened | Reason | Exit | Targets hit | R | Result % |');
+    L.push('|---|---|---|---|---|---|---|---|');
+    for (const t of closedNow) L.push(`| ${t.symbol} | ${t.model} | ${t.openDate} | ${t.reason} | ${f(t.exit, 3)} | ${t.tpHit} | ${sgn(t.r)} | ${sgn(resultPct(t), 1)} |`);
   } else L.push('None.');
   L.push('');
 
   L.push(`## Open trades (${openAll.length})`);
   L.push('');
   if (openAll.length) {
-    L.push('| Stock | Model | Opened | Bars | Entry | Stop now | Next target | Targets hit | Last close | Open R |');
-    L.push('|---|---|---|---|---|---|---|---|---|---|');
+    L.push('| Stock | Model | Opened | Bars | Entry | Stop now | Next target | Targets hit | Last close | Open R | Open % |');
+    L.push('|---|---|---|---|---|---|---|---|---|---|---|');
     for (const t of [...openAll].sort((a, b) => byModel(a, b) || (a.openDate < b.openDate ? 1 : -1)))
-      L.push(`| ${t.symbol} | ${t.model} | ${t.openDate} | ${t.bars} | ${f(t.entry, 3)} | ${f(t.curStop, 3)} | ${t.tpHit >= 3 ? 'runner' : f(nextTarget(t), 3)} | ${t.tpHit} | ${f(t.close, 3)} | ${sgn(t.openR)} |`);
+      L.push(`| ${t.symbol} | ${t.model} | ${t.openDate} | ${t.bars} | ${f(t.entry, 3)} | ${f(t.curStop, 3)} | ${t.tpHit >= 3 ? 'runner' : f(nextTarget(t), 3)} | ${t.tpHit} | ${f(t.close, 3)} | ${sgn(t.openR)} | ${sgn(openPct(t), 1)} |`);
   }
   L.push('');
 

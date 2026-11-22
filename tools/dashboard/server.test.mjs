@@ -175,3 +175,18 @@ test('a refresh asked for during the end-of-day download joins it instead of fet
   await eod; await joined;
   assert.ok(fs.existsSync(fx.logFile));
 });
+
+test('trades carry their % result: closed resultPct, open openPct', async () => {
+  const fx = fixture();
+  const dash = createDashboard({ dataDir: fx.data, logFile: fx.logFile, outFile: fx.outFile, universe: ['AAA', 'BBB'], now: () => cairo('2026-11-22', '12:00'),
+    fetchTail: async (sym) => tailOf(fx.bars[sym.split(':')[1]]), fullFetch: async () => {} });
+  await dash.refresh();
+  const s = dash.state();
+  const exits = s.days.flatMap((d) => d.exits);
+  assert.ok(exits.length > 0);
+  for (const t of exits) assert.ok(Math.abs(t.resultPct - 100 * t.r * Math.abs(t.entry - t.stop) / t.entry) < 1e-9);
+  for (const t of s.open) assert.equal(typeof t.openPct, 'number');
+  const st = dash.stock('AAA');
+  assert.ok(st.closed.every((t) => typeof t.resultPct === 'number'));
+  assert.ok(st.open.every((t) => typeof t.openPct === 'number'));
+});

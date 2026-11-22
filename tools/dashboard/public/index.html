@@ -89,7 +89,7 @@
 
   <section>
     <h2 id="open-h">Open trades</h2>
-    <p class="note">Open as of the last finished close, priced at the latest price. With Stop on Close Only a trade exits on a daily <b>close</b> at or below "Stop now", not on an intraday wick; a PB trade also exits at the close on a CHoCH against it.</p>
+    <p class="note">Open as of the last finished close, priced at the latest price. With Stop on Close Only a trade exits on a daily <b>close</b> at or below "Stop now", not on an intraday wick; a PB trade also exits at the close on a CHoCH against it. Open % is the price move from entry; a closed trade's % is its R times the risk % at entry (net of costs, partial exits included).</p>
     <div class="scroll"><table id="open"></table></div>
   </section>
 
@@ -144,6 +144,8 @@ const rbar = (r, scale = 1.5) => {
   return `<span class="bar" title="avg ${sgn(r)}R"><i class="${r >= 0 ? 'p' : 'n'}" style="width:${w}%"></i></span>`;
 };
 // Trades in the forward log (the out-of-sample record) carry a badge in the day-by-day list.
+// A closed trade's result in % of entry, after its R.
+const pctTag = (p) => (p == null ? '' : `<span class="muted">(${sgn(p, 1)}%)</span>`);
 const fwd = (t) => (t.logged ? ' <span class="badge" title="in the forward log">forward log</span>' : '');
 let S = null, model = 'PB', sortKey = 'totalR', sortDir = -1;
 
@@ -177,7 +179,7 @@ function render() {
   $('decide').hidden = S.mode !== 'live';
   if (S.mode === 'live') {
     const p = S.provisional;
-    list($('p-exits'), p.exits, (t) => `<b>${esc(t.symbol)}</b> ${t.model} · ${esc(t.reason)} at ${px(t.exit)} · <b>${sgn(t.r)}R</b> <span class="muted">(opened ${t.openDate}, targets hit ${t.tpHit})</span>`);
+    list($('p-exits'), p.exits, (t) => `<b>${esc(t.symbol)}</b> ${t.model} · ${esc(t.reason)} at ${px(t.exit)} · <b>${sgn(t.r)}R</b> ${pctTag(t.resultPct)} <span class="muted">(opened ${t.openDate}, targets hit ${t.tpHit})</span>`);
     list($('p-entries'), p.entries, (t) => `<b>${esc(t.symbol)}</b> ${t.model} · entry ${px(t.entry)} · stop ${px(t.stop)} · TP1 ${px(t.tp1)} <span class="muted">grade ${esc(t.grade)}</span>`);
     list($('p-targets'), p.targets, (t) => `<b>${esc(t.symbol)}</b> ${t.model} · TP${t.to} ${px(t.level)} <span class="muted">(opened ${t.openDate})</span>`);
   }
@@ -185,14 +187,14 @@ function render() {
   // Open trades
   const open = [...S.open].sort((a, b) => (b.wouldExit - a.wouldExit) || (a.toStopR ?? 99) - (b.toStopR ?? 99));
   $('open-h').textContent = `Open trades (${open.length})`;
-  table($('open'), [{ t: 'Stock', l: 1 }, { t: 'Model', l: 1 }, { t: 'Opened', l: 1 }, { t: 'Bars' }, { t: 'Entry' }, { t: 'Stop now' }, { t: 'Last' }, { t: 'To stop %' }, { t: 'To stop R' }, { t: 'Next target' }, { t: 'Hit' }, { t: 'Open R' }, { t: '', l: 1 }],
-    open.map((t) => `<tr class="click" data-sym="${esc(t.symbol)}"><td><b>${esc(t.symbol)}</b></td><td class="l">${t.model}</td><td class="l">${t.openDate}</td><td>${t.bars}</td><td>${px(t.entry)}</td><td>${px(t.curStop)}</td><td>${px(t.close)}</td><td>${num(t.toStopPct, 1)}</td><td>${num(t.toStopR)}</td><td>${t.next == null ? 'runner' : px(t.next)}</td><td>${t.tpHit}</td><td><b>${sgn(t.openR)}</b></td><td class="l">${
+  table($('open'), [{ t: 'Stock', l: 1 }, { t: 'Model', l: 1 }, { t: 'Opened', l: 1 }, { t: 'Bars' }, { t: 'Entry' }, { t: 'Stop now' }, { t: 'Last' }, { t: 'To stop %' }, { t: 'To stop R' }, { t: 'Next target' }, { t: 'Hit' }, { t: 'Open R' }, { t: 'Open %' }, { t: '', l: 1 }],
+    open.map((t) => `<tr class="click" data-sym="${esc(t.symbol)}"><td><b>${esc(t.symbol)}</b></td><td class="l">${t.model}</td><td class="l">${t.openDate}</td><td>${t.bars}</td><td>${px(t.entry)}</td><td>${px(t.curStop)}</td><td>${px(t.close)}</td><td>${num(t.toStopPct, 1)}</td><td>${num(t.toStopR)}</td><td>${t.next == null ? 'runner' : px(t.next)}</td><td>${t.tpHit}</td><td><b>${sgn(t.openR)}</b></td><td>${sgn(t.openPct, 1)}</td><td class="l">${
       t.wouldExit ? '<span class="flag"><span class="ic crit" aria-hidden="true">✕</span>Would exit</span>' : t.wouldHit ? `<span class="flag"><span class="ic warn" aria-hidden="true">▲</span>Would hit TP${t.wouldHit}</span>` : ''}</td></tr>`), 'No open trades.');
 
   // Last finished session
   $('final-h').textContent = `Last finished session: ${S.session}${S.mode === 'final' ? ' (logged)' : S.mode === 'pending' ? ' (end-of-day scan pending)' : ''}`;
   list($('f-entries'), S.final.entries, (t) => `<b>${esc(t.symbol)}</b> ${t.model} · entry ${px(t.entry)} · stop ${px(t.stop)} · TP1 ${px(t.tp1)}`);
-  list($('f-exits'), S.final.exits, (t) => `<b>${esc(t.symbol)}</b> ${t.model} · ${esc(t.reason)} at ${px(t.exit)} · <b>${sgn(t.r)}R</b> <span class="muted">(opened ${t.openDate})</span>`);
+  list($('f-exits'), S.final.exits, (t) => `<b>${esc(t.symbol)}</b> ${t.model} · ${esc(t.reason)} at ${px(t.exit)} · <b>${sgn(t.r)}R</b> ${pctTag(t.resultPct)} <span class="muted">(opened ${t.openDate})</span>`);
 
   // Forward record
   if (S.forward) {
@@ -204,7 +206,7 @@ function render() {
   // Day by day
   $('days').innerHTML = S.days.length ? S.days.map((d, i) => `<details ${i < 5 ? 'open' : ''}><summary><b>${d.date}</b> <span class="muted">${d.entries.length} in · ${d.exits.length} out${d.exits.length ? ' · ' + sgn(d.exits.reduce((a, t) => a + t.r, 0)) + 'R' : ''}</span></summary>${
     d.entries.map((t) => `<div>&nbsp;&nbsp;<span class="flag"><span class="ic good" aria-hidden="true">+</span>in</span> <b>${esc(t.symbol)}</b> ${t.model} at ${px(t.entry)}, stop ${px(t.stop)}${fwd(t)}</div>`).join('')}${
-    d.exits.map((t) => `<div>&nbsp;&nbsp;<span class="flag"><span class="ic crit" aria-hidden="true">✕</span>out</span> <b>${esc(t.symbol)}</b> ${t.model} · ${esc(t.reason)} at ${px(t.exit)} · <b>${sgn(t.r)}R</b> <span class="muted">(opened ${t.openDate})</span>${fwd(t)}</div>`).join('')}</details>`).join('') : '<div class="empty">No activity.</div>';
+    d.exits.map((t) => `<div>&nbsp;&nbsp;<span class="flag"><span class="ic crit" aria-hidden="true">✕</span>out</span> <b>${esc(t.symbol)}</b> ${t.model} · ${esc(t.reason)} at ${px(t.exit)} · <b>${sgn(t.r)}R</b> ${pctTag(t.resultPct)} <span class="muted">(opened ${t.openDate})</span>${fwd(t)}</div>`).join('')}</details>`).join('') : '<div class="empty">No activity.</div>';
 
   renderEval();
 }
@@ -239,8 +241,8 @@ async function showStock(sym) {
   const all = [...d.open.map((t) => ({ ...t, open: true })), ...d.closed];
   $('detail').style.display = 'block';
   $('detail-h').textContent = `${sym}: ${d.closed.length} closed trades, ${d.open.length} open (both models, newest first)`;
-  table($('detail-t'), [{ t: 'Model', l: 1 }, { t: 'Opened', l: 1 }, { t: 'Closed', l: 1 }, { t: 'Reason', l: 1 }, { t: 'Entry' }, { t: 'Stop' }, { t: 'Exit' }, { t: 'Hit' }, { t: 'R' }],
-    all.map((t) => `<tr><td class="l">${t.model}</td><td class="l">${t.openDate}</td><td class="l">${t.open ? '<b>open</b>' : t.closeDate}</td><td class="l">${t.open ? '' : esc(t.reason)}</td><td>${px(t.entry)}</td><td>${px(t.stop)}</td><td>${t.open ? '' : px(t.exit)}</td><td>${t.tpHit}</td><td><b>${t.open ? sgn(t.openR) : sgn(t.r)}</b></td></tr>`), 'No trades.');
+  table($('detail-t'), [{ t: 'Model', l: 1 }, { t: 'Opened', l: 1 }, { t: 'Closed', l: 1 }, { t: 'Reason', l: 1 }, { t: 'Entry' }, { t: 'Stop' }, { t: 'Exit' }, { t: 'Hit' }, { t: 'R' }, { t: '%' }],
+    all.map((t) => `<tr><td class="l">${t.model}</td><td class="l">${t.openDate}</td><td class="l">${t.open ? '<b>open</b>' : t.closeDate}</td><td class="l">${t.open ? '' : esc(t.reason)}</td><td>${px(t.entry)}</td><td>${px(t.stop)}</td><td>${t.open ? '' : px(t.exit)}</td><td>${t.tpHit}</td><td><b>${t.open ? sgn(t.openR) : sgn(t.r)}</b></td><td>${t.open ? sgn(t.openPct, 1) : sgn(t.resultPct, 1)}</td></tr>`), 'No trades.');
   $('detail').scrollIntoView({ behavior: 'smooth' });
 }
 

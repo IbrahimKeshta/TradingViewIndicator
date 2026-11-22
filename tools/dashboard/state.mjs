@@ -1,6 +1,6 @@
 // Pure views over scan results for the dashboard: the provisional ("if it closed now") diff, open-trade rows, the day
 // by day list and the per-stock evaluation. Inputs are runUniverse() results from tools/backtest/scan-core.mjs.
-import { tradeKey, nextTarget } from '../backtest/scan-core.mjs';
+import { tradeKey, nextTarget, openPct } from '../backtest/scan-core.mjs';
 
 const keyOf = (t) => tradeKey(t.symbol, t.openDate, t.model);
 
@@ -25,7 +25,7 @@ export function openRows(openAll) {
     const dir = t.side === 'long' ? 1 : -1;
     const risk = Math.abs(t.entry - t.stop);
     const dist = dir * (t.close - t.curStop);
-    return { ...t, toStopPct: t.close > 0 ? 100 * dist / t.close : null, toStopR: risk > 0 ? dist / risk : null, next: t.tpHit >= 3 ? null : nextTarget(t) };
+    return { ...t, openPct: openPct(t), toStopPct: t.close > 0 ? 100 * dist / t.close : null, toStopR: risk > 0 ? dist / risk : null, next: t.tpHit >= 3 ? null : nextTarget(t) };
   });
 }
 

@@ -25,11 +25,15 @@ behind, the server catches it up by itself. It is reachable from this PC only.
 |---|---|
 | Header | The mode, the session, when prices were last fetched (Cairo time), a **Refresh now** button, and a red banner for stale stocks, missing data or errors. |
 | **Decide before the close** | Only while the session is open (mode **LIVE**). The preset run on today's unfinished bar as if the session ended at the last price: trades that would **exit** (a close at or below the stop, or a CHoCH), trades that would **open**, targets that would be **hit**. |
-| Open trades | Every trade open as of the last finished close, priced at the latest price: stop now, the distance to it (% and R), next target, open R, and a "Would exit" or "Would hit TPn" flag. Trades closest to their stop come first. Click a row for the stock's trades. |
+| Open trades | Every trade open as of the last finished close, priced at the latest price: stop now, the distance to it (% and R), next target, open R and open %, and a "Would exit" or "Would hit TPn" flag. Trades closest to their stop come first. Click a row for the stock's trades. |
 | Last finished session | Entries and exits of the last session that closed, as the scanner reports them. |
 | Forward record | The out-of-sample test from `forward/egx-daily-log.json`, PB and TR separately. |
 | Day by day | Entries and exits of each of the last 60 sessions that had any. Trades in the forward log carry a "forward log" badge. |
 | Market evaluation | One row per stock, PB or TR: trades, win rate, total R, average R, all history and last 12 months, the last trade and any open trade. Sort by clicking a column; filter by name; click a row for the stock's full trade list. |
+
+**Percentages.** An open trade's **Open %** is the price move from entry to the latest price. A closed trade's % is
+its R times the risk % at entry, so it is net of costs and includes the partial exits at TP1, TP2 and TP3, like R.
+It shows next to R wherever a closed trade appears (exits, day by day, a stock's trade list).
 
 ## Provisional and final
 

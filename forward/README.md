@@ -18,7 +18,7 @@ Model` on to see the TR rows too.
 
 | File | What |
 |---|---|
-| `latest.md` | The latest scan: new entries, trades closed, every open trade with its current stop and next target, and the forward record so far. Overwritten on every run. |
+| `latest.md` | The latest scan: new entries, trades closed (R and Result %), every open trade with its current stop, next target, open R and open %, and the forward record so far. Overwritten on every run. Result % is R times the risk % at entry (net of costs, partial exits included); open % is the price move from entry. |
 | `egx-daily-log.json` | The forward log. Append-only: a trade is written the first time it is seen and never rewritten, and its close is added once. |
 
 ## Running it

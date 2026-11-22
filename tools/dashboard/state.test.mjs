@@ -58,3 +58,10 @@ test('evaluate: per-stock stats, 12-month window, empty stats', () => {
   assert.equal(e.totals.PB.n, 3);
   assert.equal(e.totals.TR12.n, 1);
 });
+
+test('openRows: open % is the price move from entry, signed by side', () => {
+  const [l] = openRows([ot({ entry: 10, stop: 9, curStop: 9, close: 9.5 })]);
+  assert.equal(l.openPct, -5);
+  const [s] = openRows([ot({ side: 'short', entry: 10, stop: 11, curStop: 11, close: 9.5 })]);
+  assert.equal(s.openPct, 5);
+});
