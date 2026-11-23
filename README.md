@@ -337,6 +337,22 @@ below entry after 5, 10 or 20 bars) lowered average R at every setting, because 
 winners spend their first weeks under water. The record is in
 `docs/superpowers/plans/2026-11-21-egx-daily-exit-tests.md`.
 
+**On weekly charts, use EGX Daily as is; there is no separate weekly preset.** On 2026-11-23 the settings were
+searched again on weekly bars of the same 101 stocks: 16 exit combinations, then the swing lookbacks. The choice was
+made on trades opened before 2020 and checked once on 2020 onward, by rules fixed in advance. The best on the earlier
+period, EGX Daily with Major Swing Lookback 10 (+0.78R per trade against +0.73R), did worse from 2020 on (+0.88R
+against +0.95R over about 250 trades), so it was not shipped. The script defaults were far behind in both periods
+(+0.26R and +0.56R).
+
+Expect one thing on weekly charts: after TP3 the stop of a pullback trade often never moves. With Trail From Entry and
+Trailing Tier Major, it follows only a major swing low (20 bars each side, about 40 weeks), and a strong weekly trend
+rarely forms one above the entry stop. The trade then ends on an internal CHoCH against it, not at the stop. That
+loose stop is part of why these settings tested best on weekly: every tighter trail tested scored lower. It also
+means a weekly runner can give back a large part of its open gain before it closes. The TR rows, whose stop follows
+price, are the alternative. Weekly bars come from the same price history as the daily research, and 2020–2026 (the
+pound's devaluations) favoured loose stops, so treat these numbers as weaker evidence than the daily ones. The record
+is in `docs/superpowers/plans/2026-11-23-egx-weekly-preset.md`.
+
 ## The second entry model
 
 The pullback engine above has a structural blind spot, and it is not a tuning problem. Order blocks

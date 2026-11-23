@@ -57,3 +57,44 @@ side and 2 EGP per order), Min Risk 10 ticks, killzone point earned, Minimum Sco
     better on both periods) is the best tested choice on weekly.
 - **Reported alongside, not used to choose:** total R, profit factor, win rate, share of stocks profitable, open trades
   marked to market, and the TR model under the same settings.
+
+## Results (run 2026-11-23, after the protocol above was committed)
+
+`node tools/backtest/weekly-tests.mjs --stage 1`, then `--stage 2`, then `--final`. PB model, closed trades, R net of costs.
+
+**Stage 1, exits, discovery.** The EGX Daily exits ranked first: +0.731R over 329 trades, PF 2.15. The same with
+Trailing Tier Internal came second at +0.721R, inside the 0.02R tie band, so the tie went to EGX Daily (fewer changes).
+Runner on and Stop on Close on were the two settings that mattered: the best combination without the runner made
++0.405R, and the best with intrabar stops made +0.600R. The script's exits (all four off) were last, at +0.257R.
+
+**Stage 2, swing lookbacks, discovery.**
+
+| Major / Internal lookback | Trades | Avg R | PF |
+|---|---|---|---|
+| **10 / 5** | 331 | **+0.782** | 2.25 |
+| 20 / 5 (EGX Daily) | 329 | +0.731 | 2.15 |
+| 10 / 3 | 385 | +0.666 | 2.16 |
+| 20 / 3 | 389 | +0.662 | 2.12 |
+
+The discovery winner was EGX Daily with Major Swing Lookback 10.
+
+**Final, test period (trades opened 2020-01-01 on), looked at once.**
+
+| Settings | Discovery avg R (n) | Test avg R (n) | Test PF | TR model, test avg R (n) |
+|---|---|---|---|---|
+| Finalist: EGX Daily + Major Swing Lookback 10 | +0.782 (331) | +0.878 (246) | 2.41 | +0.977 (282) |
+| **EGX Daily as is** | +0.731 (329) | **+0.949 (249)** | 2.57 | +0.969 (295) |
+| Script defaults (Long Only, costs, Min Risk 10 ticks) | +0.260 (508) | +0.559 (578) | 2.28 | +0.361 (298) |
+
+**Verdict: the finalist FAILS** (test +0.878R is below EGX Daily's +0.949R). By the protocol, no weekly-specific
+settings are shipped and there is no `Preset: EGX Weekly`. On weekly bars the best tested choice is EGX Daily as is.
+The script defaults lost on average R in both periods.
+
+**What this means for the frozen stop.** The stop that never moves on a weekly runner is part of why EGX Daily wins
+there: weekly EGX trends ran for years, and every tighter or more frequent trail tested scored lower.
+What ends those runners is the internal CHoCH, not the stop. Two cautions:
+
+- 58 PB trades are still open under EGX Daily on weekly, marked at about +1,437R on price alone. None of that is in
+  the averages above. A weekly runner can give a large part of it back before a weekly CHoCH closes it.
+- Every setting did better in 2020–2026 than before 2020. Much of EGX's nominal rise in those years came with the
+  pound's devaluations, a regime that rewards loose stops and may not last.
