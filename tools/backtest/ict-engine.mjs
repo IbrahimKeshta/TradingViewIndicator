@@ -333,7 +333,7 @@ function minutesOfDay(timeSec, tz) {
   }
   return v;
 }
-function inSession(timeSec, session, tz) {
+export function inSession(timeSec, session, tz) {
   const m = /^(\d\d)(\d\d)-(\d\d)(\d\d)$/.exec(session);
   if (!m) return false;
   const s = +m[1] * 60 + +m[2], e = +m[3] * 60 + +m[4], t = minutesOfDay(timeSec, tz);

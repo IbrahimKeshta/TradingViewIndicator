@@ -7,7 +7,7 @@
 // chart bar Pine creates the object on and `phase` is the Pine source line that creates it. `finalize` sorts the items
 // by (bar, phase, insertion) and hands out `order`, so the numbering is Pine's object-creation order. applyPineCaps
 // then keeps the newest 500 boxes / lines / labels, as Pine deletes the oldest.
-import { runEngine } from '../backtest/ict-engine.mjs';
+import { runEngine, inSession } from '../backtest/ict-engine.mjs';
 import { htfBiasSeries } from './htf.mjs';
 import { resolveConfig } from './inputs.mjs';
 import { PINE_COLORS, colorNew } from './colors.mjs';
@@ -159,6 +159,168 @@ function addRsiReadout(rb) {
   }, last, PHASE.RSI_LABEL);
 }
 
+// ---- plotted series, Kumo and killzone shading (Pine 203, 637-639, 785-787, 824-825, 1031-1032) ----
+
+const cairoClock = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Africa/Cairo', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+});
+const EGX_OPEN_MIN = 10 * 60, EGX_CLOSE_MIN = 14 * 60 + 30; // EGX session 10:00-14:30 Africa/Cairo, Sunday to Thursday
+
+function cairoParts(timeSec) {
+  const p = {};
+  for (const { type, value } of cairoClock.formatToParts(new Date(timeSec * 1000))) p[type] = +value;
+  return { y: p.year, mo: p.month, d: p.day, minutes: p.hour * 60 + p.minute, dow: new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay() };
+}
+const isWeekend = (dow) => dow === 5 || dow === 6; // Friday and Saturday
+
+// Unix seconds of a Cairo wall-clock moment; two corrections settle the UTC+2/+3 daylight-saving offset.
+function cairoEpoch(y, mo, d, minutes) {
+  const wanted = Date.UTC(y, mo - 1, d) / 60000 + minutes;
+  let t = wanted * 60 - 2 * 3600;
+  for (let k = 0; k < 2; k++) {
+    const c = cairoParts(t);
+    t += (wanted - (Date.UTC(c.y, c.mo - 1, c.d) / 60000 + c.minutes)) * 60;
+  }
+  return t;
+}
+
+// The next EGX session open: today's when `timeSec` is a trading day before the open, else the next trading day's.
+function nextSessionOpen(timeSec) {
+  const c = cairoParts(timeSec);
+  let day = Date.UTC(c.y, c.mo - 1, c.d);
+  if (isWeekend(c.dow) || c.minutes >= EGX_OPEN_MIN) day += 86400000;
+  while (isWeekend(new Date(day).getUTCDay())) day += 86400000;
+  const d = new Date(day);
+  return cairoEpoch(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), EGX_OPEN_MIN);
+}
+
+// Time of the k-th bar after the last one, for the part of the Kumo that is drawn beyond the chart (Pine plot offset).
+// Intraday bars that would open outside the session roll to the next session open; daily skips Friday and Saturday.
+export function futureTime(bars, k, resolution) {
+  let t = bars[bars.length - 1].time;
+  const r = String(resolution).toUpperCase();
+  if (r === 'W' || r === '1W') return t + k * 604800;
+  if (r === 'D' || r === '1D') {
+    for (let s = 0; s < k; s++) { t += 86400; while (isWeekend(cairoParts(t).dow)) t += 86400; }
+    return t;
+  }
+  if (/^\d+$/.test(r) && Number(r) > 0) {
+    for (let s = 0; s < k; s++) {
+      t += Number(r) * 60;
+      const c = cairoParts(t);
+      if (isWeekend(c.dow) || c.minutes < EGX_OPEN_MIN || c.minutes >= EGX_CLOSE_MIN) t = nextSessionOpen(t);
+    }
+    return t;
+  }
+  throw new Error(`unsupported resolution: ${resolution}`);
+}
+
+// Pine plot(): na breaks the line. Contiguous finite stretches of `valueAt` become runs of {time, price}.
+function runsOf(n, valueAt, timeAt) {
+  const runs = [];
+  let cur = null;
+  for (let i = 0; i < n; i++) {
+    const v = valueAt(i);
+    if (Number.isFinite(v)) (cur ??= []).push({ time: timeAt(i), price: v });
+    else if (cur) { runs.push(cur); cur = null; }
+  }
+  if (cur) runs.push(cur);
+  return runs;
+}
+function pushRuns(rb, prefix, runs, color, width) {
+  runs.forEach((points, k) => rb.plan.series.push({ key: `${prefix}:${k}`, points, color, width }));
+}
+
+function addSeries(rb) {
+  const { bars, res, display } = rb;
+  const n = bars.length, time = (i) => bars[i].time;
+  const ma = runsOf(n, (i) => res.series.ma[i], time).flat();
+  if (ma.length) rb.plan.series.push({ key: 'ma', points: ma, color: colorNew(PINE_COLORS.orange, 0), width: 2 });
+  if (display.showTrailStop) {
+    const { trailDir, trailLong, trailShort } = res.series;
+    pushRuns(rb, 'trail:long', runsOf(n, (i) => (trailDir[i] === 1 ? trailLong[i] : NaN), time), colorNew(PINE_COLORS.green, 0), 1);
+    pushRuns(rb, 'trail:short', runsOf(n, (i) => (trailDir[i] === -1 ? trailShort[i] : NaN), time), colorNew(PINE_COLORS.red, 0), 1);
+  }
+  if (display.showAvwap) {
+    pushRuns(rb, 'avwap:low', runsOf(n, (i) => res.series.avwapLow[i], time), colorNew(PINE_COLORS.aqua, 0), 2);
+    pushRuns(rb, 'avwap:high', runsOf(n, (i) => res.series.avwapHigh[i], time), colorNew(PINE_COLORS.fuchsia, 0), 2);
+  }
+}
+
+// Kumo: both spans are drawn ichiDisp bars to the right of the bar that computed them. The fill is cut at every
+// crossing of the spans (Pine colours it by ichiSpanA > ichiSpanB), each polygon being the A edge then the B edge back.
+function addKumo(rb) {
+  const { bars, res, display, engineCfg, ctx } = rb;
+  if (!display.showKumo) return;
+  const n = bars.length, disp = engineCfg.ichiDisp;
+  const shifted = [];
+  try {
+    for (let i = 0; i < n; i++) shifted.push(i + disp < n ? bars[i + disp].time : futureTime(bars, i + disp - (n - 1), ctx.resolution));
+  } catch (err) {
+    rb.plan.meta.warnings.push(`Kumo cloud not drawn: ${err.message}`);
+    return;
+  }
+  const { spanA, spanB } = res.series;
+  pushRuns(rb, 'kumoA', runsOf(n, (i) => spanA[i], (i) => shifted[i]), colorNew(PINE_COLORS.green, 60), 1);
+  pushRuns(rb, 'kumoB', runsOf(n, (i) => spanB[i], (i) => shifted[i]), colorNew(PINE_COLORS.red, 60), 1);
+
+  let cols = [], bull = false, prev = null, run = 0;
+  const flush = () => {
+    if (cols.length >= 2 && cols[0].time < cols[cols.length - 1].time) {
+      rb.plan.fills.push({
+        key: `kumo:${run++}`, color: bull ? display.kumoBullColor : display.kumoBearColor,
+        points: [...cols.map((c) => ({ time: c.time, price: c.a })), ...cols.map((c) => ({ time: c.time, price: c.b })).reverse()],
+      });
+    }
+    cols = [];
+  };
+  for (let i = 0; i < n; i++) {
+    const a = spanA[i], b = spanB[i];
+    if (!Number.isFinite(a) || !Number.isFinite(b)) { flush(); prev = null; continue; }
+    const col = { time: shifted[i], a, b, d: a - b, bull: a > b };
+    if (prev && prev.bull !== col.bull) {
+      const f = prev.d / (prev.d - col.d); // the spans meet between the two columns; the > test makes the signs differ, so f is in (0, 1]
+      const price = prev.a + f * (a - prev.a);
+      const cross = { time: prev.time + f * (col.time - prev.time), a: price, b: price };
+      cols.push(cross);
+      flush();
+      cols = [cross];
+      if (cross.time === col.time) { prev = col; bull = col.bull; continue; } // the crossing is this very column
+    }
+    bull = col.bull;
+    cols.push(col);
+    prev = col;
+  }
+  flush();
+}
+
+// Killzone background (Pine 637-639): one band per contiguous run of bars inside a session. The engine's own
+// killzoneActive series merges the sessions, so each session is matched again here with the same helper. On
+// daily and weekly charts the Pine time(timeframe.period, session) is never true for EGX, so nothing is shaded.
+function addKillzones(rb) {
+  const { bars, engineCfg, ctx } = rb;
+  if (!/^\d+$/.test(String(ctx.resolution))) return;
+  const barSec = Number(ctx.resolution) * 60, n = bars.length;
+  const sessions = [
+    { name: 'london', show: engineCfg.showLondonKZ, session: engineCfg.londonSession, color: colorNew(PINE_COLORS.blue, 90) },
+    { name: 'newyork', show: engineCfg.showNewYorkKZ, session: engineCfg.newYorkSession, color: colorNew(PINE_COLORS.orange, 90) },
+    { name: 'asia', show: engineCfg.showAsiaKZ, session: engineCfg.asiaSession, color: colorNew(PINE_COLORS.purple, 90) },
+  ];
+  for (const s of sessions) {
+    if (!s.show) continue;
+    const inside = (i) => inSession(bars[i].time, s.session, engineCfg.sessionTimezone);
+    let run = 0;
+    for (let i = 0; i < n;) {
+      if (!inside(i)) { i++; continue; }
+      let j = i;
+      while (j + 1 < n && inside(j + 1)) j++;
+      const end = bars[j].time + barSec; // the last bar's own end, never past the next bar's open
+      rb.plan.bands.push({ key: `kz:${s.name}:${run++}`, t1: bars[i].time, t2: j + 1 < n ? Math.min(end, bars[j + 1].time) : end, color: s.color });
+      i = j + 1;
+    }
+  }
+}
+
 // ctx: { symbol, mintick, resolution, lastBarOpen }
 export function buildRenderPlan(bars, values, ctx) {
   const { engineCfg, display } = resolveConfig(values);
@@ -186,6 +348,9 @@ export function buildRenderPlan(bars, values, ctx) {
   addStructure(rb);
   addSignals(rb);
   addRsiReadout(rb);
+  addSeries(rb);
+  addKumo(rb);
+  addKillzones(rb);
   rb.finalize();
   return plan;
 }

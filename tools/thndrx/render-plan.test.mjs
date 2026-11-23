@@ -6,7 +6,7 @@ import { loadSymbol } from '../backtest/data.mjs';
 import { defaultValues, resolveConfig } from './inputs.mjs';
 import { PINE_COLORS, colorNew } from './colors.mjs';
 import { makeBars } from './test-bars.mjs';
-import { buildRenderPlan, applyPineCaps, anchorBar, withTransp } from './render-plan.mjs';
+import { buildRenderPlan, applyPineCaps, anchorBar, withTransp, futureTime } from './render-plan.mjs';
 
 const wave = (n) => Array.from({ length: n }, (_, i) => +(100 + 20 * Math.sin(i / 9) + 8 * Math.sin(i / 3.1) + 0.02 * i).toFixed(4));
 const bars = makeBars(wave(500));
@@ -244,6 +244,236 @@ test('meta and the empty plan', () => {
   const e = buildRenderPlan([], defaultValues(), ctx);
   assert.equal(e.meta.bars, 0);
   assert.deepEqual([e.boxes, e.lines, e.labels, e.markers], [[], [], [], []]);
+});
+
+
+// ---- Task 6: plotted series, Kumo, killzone shading ----
+
+// Walks every numeric field of every plan item, so a NaN or Infinity anywhere fails the test.
+function assertNoNaN(plan) {
+  const walk = (v, path) => {
+    if (typeof v === 'number') assert.ok(Number.isFinite(v), `non-finite number at ${path}`);
+    else if (Array.isArray(v)) v.forEach((x, k) => walk(x, `${path}[${k}]`));
+    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(x, `${path}.${k}`);
+  };
+  walk(plan, 'plan');
+}
+const barIndex = (time) => bars.findIndex((b) => b.time === time);
+const seriesOf = (p, prefix) => p.series.filter((s) => s.key.startsWith(prefix));
+const cairoDow = (t) => new Date(new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date(t * 1000)) + 'T00:00:00Z').getUTCDay();
+
+test('the MA is one orange width-2 series of every finite value', () => {
+  const values = { ...defaultValues(), maTypeInput: 'SMA' }; // an SMA is NaN until its window fills
+  const p = buildRenderPlan(bars, values, ctx);
+  const ma = p.series.filter((s) => s.key === 'ma');
+  assert.equal(ma.length, 1);
+  assert.equal(ma[0].color, colorNew(PINE_COLORS.orange, 0));
+  assert.equal(ma[0].width, 2);
+  const res = engineOf(bars, values);
+  const finite = [...res.series.ma].flatMap((v, i) => (Number.isFinite(v) ? [[bars[i].time, v]] : []));
+  assert.ok(finite.length > 0 && finite.length < bars.length, 'the MA has a warm-up of NaN bars');
+  assert.deepEqual(ma[0].points.map((q) => [q.time, q.price]), finite);
+});
+
+test('NaN splits a series into runs', () => {
+  const values = looseValues({ showTrailStop: true });
+  const p = buildRenderPlan(bars, values, ctx);
+  const res = engineOf(bars, values);
+  for (const [side, dir, color] of [['long', 1, PINE_COLORS.green], ['short', -1, PINE_COLORS.red]]) {
+    const runs = seriesOf(p, `trail:${side}:`);
+    const expected = [];
+    let cur = null;
+    for (let i = 0; i < bars.length; i++) {
+      const v = res.series[side === 'long' ? 'trailLong' : 'trailShort'][i];
+      if (res.series.trailDir[i] === dir && Number.isFinite(v)) (cur ??= []).push([bars[i].time, v]);
+      else if (cur) { expected.push(cur); cur = null; }
+    }
+    if (cur) expected.push(cur);
+    assert.ok(expected.length > 1, `the series must flip the trail direction more than once (${side})`);
+    assert.deepEqual(runs.map((r) => r.key), expected.map((_, k) => `trail:${side}:${k}`));
+    assert.deepEqual(runs.map((r) => r.points.map((q) => [q.time, q.price])), expected);
+    for (const r of runs) {
+      assert.equal(r.color, colorNew(color, 0));
+      assert.equal(r.width, 1);
+      for (const q of r.points) assert.equal(res.series.trailDir[barIndex(q.time)], dir);
+    }
+  }
+  assertNoNaN(p);
+  assert.equal(seriesOf(buildRenderPlan(bars, looseValues(), ctx), 'trail:').length, 0, 'trail lines are off by default');
+});
+
+test('anchored VWAP draws two width-2 series only when shown', () => {
+  const values = looseValues({ showAvwap: true });
+  const p = buildRenderPlan(bars, values, ctx);
+  const res = engineOf(bars, values);
+  for (const [name, arr, color] of [['low', res.series.avwapLow, PINE_COLORS.aqua], ['high', res.series.avwapHigh, PINE_COLORS.fuchsia]]) {
+    const runs = seriesOf(p, `avwap:${name}:`);
+    assert.ok(runs.length > 0);
+    const got = runs.flatMap((r) => r.points.map((q) => [q.time, q.price]));
+    assert.deepEqual(got, [...arr].flatMap((v, i) => (Number.isFinite(v) ? [[bars[i].time, v]] : [])));
+    for (const r of runs) { assert.equal(r.color, colorNew(color, 0)); assert.equal(r.width, 2); }
+  }
+  assert.equal(seriesOf(buildRenderPlan(bars, looseValues(), ctx), 'avwap:').length, 0);
+});
+
+test('kumo shifts forward by ichiDisp bars', () => {
+  const values = looseValues({ showKumo: true });
+  const p = buildRenderPlan(bars, values, ctx);
+  const res = engineOf(bars, values);
+  const disp = 26, n = bars.length;
+  for (const [id, arr, color] of [['kumoA', res.series.spanA, PINE_COLORS.green], ['kumoB', res.series.spanB, PINE_COLORS.red]]) {
+    const runs = seriesOf(p, `${id}:`);
+    assert.equal(runs.length, 1, 'the spans have a single NaN warm-up and no gaps');
+    assert.equal(runs[0].key, `${id}:0`);
+    assert.equal(runs[0].color, colorNew(color, 60));
+    const first = [...arr].findIndex((v) => Number.isFinite(v));
+    const pts = runs[0].points;
+    assert.equal(pts.length, n - first);
+    assert.equal(pts[0].time, bars[first + disp].time);
+    assert.equal(pts[0].price, arr[first]);
+    assert.equal(pts.at(-1).price, arr[n - 1]);
+    assert.ok(pts.at(-1).time > bars.at(-1).time);
+    const future = pts.slice(-disp).map((q) => q.time);
+    assert.deepEqual(future, Array.from({ length: disp }, (_, k) => futureTime(bars, k + 1, '1D')));
+    assert.ok(future.every((t, k) => t > (k ? future[k - 1] : bars.at(-1).time)), 'future times ascend past the last bar');
+  }
+  assertNoNaN(p);
+  assert.equal(seriesOf(buildRenderPlan(bars, looseValues(), ctx), 'kumo').length, 0);
+  assert.equal(buildRenderPlan(bars, looseValues(), ctx).fills.length, 0);
+});
+
+test('kumo fills split at every crossing and take the bull/bear colour', () => {
+  const values = looseValues({ showKumo: true });
+  const p = buildRenderPlan(bars, values, ctx);
+  const res = engineOf(bars, values);
+  const { spanA, spanB } = res.series;
+  const idx = [...spanA].flatMap((a, i) => (Number.isFinite(a) && Number.isFinite(spanB[i]) ? [i] : []));
+  let changes = 0;
+  for (let k = 1; k < idx.length; k++) if ((spanA[idx[k]] > spanB[idx[k]]) !== (spanA[idx[k - 1]] > spanB[idx[k - 1]])) changes++;
+  assert.ok(changes >= 2, 'the series must cross the cloud spans more than once');
+  assert.equal(p.fills.length, changes + 1);
+  assert.deepEqual(p.fills.map((f) => f.key), p.fills.map((_, k) => `kumo:${k}`));
+  const bull = defaultValues().kumoBullColor, bear = defaultValues().kumoBearColor;
+  p.fills.forEach((f, k) => {
+    assert.equal(f.points.length % 2, 0);
+    const cols = f.points.length / 2;
+    assert.ok(cols >= 2);
+    const isBull = f.color === bull;
+    assert.ok(isBull || f.color === bear);
+    for (let j = 0; j < cols; j++) {
+      const top = f.points[j], bottom = f.points[2 * cols - 1 - j];
+      assert.equal(top.time, bottom.time, 'the polygon edges share their columns');
+      assert.ok(isBull ? top.price >= bottom.price - 1e-9 : top.price <= bottom.price + 1e-9, `polygon ${k} stays on one side`);
+    }
+    if (k > 0) { // consecutive polygons touch at the crossing, with opposite colours
+      const prev = p.fills[k - 1];
+      assert.notEqual(prev.color, f.color);
+      assert.equal(prev.points[prev.points.length / 2 - 1].time, f.points[0].time);
+      assert.ok(Math.abs(f.points[0].price - f.points[2 * cols - 1].price) < 1e-9, 'the crossing column is a single point');
+    }
+  });
+  const custom = buildRenderPlan(bars, looseValues({ showKumo: true, kumoBullColor: '#00ff00', kumoBearColor: '#ff0000' }), ctx);
+  assert.ok(custom.fills.every((f) => f.color === '#00ff00' || f.color === '#ff0000'));
+});
+
+const hourly = makeBars(wave(400), { stepSec: 3600 });
+const nyHour = (t) => +new Intl.DateTimeFormat('en-GB', { timeZone: 'America/New_York', hour: '2-digit', hourCycle: 'h23' }).format(new Date(t * 1000));
+
+test('killzone bands only intraday', () => {
+  const daily = makeBars(wave(120));
+  assert.equal(buildRenderPlan(daily, defaultValues(), { ...ctx, resolution: '1D' }).bands.length, 0);
+  assert.equal(buildRenderPlan(daily, defaultValues(), { ...ctx, resolution: '1W' }).bands.length, 0);
+  const p = buildRenderPlan(hourly, defaultValues(), { ...ctx, resolution: '60' });
+  assert.ok(p.bands.length > 0);
+  const london = p.bands.filter((b) => b.key.startsWith('kz:london:'));
+  const ny = p.bands.filter((b) => b.key.startsWith('kz:newyork:'));
+  assert.equal(p.bands.length, london.length + ny.length, 'Asia is off by default');
+  // London 02:00-05:00 New York: three consecutive hourly bars a day, one band per day
+  assert.ok(london.length >= 16);
+  for (const b of london.slice(1, -1)) {
+    assert.equal(nyHour(b.t1), 2);
+    assert.equal(b.t2 - b.t1, 3 * 3600);
+  }
+  for (const b of london) assert.equal(b.color, colorNew(PINE_COLORS.blue, 90));
+  for (const b of ny.slice(1, -1)) {
+    assert.equal(nyHour(b.t1), 7);
+    assert.equal(b.t2 - b.t1, 3 * 3600);
+  }
+  for (const b of ny) assert.equal(b.color, colorNew(PINE_COLORS.orange, 90));
+  assert.deepEqual(london.map((b) => b.key), london.map((_, k) => `kz:london:${k}`));
+  // the bands cover exactly the bars of the engine's merged killzone series
+  const res = engineOf(hourly, defaultValues());
+  const covered = hourly.map((b) => (p.bands.some((x) => b.time >= x.t1 && b.time < x.t2) ? 1 : 0));
+  assert.deepEqual(covered, [...res.series.killzoneActive]);
+  assertNoNaN(p);
+});
+
+test('killzone bands follow their session switches and colours', () => {
+  const hctx = { ...ctx, resolution: '60' };
+  const asia = buildRenderPlan(hourly, { ...defaultValues(), showAsiaKZ: true, showLondonKZ: false, showNewYorkKZ: false }, hctx);
+  assert.ok(asia.bands.length > 0 && asia.bands.every((b) => b.key.startsWith('kz:asia:')));
+  assert.ok(asia.bands.every((b) => b.color === colorNew(PINE_COLORS.purple, 90)));
+  // 20:00-00:00 New York: four bars, except where the data starts or ends inside a window
+  assert.ok(asia.bands.slice(1, -1).every((b) => b.t2 - b.t1 === 4 * 3600 && nyHour(b.t1) === 20));
+  const none = buildRenderPlan(hourly, { ...defaultValues(), showLondonKZ: false, showNewYorkKZ: false }, hctx);
+  assert.equal(none.bands.length, 0);
+  const onlyLondon = buildRenderPlan(hourly, { ...defaultValues(), showNewYorkKZ: false, londonSession: '0300-0500' }, hctx);
+  assert.ok(onlyLondon.bands.length > 0);
+  assert.ok(onlyLondon.bands.slice(1, -1).every((b) => b.key.startsWith('kz:london:') && nyHour(b.t1) === 3 && b.t2 - b.t1 === 2 * 3600));
+});
+
+test('short history renders without NaN', () => {
+  const closes30 = wave(30);
+  const all = { ...defaultValues(), showKumo: true, showAvwap: true, showTrailStop: true };
+  const p = buildRenderPlan(makeBars(closes30), all, ctx);
+  assertNoNaN(p);
+  assert.ok(p.series.some((s) => s.key === 'ma'));
+  assertNoNaN(buildRenderPlan(makeBars(closes30, { stepSec: 3600 }), all, { ...ctx, resolution: '60' }));
+  assertNoNaN(buildRenderPlan(makeBars(wave(3)), all, ctx));
+});
+
+test('zero volume has no NaN text', () => {
+  const zeroVolBars = makeBars(wave(200), { volume: 0 });
+  const p = buildRenderPlan(zeroVolBars, { ...defaultValues(), showAvwap: true }, ctx);
+  assertNoNaN(p);
+  assert.ok(!p.labels.some((l) => /NaN/.test(l.text)));
+  assert.equal(seriesOf(p, 'avwap:').length, 0, 'a zero-volume anchor leaves the VWAP undefined, so nothing is drawn');
+});
+
+test('an unsupported resolution drops the Kumo with a warning, never throws', () => {
+  const p = buildRenderPlan(bars, looseValues({ showKumo: true }), { ...ctx, resolution: '1M' });
+  assert.equal(seriesOf(p, 'kumo').length + p.fills.length, 0);
+  assert.equal(p.meta.warnings.length, 1);
+  assert.match(p.meta.warnings[0], /Kumo/);
+});
+
+test('futureTime skips the EGX weekend', () => {
+  const thu = Date.parse('2024-01-04T08:00:00Z') / 1000; // Thursday 10:00 Cairo
+  const b = (t) => [{ time: t }];
+  assert.equal(cairoDow(thu), 4);
+  assert.equal(futureTime(b(thu), 1, '1D'), thu + 3 * 86400);
+  assert.equal(cairoDow(futureTime(b(thu), 1, '1D')), 0);
+  assert.equal(futureTime(b(thu), 2, '1D'), thu + 4 * 86400);
+  assert.equal(futureTime(b(thu), 6, '1D'), thu + 10 * 86400);
+  assert.equal(futureTime(b(thu - 86400), 2, '1D'), thu + 3 * 86400, 'Wednesday + 2 trading days is Sunday');
+  assert.equal(futureTime(b(thu), 3, '1W'), thu + 21 * 86400);
+  assert.equal(futureTime(b(thu), 0, '1D'), thu);
+});
+
+test('futureTime walks the EGX session on intraday resolutions', () => {
+  const sun10 = Date.parse('2024-01-07T08:00:00Z') / 1000; // Sunday 10:00 Cairo (UTC+2)
+  const b = (t) => [{ time: t }];
+  assert.equal(futureTime(b(sun10), 1, '60'), sun10 + 3600);
+  assert.equal(futureTime(b(sun10), 4, '60'), sun10 + 4 * 3600); // 14:00, before the 14:30 close
+  assert.equal(futureTime(b(sun10), 5, '60'), sun10 + 86400); // 15:00 is after the close: Monday 10:00
+  assert.equal(futureTime(b(sun10), 17, '15'), sun10 + 17 * 900); // 14:15
+  assert.equal(futureTime(b(sun10), 18, '15'), sun10 + 86400); // 14:30 is the close: next session open
+  assert.equal(futureTime(b(sun10), 19, '15'), sun10 + 86400 + 900);
+  const thu14 = Date.parse('2024-01-04T12:00:00Z') / 1000; // Thursday 14:00 Cairo
+  assert.equal(futureTime(b(thu14), 1, '60'), sun10, 'Thursday after the close rolls over the weekend to Sunday 10:00');
+  const thuSummer = Date.parse('2024-07-04T11:00:00Z') / 1000; // Thursday 14:00 Cairo (UTC+3)
+  assert.equal(futureTime(b(thuSummer), 1, '60'), Date.parse('2024-07-07T07:00:00Z') / 1000, 'the next open is 10:00 Cairo local time in summer too');
+  assert.equal(futureTime(b(sun10 - 2 * 3600), 1, '60'), sun10, 'before the open: snap to 10:00');
 });
 
 const dataDir = process.env.ICT_DATA;
