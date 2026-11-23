@@ -172,6 +172,8 @@ test('signal markers follow the opens, with the first opener deciding the side',
     assert.equal(m.location, m.shape === 'triangleup' ? 'belowbar' : 'abovebar');
     assert.equal(m.color, m.shape === 'triangleup' ? PINE_COLORS.lime : PINE_COLORS.red);
     assert.match(m.key, /^sig:\d+$/);
+    const bar = bars.find((b) => b.time === m.time);
+    assert.equal(m.price, m.shape === 'triangleup' ? bar.low : bar.high);
   }
 });
 
@@ -239,10 +241,11 @@ test('an unsupported chart timeframe turns the HTF filter off with a warning', (
 
 test('meta and the empty plan', () => {
   const p = buildRenderPlan(bars, defaultValues(), ctx);
-  assert.deepEqual(p.meta, { symbol: 'TEST', resolution: '1D', bars: 500, firstTime: bars[0].time, lastTime: bars.at(-1).time, warnings: [] });
+  assert.deepEqual(p.meta, { symbol: 'TEST', resolution: '1D', bars: 500, firstTime: bars[0].time, lastTime: bars.at(-1).time, priceLow: Math.min(...bars.map((b) => b.low)), priceHigh: Math.max(...bars.map((b) => b.high)), warnings: [] });
   assert.equal(p.panel.position, 'bottom_right'); // the panel itself is covered by panel.test.mjs
   const e = buildRenderPlan([], defaultValues(), ctx);
   assert.equal(e.meta.bars, 0);
+  assert.deepEqual([e.meta.priceLow, e.meta.priceHigh], [null, null]);
   assert.deepEqual([e.boxes, e.lines, e.labels, e.markers], [[], [], [], []]);
 });
 

@@ -147,8 +147,8 @@ function addSignals(rb) {
   for (let i = 0; i < bars.length; i++) {
     const bull = firstSide.get(i) === 'long';
     const bear = firstSide.get(i) === 'short' || (engineCfg.longOnly && res.series.shortSetup[i] === 1);
-    if (bull) rb.plan.markers.push({ key: bear ? `sig:${i}:up` : `sig:${i}`, time: bars[i].time, shape: 'triangleup', location: 'belowbar', color: PINE_COLORS.lime });
-    if (bear) rb.plan.markers.push({ key: bull ? `sig:${i}:down` : `sig:${i}`, time: bars[i].time, shape: 'triangledown', location: 'abovebar', color: PINE_COLORS.red });
+    if (bull) rb.plan.markers.push({ key: bear ? `sig:${i}:up` : `sig:${i}`, time: bars[i].time, price: bars[i].low, shape: 'triangleup', location: 'belowbar', color: PINE_COLORS.lime });
+    if (bear) rb.plan.markers.push({ key: bull ? `sig:${i}:down` : `sig:${i}`, time: bars[i].time, price: bars[i].high, shape: 'triangledown', location: 'abovebar', color: PINE_COLORS.red });
   }
 }
 
@@ -421,7 +421,8 @@ export function buildRenderPlan(bars, values, ctx) {
   const plan = emptyPlan();
   plan.meta = {
     symbol: ctx.symbol, resolution: ctx.resolution, bars: bars.length,
-    firstTime: bars.length ? bars[0].time : null, lastTime: bars.length ? bars[bars.length - 1].time : null, warnings,
+    firstTime: bars.length ? bars[0].time : null, lastTime: bars.length ? bars[bars.length - 1].time : null,
+    priceLow: bars.length ? Math.min(...bars.map((b) => b.low)) : null, priceHigh: bars.length ? Math.max(...bars.map((b) => b.high)) : null, warnings,
   };
   if (bars.length === 0) return plan;
 
