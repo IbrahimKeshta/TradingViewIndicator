@@ -240,7 +240,7 @@ test('an unsupported chart timeframe turns the HTF filter off with a warning', (
 test('meta and the empty plan', () => {
   const p = buildRenderPlan(bars, defaultValues(), ctx);
   assert.deepEqual(p.meta, { symbol: 'TEST', resolution: '1D', bars: 500, firstTime: bars[0].time, lastTime: bars.at(-1).time, warnings: [] });
-  assert.equal(p.panel, null);
+  assert.equal(p.panel.position, 'bottom_right'); // the panel itself is covered by panel.test.mjs
   const e = buildRenderPlan([], defaultValues(), ctx);
   assert.equal(e.meta.bars, 0);
   assert.deepEqual([e.boxes, e.lines, e.labels, e.markers], [[], [], [], []]);

@@ -12,6 +12,7 @@ import { htfBiasSeries } from './htf.mjs';
 import { resolveConfig } from './inputs.mjs';
 import { PINE_COLORS, colorNew } from './colors.mjs';
 import { fmtNum, fmtPrice } from './format.mjs';
+import { buildPanel } from './panel.mjs';
 
 export const HIST_LIMIT = 5000;           // Pine line 1765
 export const ANCHOR_LIMIT = HIST_LIMIT - 1;
@@ -388,15 +389,19 @@ function addTradeHistory(rb) {
   }
 }
 
-// ctx: { symbol, mintick, resolution, lastBarOpen }
+// ctx: { symbol, mintick, resolution, lastBarOpen, historyNote?: string|null, volumeMissing?: boolean }
 export function buildRenderPlan(bars, values, ctx) {
-  const { engineCfg, display } = resolveConfig(values);
+  const resolved = resolveConfig(values);
+  const { engineCfg, display } = resolved;
   const plan = emptyPlan();
   const warnings = [];
   plan.meta = {
     symbol: ctx.symbol, resolution: ctx.resolution, bars: bars.length,
     firstTime: bars.length ? bars[0].time : null, lastTime: bars.length ? bars[bars.length - 1].time : null, warnings,
   };
+  if (ctx.historyNote) warnings.push(ctx.historyNote);
+  if (ctx.volumeMissing) warnings.push('No volume on this chart: participation and VWAP are off');
+  if (values.requireIndexTrend) warnings.push('Index filter not available on ThndrX'); // the engine always runs with it off
   if (bars.length === 0) return plan;
 
   let htfBias, htfActive = false;
@@ -421,6 +426,7 @@ export function buildRenderPlan(bars, values, ctx) {
   addLiveTrades(rb);
   addTradeHistory(rb);
   rb.finalize();
+  plan.panel = buildPanel(res, resolved, ctx, { lastClose: bars[bars.length - 1].close, warnings });
   return plan;
 }
 
