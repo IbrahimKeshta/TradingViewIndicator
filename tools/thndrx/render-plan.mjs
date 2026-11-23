@@ -11,7 +11,7 @@ import { runEngine, inSession } from '../backtest/ict-engine.mjs';
 import { htfBiasSeries } from './htf.mjs';
 import { resolveConfig } from './inputs.mjs';
 import { PINE_COLORS, colorNew } from './colors.mjs';
-import { fmtNum } from './format.mjs';
+import { fmtNum, fmtPrice } from './format.mjs';
 
 export const HIST_LIMIT = 5000;           // Pine line 1765
 export const ANCHOR_LIMIT = HIST_LIMIT - 1;
@@ -30,6 +30,10 @@ export const PHASE = Object.freeze({
   BREAK_INTERNAL: 1799,
   TAGS: 1809,
   RAYS: 1812,
+  TRADE_PB: 1875,   // drawTradeLevels(activeTrade) on the last bar; one phase per slot, insertion order gives 1856-1862
+  TRADE_TR: 1877,   // drawTradeLevels(trailTrade)
+  RESULT_PB: 1899,
+  RESULT_TR: 1907,
 });
 
 // Pine color.new(c, transp) for any colour string a user can hold: '#RGB', '#RRGGBB', '#RRGGBBAA' or 'rgb(a)(...)'.
@@ -321,6 +325,69 @@ function addKillzones(rb) {
   }
 }
 
+// ---- live trades and trade history (Pine 1831-1907) ----
+
+// Pine targetLabelText (1838-1842): price, R multiple, a liquidity note on an EQH/EQL level, a tick once reached.
+// `r` is the trade's initial risk distance, `entry` its entry price.
+export function targetLabelText(n, price, isLiq, isLong, entry, r, tpHit, mintick) {
+  const rTxt = r > 0 ? fmtNum(Math.abs(price - entry) / r, '0.0') : '0.0';
+  const liqTxt = isLiq ? (isLong ? ' · EQH' : ' · EQL') : '';
+  const hitTxt = tpHit >= n ? ' ✓' : '';
+  return `TP${n} ${fmtPrice(price, mintick)} · ${rTxt}R${liqTxt}${hitTxt}`;
+}
+
+// A live trade is redrawn on the last bar (1850-1877): zone box, header label and five levels with a left label each.
+// A trailing-model trade has no zone, the engine stores its entry and stop as the box edges.
+function addLiveTrade(rb, model, t, tag, phase) {
+  const { bars, display, ctx } = rb;
+  const last = bars.length - 1, lastTime = bars[last].time;
+  const isLong = t.side === 'long';
+  const sideCol = isLong ? display.tradeLongColor : display.tradeShortColor;
+  const r = Math.abs(t.entry - t.initialStop);
+  const boxBar = anchorBar(t.openBar, last), startTime = bars[boxBar].time;
+  const base = `trade:${model}:${t.openBar}`;
+  rb.add('boxes', { key: `${base}:box`, t1: startTime, t2: lastTime, top: t.zoneTop, bottom: t.zoneBottom, border: sideCol, bg: withTransp(sideCol, 88) }, last, phase);
+  rb.add('labels', {
+    key: `${base}:head`, time: startTime, price: t.zoneTop, text: (isLong ? 'LONG · ' : 'SHORT · ') + tag + t.grade + ' · ' + t.score + '/' + t.scoreOf,
+    style: 'down', color: sideCol, textColor: PINE_COLORS.white, size: 'tiny',
+  }, last, phase);
+  const level = (part, price, color, text, dotted) => {
+    rb.add('lines', { key: `${base}:${part}`, t1: startTime, p1: price, t2: lastTime, p2: price, extendRight: true, color, style: dotted ? 'dotted' : 'solid', width: 1 }, last, phase);
+    rb.add('labels', { key: `${base}:${part}:label`, time: lastTime, price, text, style: 'left', color, textColor: PINE_COLORS.white, size: 'tiny' }, last, phase);
+  };
+  level('entry', t.entry, sideCol, 'Entry ' + fmtPrice(t.entry, ctx.mintick), false);
+  level('sl', t.stop, display.tradeStopColor, 'SL ' + fmtPrice(t.stop, ctx.mintick), false);
+  [[1, t.tp1, t.liq1], [2, t.tp2, t.liq2], [3, t.tp3, t.liq3]].forEach(([n, price, liq]) => {
+    level(`tp${n}`, price, display.tradeTargetColor, targetLabelText(n, price, liq, isLong, t.entry, r, t.tpHit, ctx.mintick), t.tpHit >= n);
+  });
+}
+
+function addLiveTrades(rb) {
+  if (!rb.display.showTradeLevels) return;
+  const { pbTrade, trTrade } = rb.res.final;
+  if (pbTrade) addLiveTrade(rb, 'PB', pbTrade, '', PHASE.TRADE_PB);
+  if (trTrade) addLiveTrade(rb, 'TR', trTrade, 'TRAIL · ', PHASE.TRADE_TR);
+}
+
+// One result label per closed trade, created on its close bar and never redrawn (1897-1907). It sits at the exit price;
+// a trailing-model label that shares its bar with a pullback close moves 1.5 x structure ATR further from the price,
+// along the way its body already extends, so the two never stack.
+const LABEL_CLEAR_MULT = 1.5;
+function addTradeHistory(rb) {
+  const { res, display, bars } = rb;
+  if (!display.showTradeHistory) return;
+  const pbClosedAt = new Set(res.trades.filter((t) => t.model === 'PB').map((t) => t.closeIdx));
+  for (const t of res.trades) {
+    const isTr = t.model === 'TR';
+    const clearBy = isTr && pbClosedAt.has(t.closeIdx) ? LABEL_CLEAR_MULT * res.series.structAtr[t.closeIdx] : 0;
+    rb.add('labels', {
+      key: `res:${t.model}:${t.closeIdx}`, time: bars[t.closeIdx].time, price: t.exit + (t.side === 'long' ? -clearBy : clearBy),
+      text: (t.r >= 0 ? '+' : '') + fmtNum(t.r, '0.0') + 'R · ' + (isTr ? 'T · ' : '') + t.reason,
+      style: t.side === 'long' ? 'up' : 'down', color: colorNew(t.r >= 0 ? PINE_COLORS.green : PINE_COLORS.red, 20), textColor: PINE_COLORS.white, size: 'tiny',
+    }, t.closeIdx, isTr ? PHASE.RESULT_TR : PHASE.RESULT_PB);
+  }
+}
+
 // ctx: { symbol, mintick, resolution, lastBarOpen }
 export function buildRenderPlan(bars, values, ctx) {
   const { engineCfg, display } = resolveConfig(values);
@@ -351,6 +418,8 @@ export function buildRenderPlan(bars, values, ctx) {
   addSeries(rb);
   addKumo(rb);
   addKillzones(rb);
+  addLiveTrades(rb);
+  addTradeHistory(rb);
   rb.finalize();
   return plan;
 }

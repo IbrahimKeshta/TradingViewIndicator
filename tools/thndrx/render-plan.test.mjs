@@ -6,7 +6,7 @@ import { loadSymbol } from '../backtest/data.mjs';
 import { defaultValues, resolveConfig } from './inputs.mjs';
 import { PINE_COLORS, colorNew } from './colors.mjs';
 import { makeBars } from './test-bars.mjs';
-import { buildRenderPlan, applyPineCaps, anchorBar, withTransp, futureTime } from './render-plan.mjs';
+import { buildRenderPlan, applyPineCaps, anchorBar, withTransp, futureTime, targetLabelText } from './render-plan.mjs';
 
 const wave = (n) => Array.from({ length: n }, (_, i) => +(100 + 20 * Math.sin(i / 9) + 8 * Math.sin(i / 3.1) + 0.02 * i).toFixed(4));
 const bars = makeBars(wave(500));
@@ -206,7 +206,7 @@ test('display flags hide their items', () => {
   assert.ok(!p.labels.some((l) => l.key.startsWith('tag:')));
   const q = buildRenderPlan(bars, { ...looseValues(), showOB: false, showMajorRays: false, showBreakLines: false, showSignalMarkers: false }, ctx);
   assert.ok(!q.boxes.some((b) => b.key.startsWith('ob:')));
-  assert.equal(q.lines.length, 0);
+  assert.equal(q.lines.filter((l) => !l.key.startsWith('trade:')).length, 0, 'only live trade levels remain');
   assert.equal(q.markers.length, 0);
   assert.ok(p.boxes.some((b) => b.key.startsWith('ob:')) && p.lines.some((l) => l.key.startsWith('ray:')) && p.markers.length > 0);
 });
@@ -474,6 +474,131 @@ test('futureTime walks the EGX session on intraday resolutions', () => {
   const thuSummer = Date.parse('2024-07-04T11:00:00Z') / 1000; // Thursday 14:00 Cairo (UTC+3)
   assert.equal(futureTime(b(thuSummer), 1, '60'), Date.parse('2024-07-07T07:00:00Z') / 1000, 'the next open is 10:00 Cairo local time in summer too');
   assert.equal(futureTime(b(sun10 - 2 * 3600), 1, '60'), sun10, 'before the open: snap to 10:00');
+});
+
+// ---- Task 7: live trades and trade history ----
+
+// The loose synthetic series with the trailing model on: both slots are live at the last bar (a PB short and a TR short
+// that has hit TP1), and bar 222 closes a PB short and a TR long together.
+const TRADE_VALUES = looseValues({ useTrailModel: true, trailRequireTrend: false, trailMinRiskAtr: 0 });
+const tradePlan = buildRenderPlan(bars, TRADE_VALUES, ctx);
+const tradeRes = engineOf(bars, TRADE_VALUES);
+const keysOf = (p) => [...p.boxes, ...p.lines, ...p.labels].map((x) => x.key);
+const liveKey = (model, t, part) => `trade:${model}:${t.openBar}:${part}`;
+
+test('live PB trade draws box, header and five levels', () => {
+  const t = tradeRes.final.pbTrade;
+  assert.ok(t && t.side === 'short', 'precondition: a live PB trade');
+  const last = bars.length - 1, lastTime = bars[last].time, r = Math.abs(t.entry - t.initialStop);
+  const box = tradePlan.boxes.find((b) => b.key === liveKey('PB', t, 'box'));
+  assert.deepEqual([box.t1, box.t2, box.top, box.bottom], [bars[t.openBar].time, lastTime, t.zoneTop, t.zoneBottom]);
+  assert.equal(box.border, PINE_COLORS.maroon);
+  assert.equal(box.bg, colorNew(PINE_COLORS.maroon, 88));
+  const head = tradePlan.labels.find((l) => l.key === liveKey('PB', t, 'head'));
+  assert.deepEqual([head.time, head.price, head.style, head.size, head.textColor, head.color], [bars[t.openBar].time, t.zoneTop, 'down', 'tiny', PINE_COLORS.white, PINE_COLORS.maroon]);
+  assert.equal(head.text, `SHORT · ${t.grade} · ${t.score}/${t.scoreOf}`);
+  const expected = [
+    ['entry', t.entry, PINE_COLORS.maroon, false, 'Entry ' + t.entry.toFixed(2)],
+    ['sl', t.stop, PINE_COLORS.red, false, 'SL ' + t.stop.toFixed(2)],
+    ['tp1', t.tp1, PINE_COLORS.green, t.tpHit >= 1, targetLabelText(1, t.tp1, t.liq1, false, t.entry, r, t.tpHit, 0.01)],
+    ['tp2', t.tp2, PINE_COLORS.green, t.tpHit >= 2, targetLabelText(2, t.tp2, t.liq2, false, t.entry, r, t.tpHit, 0.01)],
+    ['tp3', t.tp3, PINE_COLORS.green, t.tpHit >= 3, targetLabelText(3, t.tp3, t.liq3, false, t.entry, r, t.tpHit, 0.01)],
+  ];
+  for (const [part, price, color, dotted, text] of expected) {
+    const line = tradePlan.lines.find((l) => l.key === liveKey('PB', t, part));
+    assert.deepEqual([line.t1, line.p1, line.t2, line.p2, line.extendRight, line.color, line.style, line.width],
+      [bars[t.openBar].time, price, lastTime, price, true, color, dotted ? 'dotted' : 'solid', 1], part);
+    const lbl = tradePlan.labels.find((l) => l.key === liveKey('PB', t, part) + ':label');
+    assert.deepEqual([lbl.time, lbl.price, lbl.text, lbl.style, lbl.color, lbl.textColor, lbl.size], [lastTime, price, text, 'left', color, PINE_COLORS.white, 'tiny'], part);
+  }
+  assert.match(expected[0][4], /^Entry \d+\.\d{2}$/);
+  assert.match(expected[2][4], /^TP1 \d+\.\d{2} · \d+\.\dR/);
+});
+
+test('live trailing trade carries the TRAIL tag, its own box and its hit targets', () => {
+  const t = tradeRes.final.trTrade;
+  assert.ok(t && t.tpHit === 1, 'precondition: a live TR trade past TP1');
+  const head = tradePlan.labels.find((l) => l.key === liveKey('TR', t, 'head'));
+  assert.equal(head.text, `${t.side === 'long' ? 'LONG' : 'SHORT'} · TRAIL · ${t.grade} · ${t.score}/${t.scoreOf}`);
+  const box = tradePlan.boxes.find((b) => b.key === liveKey('TR', t, 'box'));
+  assert.deepEqual([box.top, box.bottom], [t.zoneTop, t.zoneBottom]);
+  assert.equal(tradePlan.lines.find((l) => l.key === liveKey('TR', t, 'tp1')).style, 'dotted');
+  assert.equal(tradePlan.lines.find((l) => l.key === liveKey('TR', t, 'tp2')).style, 'solid');
+  assert.match(tradePlan.labels.find((l) => l.key === liveKey('TR', t, 'tp1') + ':label').text, / ✓$/);
+  assert.doesNotMatch(tradePlan.labels.find((l) => l.key === liveKey('TR', t, 'tp2') + ':label').text, /✓/);
+  assert.equal(tradePlan.lines.find((l) => l.key === liveKey('TR', t, 'sl')).p1, t.stop);
+});
+
+test('no live trade, no trade levels; the flag hides them', () => {
+  const flat = bars.slice(0, 430);
+  const res = engineOf(flat, TRADE_VALUES);
+  assert.ok(res.final.pbTrade === null && res.final.trTrade === null, 'precondition: both slots empty at bar 429');
+  assert.ok(!keysOf(buildRenderPlan(flat, TRADE_VALUES, ctx)).some((k) => k.startsWith('trade:')));
+  const off = buildRenderPlan(bars, { ...TRADE_VALUES, showTradeLevels: false }, ctx);
+  assert.ok(!keysOf(off).some((k) => k.startsWith('trade:')));
+  assert.ok(off.labels.some((l) => l.key.startsWith('res:')), 'the history labels are a separate switch');
+});
+
+test('target label text', () => {
+  assert.equal(targetLabelText(1, 12.5, true, true, 10, 1, 1, 0.01), 'TP1 12.50 · 2.5R · EQH ✓');
+  assert.equal(targetLabelText(2, 7.25, true, false, 10, 1, 0, 0.01), 'TP2 7.25 · 2.8R · EQL');
+  assert.equal(targetLabelText(3, 15, false, true, 10, 2, 2, 0.01), 'TP3 15.00 · 2.5R', 'tpHit below n: no tick');
+  assert.equal(targetLabelText(3, 15, false, true, 10, 2, 3, 0.01), 'TP3 15.00 · 2.5R ✓');
+  assert.equal(targetLabelText(1, 15, false, true, 10, 0, 0, 1), 'TP1 15 · 0.0R', 'zero risk prints 0.0R; a whole-number mintick prints no decimals');
+});
+
+test('history label per closed trade with R and reason', () => {
+  const res = tradeRes;
+  const labels = tradePlan.labels.filter((l) => l.key.startsWith('res:'));
+  assert.equal(labels.length, res.trades.length);
+  assert.ok(res.trades.some((t) => t.model === 'TR') && res.trades.some((t) => t.model === 'PB'));
+  assert.ok(res.trades.some((t) => t.r >= 0) && res.trades.some((t) => t.r < 0));
+  for (const t of res.trades) {
+    const l = labels.find((x) => x.key === `res:${t.model}:${t.closeIdx}`);
+    const r1 = (t.r >= 0 ? '+' : '') + t.r.toFixed(1) + 'R';
+    assert.equal(l.text, `${r1} · ${t.model === 'TR' ? 'T · ' : ''}${t.reason}`);
+    assert.equal(l.time, bars[t.closeIdx].time);
+    assert.equal(l.style, t.side === 'long' ? 'up' : 'down');
+    assert.equal(l.color, colorNew(t.r >= 0 ? PINE_COLORS.green : PINE_COLORS.red, 20));
+    assert.deepEqual([l.textColor, l.size], [PINE_COLORS.white, 'tiny']);
+    if (t.model === 'PB') assert.equal(l.price, t.exit);
+  }
+  assert.ok(labels.some((l) => /^[+-]\d\.\dR · Stopped$/.test(l.text)), 'a pullback stop-out reads like "-1.1R · Stopped"');
+  assert.ok(labels.some((l) => /^[+-]\d\.\dR · T · \w+/.test(l.text)), 'a trailing result reads like "+0.4R · T · Stopped"');
+  const off = buildRenderPlan(bars, { ...TRADE_VALUES, showTradeHistory: false }, ctx);
+  assert.ok(!off.labels.some((l) => l.key.startsWith('res:')));
+});
+
+test('same-bar TR label moves clear of the PB label', () => {
+  const sameBar = (res) => {
+    const pb = res.trades.find((t) => t.model === 'PB' && res.trades.some((u) => u.model === 'TR' && u.closeIdx === t.closeIdx));
+    return pb && { pb, tr: res.trades.find((t) => t.model === 'TR' && t.closeIdx === pb.closeIdx) };
+  };
+  const { pb, tr } = sameBar(tradeRes);
+  assert.deepEqual([pb.closeIdx, pb.side, tr.side], [222, 'short', 'long'], 'precondition: both slots close on bar 222');
+  const clear = 1.5 * tradeRes.series.structAtr[222];
+  assert.ok(clear > 0);
+  assert.equal(tradePlan.labels.find((l) => l.key === 'res:PB:222').price, pb.exit, 'the pullback label keeps its exit price');
+  assert.equal(tradePlan.labels.find((l) => l.key === 'res:TR:222').price, tr.exit - clear, 'a long label moves down, away from its up-style body');
+  // a short TR label moves up: the same rule, mirrored
+  const values = looseValues({ useTrailModel: true, trailRequireTrend: false, trailMinRiskAtr: 0, trailAtrMult: 1 });
+  const res = engineOf(bars, values);
+  const s = sameBar(res);
+  assert.equal(s.tr.side, 'short', 'precondition: a same-bar short TR close');
+  assert.equal(buildRenderPlan(bars, values, ctx).labels.find((l) => l.key === `res:TR:${s.tr.closeIdx}`).price, s.tr.exit + 1.5 * res.series.structAtr[s.tr.closeIdx]);
+  // a TR trade that closes alone stays at its exit price
+  const alone = tradeRes.trades.find((t) => t.model === 'TR' && !tradeRes.trades.some((u) => u.model === 'PB' && u.closeIdx === t.closeIdx));
+  assert.equal(tradePlan.labels.find((l) => l.key === `res:TR:${alone.closeIdx}`).price, alone.exit);
+});
+
+test('trade items follow Pine creation order on the last bar', () => {
+  const t = tradeRes.final.pbTrade, u = tradeRes.final.trTrade;
+  const order = (items, key) => items.find((x) => x.key === key).order;
+  assert.ok(order(tradePlan.boxes, liveKey('PB', t, 'box')) < order(tradePlan.boxes, liveKey('TR', u, 'box')));
+  const seq = [liveKey('PB', t, 'head'), liveKey('PB', t, 'entry') + ':label', liveKey('PB', t, 'tp3') + ':label', liveKey('TR', u, 'head'), liveKey('TR', u, 'tp3') + ':label'];
+  const o = seq.map((k) => order(tradePlan.labels, k));
+  assert.deepEqual(o, [...o].sort((a, b) => a - b));
+  assert.ok(order(tradePlan.labels, 'rsi') < o[0], 'the RSI readout precedes the trade labels');
 });
 
 const dataDir = process.env.ICT_DATA;
