@@ -25,7 +25,8 @@ ADJ=dividends node --experimental-websocket tools/backtest/fetch-egx.mjs data/eg
 | `scan-core.mjs` | The scanner's logic, shared with the dashboard (`tools/dashboard`): `runUniverse`, `updateLog`, `renderLatest`, `forwardRecord`, and the closed-session guard (`isBarFinished`, `dropUnfinished`, `trimUnfinishedCsvs`: a bar dated today counts as finished only from 15:00 Cairo). Tests: `node --test tools/backtest/scan-core.test.mjs`. |
 | `exit-tests.mjs` | Backup-stop and time-stop grids against `egx-daily`, with the pass rules of `docs/superpowers/plans/2026-11-21-egx-daily-exit-tests.md`. |
 | `validate.mjs` | Acceptance test against `docs/superpowers/plans/2026-11-02-egx-trust-raw-results.tsv`. |
-| `compare-log.mjs` | Trade-by-trade diff against a Pine `Log Closed Trades` export. |
+| `compare-log.mjs` | Trade-by-trade diff against a Pine `Log Closed Trades` export (daily, keyed on the open date). |
+| `pine-log.mjs` | Shared by `compare-log.mjs` and `tools/thndrx/parity.mjs`: parses the Pine `TRADE,...` log lines, formats times as Pine does in Africa/Cairo, and diffs port against TradingView trades. Tests: `node --test tools/backtest/pine-log.test.mjs`. |
 | `data.mjs`, `debug-bar.mjs` | CSV loading, state dump. |
 | `fetch-egx.mjs` | Data download (separate tool; see the adjustment note below). |
 
@@ -145,6 +146,7 @@ Added for `docs/superpowers/plans/2026-11-20-six-stock-deep-dive.md`.
 | `invalidation` (engine option, default `'on'` = Pine behaviour) | what closes a trade on an internal CHoCH against it: `'on'` any internal CHoCH (booked at the close, "Invalidated"); `'off'` never; `'major'` only a Major-tier CHoCH; `'belowEntry'` an internal CHoCH only if the bar also closes beyond the entry (long: close < entry). Port-only; no Pine input. |
 | `finalStop` (trade record field) | the stop at exit, so a trailed stop can be told from the initial stop. Record-only. |
 | `fetch-egx.mjs ... --adjust dividends` (or `ADJ=dividends`) | price adjustment requested from TradingView; default `splits` (what `data/egx` holds), `dividends` is what the charts show with ADJ on (`data/egx-div`). The flag goes last; `_meta.json` is merged when a symbol list is given and records the adjustment. |
+| `fetch-egx.mjs ... --interval <tf>` | bar size requested from TradingView; default `1D`, `60` for hourly bars (also `15`, `1W`, ...). Same rule: the flag goes last, after `--adjust` or the positional arguments. For intraday the CSV `date` column stays the Cairo date and `time` carries the time of day; `_meta.json` records `interval`. |
 | `six-stock.mjs` | per-trade analysis after Stop / Invalidated exits (max high in R, bars to the next target, lowest low, hold-with-original-stop test) against a base-rate control from every bar of the same stock. `--symbols all --lists no --tag pooled-100 --data data/egx` pools it over a universe. Output goes to `data/six-stock-out/` (git-ignored). |
 | `variants.mjs` | runs V1-V6 (invalidation variants on base and rec) over the six stocks, the other dividend-adjusted names and all of `data/egx`: trades, win %, avg / total R, PF, pre-2023 vs 2023+, breadth. |
 
