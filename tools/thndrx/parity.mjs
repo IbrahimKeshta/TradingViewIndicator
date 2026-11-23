@@ -8,11 +8,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadCsv, loadMeta } from '../backtest/data.mjs';
-import { runEngine } from '../backtest/ict-engine.mjs';
 import { parseTradeLog, portTrade, diffTrades, formatCairoTime } from '../backtest/pine-log.mjs';
-import { defaultValues, resolveConfig } from './inputs.mjs';
-import { htfBiasSeries } from './htf.mjs';
-import { buildRenderPlan } from './render-plan.mjs';
+import { defaultValues } from './inputs.mjs';
+import { buildRenderPlan, runPlanEngine } from './render-plan.mjs';
 
 const args = {};
 for (let i = 2; i < process.argv.length; i++) { const a = process.argv[i]; if (a.startsWith('--')) { args[a.slice(2)] = process.argv[i + 1]; i++; } }
@@ -28,23 +26,17 @@ const ctx = { symbol: sym, mintick, resolution, lastBarOpen: false };
 
 const plan = buildRenderPlan(bars, values, ctx);
 console.log(`${sym} ${args.tf} (resolution ${resolution}) bars=${bars.length} ${bars[0]?.date}..${bars[bars.length - 1]?.date} preset=${values.presetInput}`);
-for (const w of plan.meta.warnings) console.log('WARNING', w);
+// The engine run the plan itself uses (HTF filter included), so the trades below are the plan's trades.
+const run = runPlanEngine(bars, values, ctx);
+for (const w of run.warnings) console.log('WARNING', w);
 console.log('--- panel ---');
 for (const row of plan.panel.rows) console.log(row.cells.map((c) => c.text).join(' | '));
 console.log('--- items ---');
 console.log(['boxes', 'lines', 'labels', 'series', 'fills', 'markers', 'bands'].map((k) => `${k}=${plan[k].length}`).join(' '));
 
 if (args.log) {
-  // The plan does not expose the engine's trades, so run the engine the way buildRenderPlan does.
-  const { engineCfg, display } = resolveConfig(values);
-  let htfBias, htfActive = false;
-  if (engineCfg.requireHtfBias) {
-    try { ({ bias: htfBias, active: htfActive } = htfBiasSeries(bars, { htfBiasTf: display.htfBiasTf, htfSwingLen: display.htfSwingLen }, resolution)); }
-    catch { htfBias = undefined; htfActive = false; }
-  }
-  const res = runEngine(bars, engineCfg, { symbol: sym, mintick, htfBias, htfActive });
   const tv = parseTradeLog(fs.readFileSync(args.log, 'utf8'));
-  const mine = res.trades.map((t) => portTrade(t, formatCairoTime(t.openTime), formatCairoTime(t.closeTime)));
+  const mine = run.res.trades.map((t) => portTrade(t, formatCairoTime(t.openTime), formatCairoTime(t.closeTime)));
   console.log('--- trades ---');
   diffTrades(tv, mine);
 }

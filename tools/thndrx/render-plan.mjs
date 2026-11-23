@@ -389,20 +389,17 @@ function addTradeHistory(rb) {
   }
 }
 
-// ctx: { symbol, mintick, resolution, lastBarOpen, historyNote?: string|null, volumeMissing?: boolean }
-export function buildRenderPlan(bars, values, ctx) {
+// The engine run behind a plan: the resolved inputs, the HTF bias series (when the filter is on) and the engine result.
+// buildRenderPlan uses it, and so does tools/thndrx/parity.mjs, so parity is checked on the plan's own run.
+// `warnings` is the plan's warning list in order; `res` is null when there are no bars.
+export function runPlanEngine(bars, values, ctx) {
   const resolved = resolveConfig(values);
   const { engineCfg, display } = resolved;
-  const plan = emptyPlan();
   const warnings = [];
-  plan.meta = {
-    symbol: ctx.symbol, resolution: ctx.resolution, bars: bars.length,
-    firstTime: bars.length ? bars[0].time : null, lastTime: bars.length ? bars[bars.length - 1].time : null, warnings,
-  };
   if (ctx.historyNote) warnings.push(ctx.historyNote);
   if (ctx.volumeMissing) warnings.push('No volume on this chart: participation and VWAP are off');
   if (values.requireIndexTrend) warnings.push('Index filter not available on ThndrX'); // the engine always runs with it off
-  if (bars.length === 0) return plan;
+  if (bars.length === 0) return { res: null, resolved, warnings };
 
   let htfBias, htfActive = false;
   if (engineCfg.requireHtfBias) {
@@ -414,6 +411,19 @@ export function buildRenderPlan(bars, values, ctx) {
     }
   }
   const res = runEngine(bars, engineCfg, { symbol: ctx.symbol, mintick: ctx.mintick, htfBias, htfActive });
+  return { res, resolved, warnings };
+}
+
+// ctx: { symbol, mintick, resolution, lastBarOpen, historyNote?: string|null, volumeMissing?: boolean }
+export function buildRenderPlan(bars, values, ctx) {
+  const { res, resolved, warnings } = runPlanEngine(bars, values, ctx);
+  const { engineCfg, display } = resolved;
+  const plan = emptyPlan();
+  plan.meta = {
+    symbol: ctx.symbol, resolution: ctx.resolution, bars: bars.length,
+    firstTime: bars.length ? bars[0].time : null, lastTime: bars.length ? bars[bars.length - 1].time : null, warnings,
+  };
+  if (bars.length === 0) return plan;
 
   const rb = createBuilder(plan, { bars, res, display, engineCfg, ctx });
   addZones(rb);
