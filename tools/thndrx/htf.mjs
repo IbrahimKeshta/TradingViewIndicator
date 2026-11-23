@@ -8,6 +8,8 @@ const cairo = new Intl.DateTimeFormat('en-US', {
   timeZone: 'Africa/Cairo', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
 });
 
+const SESSION_OPEN_MIN = 10 * 60; // EGX opens 10:00 Africa/Cairo
+
 export function tfSeconds(tf) {
   const s = String(tf).toUpperCase();
   if (s === 'D' || s === '1D') return 86400;
@@ -32,7 +34,9 @@ function periodKey(timeSec, htfTf) {
   if (secs >= 2592000) return `${c.y}-${c.mo}`;
   if (secs >= 604800) return Math.floor((c.days + 4) / 7); // epoch day 0 is a Thursday, so +4 puts Sunday at the start of a week
   if (secs >= 86400) return c.days;
-  return `${c.days}|${Math.floor(c.minutes / (secs / 60))}`;
+  // Intraday buckets are anchored to the session open (EGX 10:00 Cairo), as TradingView does; bars before the open share one bucket.
+  const sinceOpen = c.minutes - SESSION_OPEN_MIN;
+  return `${c.days}|${sinceOpen < 0 ? -1 : Math.floor(sinceOpen / (secs / 60))}`;
 }
 
 export function resampleBars(bars, htfTf) {

@@ -64,6 +64,22 @@ test('minute timeframes floor to Cairo clock buckets', () => {
   assert.deepEqual([...resampleBars(bars, '120').map], [0, 0, 0, 0, 1, 1]);
 });
 
+test('intraday buckets anchor to the 10:00 session open, not Cairo midnight', () => {
+  const bars = makeBars(Array.from({ length: 10 }, (_, i) => 10 + i), { start: SUN, stepSec: 1800 }); // 10:00 .. 14:30
+  const { htfBars, map } = resampleBars(bars, '240');
+  assert.equal(htfBars.length, 2);
+  assert.deepEqual([...map], [0, 0, 0, 0, 0, 0, 0, 0, 1, 1]); // 10:00-13:30 bars, then 14:00 and 14:30
+  assert.equal(htfBars[0].time, bars[0].time);
+  assert.equal(htfBars[1].time, bars[8].time);
+  assert.equal(htfBars[0].close, bars[7].close);
+  assert.deepEqual([...resampleBars(bars, '120').map], [0, 0, 0, 0, 1, 1, 1, 1, 2, 2]);
+});
+
+test('bars before the open form their own bucket at the start of that day', () => {
+  const bars = makeBars([1, 2, 3], { start: SUN - 3600, stepSec: 3600 }); // 09:00, 10:00, 11:00 Cairo
+  assert.deepEqual([...resampleBars(bars, '240').map], [0, 1, 1]);
+});
+
 test('bias reads the previous closed HTF bar', () => {
   // Daily closes with a swing high of 12.12 (day 3, confirmed day 5) broken by day 8's close of 13.
   const dayCloses = [10, 11, 12, 11, 10, 9, 10, 11, 13, 14, 15, 16];
