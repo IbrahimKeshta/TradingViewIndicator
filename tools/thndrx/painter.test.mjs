@@ -307,3 +307,33 @@ test('calls start back to front: bands, fills, boxes, series, lines, labels, mar
   assert.deepEqual(port.calls.map((c) => c.options.shape), ['rectangle', 'polyline', 'rectangle', 'path', 'trend_line', 'text', 'text', 'arrow_up']);
   assert.equal(port.calls[5].options.text, 'first');
 });
+
+test('a synchronous throw from the port counts as failed and leaks no ids', async () => {
+  const port = new FakePort();
+  const create = port.createMultipointShape.bind(port);
+  port.createMultipointShape = (points, options) => {
+    if (options.overrides.linewidth === 2) throw new Error('sync boom');
+    return create(points, options);
+  };
+  const painter = new Painter(port);
+  const plan = emptyPlan({ boxes: Array.from({ length: 600 }, (_, i) => box(`b${i}`, { order: i })), lines: [line('l1')], labels: [label('t1')] });
+  const r = await painter.apply(plan, painter.begin());
+  assert.deepEqual([r.created, r.failed], [601, 1]);
+  assert.equal(port.live().size, 601);
+  assert.equal(painter.live.size, 601);
+  assert.deepEqual(new Set([...painter.live.values()].map((e) => e.id)), port.live());
+});
+
+test('an unexpected throw mid-apply discards everything already created', async () => {
+  const port = new FakePort();
+  const painter = new Painter(port);
+  const plan = emptyPlan({ boxes: Array.from({ length: 600 }, (_, i) => box(`b${i}`, { order: i })) });
+  let batches = 0;
+  const all = Promise.allSettled;
+  Promise.allSettled = (...a) => (++batches === 2 ? all.apply(Promise, a).then(() => { throw new Error('boom'); }) : all.apply(Promise, a));
+  try {
+    await assert.rejects(painter.apply(plan, painter.begin()), /boom/);
+  } finally { Promise.allSettled = all; }
+  assert.equal(port.live().size, 0);
+  assert.equal(painter.live.size, 0);
+});

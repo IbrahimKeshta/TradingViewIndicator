@@ -6,7 +6,7 @@ import { loadSymbol } from '../backtest/data.mjs';
 import { defaultValues, resolveConfig } from './inputs.mjs';
 import { PINE_COLORS, colorNew } from './colors.mjs';
 import { makeBars } from './test-bars.mjs';
-import { buildRenderPlan, applyPineCaps, anchorBar, withTransp, futureTime, targetLabelText } from './render-plan.mjs';
+import { buildRenderPlan, priceRange, applyPineCaps, anchorBar, withTransp, futureTime, targetLabelText } from './render-plan.mjs';
 
 const wave = (n) => Array.from({ length: n }, (_, i) => +(100 + 20 * Math.sin(i / 9) + 8 * Math.sin(i / 3.1) + 0.02 * i).toFixed(4));
 const bars = makeBars(wave(500));
@@ -237,6 +237,12 @@ test('an unsupported chart timeframe turns the HTF filter off with a warning', (
   assert.match(p.meta.warnings[0], /HTF bias/);
   assert.ok(p.boxes.length > 0);
   assert.equal(buildRenderPlan(bars, looseValues({ requireHtfBias: true, htfBiasTf: '1W' }), ctx).meta.warnings.length, 0);
+});
+
+test('priceRange handles 200000 bars without a stack overflow', () => {
+  const many = Array.from({ length: 200000 }, (_, i) => ({ low: 100 - (i % 1000) * 0.01, high: 100 + (i % 777) * 0.01 }));
+  assert.deepEqual(priceRange(many), { priceLow: 100 - 999 * 0.01, priceHigh: 100 + 776 * 0.01 });
+  assert.deepEqual(priceRange([]), { priceLow: null, priceHigh: null });
 });
 
 test('meta and the empty plan', () => {

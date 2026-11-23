@@ -414,6 +414,14 @@ export function runPlanEngine(bars, values, ctx) {
   return { res, resolved, warnings };
 }
 
+// Min low / max high in one loop: spreading 150k+ bars into Math.min/max overflows the call stack.
+export function priceRange(bars) {
+  if (!bars.length) return { priceLow: null, priceHigh: null };
+  let priceLow = Infinity, priceHigh = -Infinity;
+  for (const b of bars) { if (b.low < priceLow) priceLow = b.low; if (b.high > priceHigh) priceHigh = b.high; }
+  return { priceLow, priceHigh };
+}
+
 // ctx: { symbol, mintick, resolution, lastBarOpen, historyNote?: string|null, volumeMissing?: boolean }
 export function buildRenderPlan(bars, values, ctx) {
   const { res, resolved, warnings } = runPlanEngine(bars, values, ctx);
@@ -422,7 +430,7 @@ export function buildRenderPlan(bars, values, ctx) {
   plan.meta = {
     symbol: ctx.symbol, resolution: ctx.resolution, bars: bars.length,
     firstTime: bars.length ? bars[0].time : null, lastTime: bars.length ? bars[bars.length - 1].time : null,
-    priceLow: bars.length ? Math.min(...bars.map((b) => b.low)) : null, priceHigh: bars.length ? Math.max(...bars.map((b) => b.high)) : null, warnings,
+    ...priceRange(bars), warnings,
   };
   if (bars.length === 0) return plan;
 

@@ -150,18 +150,26 @@ export class Painter {
     const mine = []; // everything this apply created, to discard if it turns stale
     const todo = [...wanted];
     let failed = 0;
-    for (let i = 0; i < todo.length; i += BATCH_SIZE) {
-      if (token !== this.token) { this.#discard(mine); return 'stale'; }
-      const batch = todo.slice(i, i + BATCH_SIZE);
-      // Issued without awaiting each call (R18); the calls still start in back-to-front order.
-      const results = await Promise.allSettled(batch.map(([, { call }]) => (call.multi
-        ? this.port.createMultipointShape(call.points, call.options)
-        : this.port.createShape(call.points[0], call.options))));
-      results.forEach((r, k) => {
-        if (r.status === 'fulfilled' && r.value != null) mine.push({ identity: batch[k][0], id: r.value, hash: batch[k][1].hash });
-        else failed++;
-      });
-      if (token !== this.token) { this.#discard(mine); return 'stale'; }
+    try {
+      for (let i = 0; i < todo.length; i += BATCH_SIZE) {
+        if (token !== this.token) { this.#discard(mine); return 'stale'; }
+        const batch = todo.slice(i, i + BATCH_SIZE);
+        // Issued without awaiting each call (R18); the calls still start in back-to-front order. The async wrapper turns
+        // a synchronous throw from the port into a rejection (counted as failed), and records each id the moment its
+        // call resolves, so `mine` is complete whatever happens to the rest of the apply.
+        const results = await Promise.allSettled(batch.map(async ([identity, { call, hash }]) => {
+          const id = await (call.multi
+            ? this.port.createMultipointShape(call.points, call.options)
+            : this.port.createShape(call.points[0], call.options));
+          if (id == null) throw new Error('no id returned');
+          mine.push({ identity, id, hash });
+        }));
+        failed += results.filter((r) => r.status === 'rejected').length;
+        if (token !== this.token) { this.#discard(mine); return 'stale'; }
+      }
+    } catch (err) {
+      this.#discard(mine); // anything unexpected: never leave unsaved, locked drawings behind
+      throw err;
     }
     for (const m of mine) this.live.set(m.identity, { id: m.id, hash: m.hash });
     return { created: mine.length, removed, kept, failed };
