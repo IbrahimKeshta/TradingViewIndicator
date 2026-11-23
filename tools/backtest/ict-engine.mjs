@@ -9,8 +9,9 @@
 //    confirmation -> OB create -> gate -> exits -> record -> free slot -> open pullback -> open trail.
 //  * Every bar is treated as confirmed (historical bars), which is what a backtest reads.
 //
-// Not ported: Require HTF Bias on a timeframe above the chart (it disables itself on a 1D chart with
-// the default Bias Timeframe, which is the only case supported), all drawing, panels and alerts.
+// Not ported: the HTF bias computation itself (the per-bar bias arrives through opts.htfBias / opts.htfActive; without
+// it the filter is off, which is what Pine does on a 1D chart with the default Bias Timeframe), all drawing, panels and
+// alerts. For the ThndrX overlay the engine also returns the state a renderer needs (series, events, opens, final).
 
 export const NA = NaN;
 const isNa = (x) => x !== x || x === null || x === undefined;
@@ -46,6 +47,8 @@ export const DEFAULTS = Object.freeze({
   newYorkSession: '0700-1000',
   showAsiaKZ: false,
   asiaSession: '2000-0000',
+  // Pine `egxPreset` (lines 846 and 850): the killzone point is on and earned on every bar, whatever the session inputs say.
+  killzoneAlwaysEarned: false,
   // Trade engine
   minScore: 5,
   scoreKillzone: true,
@@ -62,7 +65,7 @@ export const DEFAULTS = Object.freeze({
   trailFromEntry: false,
   longOnly: false,
   // Trade filters
-  requireHtfBias: false, // only meaningful above the chart timeframe; no-op on 1D (see header)
+  requireHtfBias: false, // needs opts.htfActive + opts.htfBias (per chart bar 1 / -1 / 0); inactive without them (see header)
   htfBiasTf: '1D',
   requireDisplacement: false,
   dispMult: 1.0,
@@ -174,7 +177,7 @@ export const PRESETS = Object.freeze({
   'tv-base': { longOnly: true, applyCosts: true, minRiskTicks: 10 },
   'tv-r4': { longOnly: true, applyCosts: true, minRiskTicks: 10, runnerMode: true, trailTier: 'Major', trailFromEntry: true },
   // The Pine "Preset: EGX Daily" input: tv-r4 + Stop on Close Only (sweep row 13).
-  'egx-daily': { longOnly: true, applyCosts: true, minRiskTicks: 10, runnerMode: true, trailTier: 'Major', trailFromEntry: true, stopOnCloseOnly: true },
+  'egx-daily': { longOnly: true, applyCosts: true, minRiskTicks: 10, runnerMode: true, trailTier: 'Major', trailFromEntry: true, stopOnCloseOnly: true, killzoneAlwaysEarned: true },
   'pine-default': {},
 });
 
@@ -362,11 +365,12 @@ function mergeIndex(bars, s) {
 // The engine
 // ----------------------------------------------------------------------------------------------
 // bars:   [{time (unix s), date 'YYYY-MM-DD', open, high, low, close, volume}] ascending
-// opts:   { symbol, mintick, indexBars: {EGX30: bars, EGX70: bars} }
-// Returns { trades, openTrades, stats } — trades are closed trades only (what the Pine panel counts).
+// opts:   { symbol, mintick, indexBars: {EGX30: bars, EGX70: bars},
+//           htfBias?: Int8Array (per chart bar: 1 bullish / -1 bearish / 0), htfActive?: boolean (bias timeframe above the chart) }
+// Returns { trades, openTrades, cfg, series, events, opens, final }. trades are closed trades only (what the Pine panel counts);
+// the rest is render state: per-bar series, BOS/CHoCH events, every trade opened, and the engine state after the last bar.
 export function runEngine(bars, userCfg = {}, opts = {}) {
   const cfg = { ...DEFAULTS, ...userCfg };
-  if (cfg.requireHtfBias && cfg.htfBiasTf !== '1D') throw new Error('Require HTF Bias above the chart timeframe is not ported');
   const symbol = opts.symbol || '';
   const mintick = opts.mintick ?? 0.01;
   const n = bars.length;
@@ -447,7 +451,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
       || (cfg.showAsiaKZ && inSession(t, cfg.asiaSession, cfg.sessionTimezone));
     killzoneActive[i] = a ? 1 : 0;
   }
-  const killzonePointOn = cfg.scoreKillzone && (cfg.showLondonKZ || cfg.showNewYorkKZ || cfg.showAsiaKZ);
+  const killzonePointOn = cfg.killzoneAlwaysEarned || (cfg.scoreKillzone && (cfg.showLondonKZ || cfg.showNewYorkKZ || cfg.showAsiaKZ));
 
   // ---- index regime ----
   const indexName = cfg.indexMode !== 'Auto' ? cfg.indexMode
@@ -470,6 +474,11 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
   const idxLongOkAt = (i) => !cfg.requireIndexTrend || (idxRegime[i] !== 2 && idxRegime[i] !== -1);
   const idxShortOkAt = (i) => !cfg.requireIndexTrend || (idxRegime[i] !== 2 && idxRegime[i] !== 1);
 
+  // ---- HTF bias (Pine htfLongOk / htfShortOk; the bias series itself is computed by the caller) ----
+  const htfOn = cfg.requireHtfBias && !!opts.htfActive && !!opts.htfBias;
+  const htfLongOk = (i) => !htfOn || opts.htfBias[i] === 1;
+  const htfShortOk = (i) => !htfOn || opts.htfBias[i] === -1;
+
   // ---- state ----
   const mkSt = () => ({ trend: null, lastType: null, lastSide: null, lastStrength: NaN, lastPenetration: NaN, lastLevel: NaN, lastLevelBar: -1, lastBar: -1, bullBreak: false, bearBreak: false });
   const majorHighs = [], majorLows = [], intHighs = [], intLows = [];
@@ -485,6 +494,15 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
   let trailLongStop = NaN, trailShortStop = NaN, trailDir = 1;
   let pbTrade = null, trTrade = null;
   const trades = [];
+  // ---- render outputs (observation only: nothing below reads these back) ----
+  const events = [], opens = [];
+  const serTrailLong = mkNa(n), serTrailShort = mkNa(n), serTrailDir = new Int8Array(n);
+  const serAvwapLow = mkNa(n), serAvwapHigh = mkNa(n), serLongSetup = new Uint8Array(n), serShortSetup = new Uint8Array(n);
+  let gate = null;
+  const noteOpen = (model, t, i) => opens.push({ bar: i, model, side: t.side });
+  const noteBreaks = (st, tier, i) => {
+    if (st.bullBreak || st.bearBreak) events.push({ bar: i, tier, type: st.lastType, side: st.lastSide, level: st.lastLevel, levelBar: st.lastLevelBar });
+  };
 
   // ---- structure helpers ----
   const pushPivot = (points, price, bar, atrAtPivot, isHigh) => {
@@ -607,7 +625,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
     const ichiReady = !isNa(cTop) && !isNa(cBot);
     const ichiOk = ichiReady && (isLong ? C[i] > cTop : C[i] < cBot);
     const ichiOn = cfg.scoreIchimoku && ichiReady;
-    const kz = killzoneActive[i] === 1;
+    const kz = cfg.killzoneAlwaysEarned || killzoneActive[i] === 1;
     const maj = majorSt.trend === intSt.trend && majorSt.trend !== null;
     const brk = !isNa(intSt.lastStrength) && intSt.lastStrength >= cfg.strongBreakMult;
     return { momOk, maOk, partOn, partOk, ichiOn, ichiOk, kz, maj, brk };
@@ -808,7 +826,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
   const nearestAbove = (pts, p) => { let b = NaN; for (const q of pts) if (q.price > p && (isNa(b) || q.price < b)) b = q.price; return b; };
   const mkTrade = (side, grade, score, of, entry, stop, zTop, zBot, tg, i, runner, chandelier, pts, zoneTier, zoneBar = NaN) => ({
     side, grade, score, scoreOf: of, entry, stop, initialStop: stop, zoneTop: zTop, zoneBottom: zBot,
-    tp1: tg.p1, tp2: tg.p2, tp3: tg.p3, openBar: i, tpHit: 0, closeReason: null, closePrice: NaN,
+    tp1: tg.p1, tp2: tg.p2, tp3: tg.p3, liq1: tg.liq1, liq2: tg.liq2, liq3: tg.liq3, openBar: i, tpHit: 0, closeReason: null, closePrice: NaN,
     runner, chandelier,
     ptKillzone: pts.kz, ptMomentum: pts.momOk, ptMa: pts.maOk, ptMajorAgree: pts.maj, ptBreakStrength: pts.brk, ptParticipation: pts.partOk, ptIchimoku: pts.ichiOk,
     zoneTier, openTime: bars[i].time, mfe: 0, mae: 0,
@@ -847,6 +865,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
     if (!isNa(intLowRaw[i])) pushPivot(intLows, intLowRaw[i], i - cfg.internalLookback, atrAt(cfg.internalLookback), false);
     processTier(majorSt, majorHighs, majorLows, i);
     processTier(intSt, intHighs, intLows, i);
+    noteBreaks(majorSt, 'major', i); noteBreaks(intSt, 'internal', i);
     const inRange = inRangeNow(i);
 
     // --- zones: mitigation before creation ---
@@ -859,11 +878,11 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
     const bullFvgDispOk = !cfg.requireDisplacement || (structAtr[i] > 0 && L[i] - hi2 >= cfg.fvgMinAtr * structAtr[i] && C[i - 1] - O[i - 1] >= cfg.dispMult * structAtr[i]);
     const bearFvgDispOk = !cfg.requireDisplacement || (structAtr[i] > 0 && lo2 - H[i] >= cfg.fvgMinAtr * structAtr[i] && O[i - 1] - C[i - 1] >= cfg.dispMult * structAtr[i]);
     if (cfg.showFVG && L[i] > hi2 && bullFvgDispOk) {
-      bullFvg.push({ top: L[i], bottom: hi2, tier: '', bar: i });
+      bullFvg.push({ top: L[i], bottom: hi2, tier: '', bar: i, left: i - 2 });
       if (bullFvg.length > cfg.fvgMaxCount) bullFvg.shift();
     }
     if (cfg.showFVG && H[i] < lo2 && bearFvgDispOk) {
-      bearFvg.push({ top: lo2, bottom: H[i], tier: '', bar: i });
+      bearFvg.push({ top: lo2, bottom: H[i], tier: '', bar: i, left: i - 2 });
       if (bearFvg.length > cfg.fvgMaxCount) bearFvg.shift();
     }
 
@@ -909,7 +928,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
       const tier = majorSt.bullBreak ? 'MAJOR' : 'INTERNAL';
       const off = findOppositeCandle(true, i);
       if (off >= 0) {
-        bullOb.push({ top: H[i - off], bottom: L[i - off], tier, bar: i });
+        bullOb.push({ top: H[i - off], bottom: L[i - off], tier, bar: i, left: i - off });
         pruneTier(bullOb, tier, cfg.obMaxCount);
       }
     }
@@ -917,7 +936,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
       const tier = majorSt.bearBreak ? 'MAJOR' : 'INTERNAL';
       const off = findOppositeCandle(false, i);
       if (off >= 0) {
-        bearOb.push({ top: H[i - off], bottom: L[i - off], tier, bar: i });
+        bearOb.push({ top: H[i - off], bottom: L[i - off], tier, bar: i, left: i - off });
         pruneTier(bearOb, tier, cfg.obMaxCount);
       }
     }
@@ -934,6 +953,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
     trailDir = (trailDirPrev === -1 && C[i] > trailShortPrev) ? 1 : (trailDirPrev === 1 && C[i] < trailLongPrev) ? -1 : trailDirPrev;
     const trailFlipLong = trailDir === 1 && trailDirPrev === -1;
     const trailFlipShort = trailDir === -1 && trailDirPrev === 1;
+    serTrailLong[i] = trailLongStop; serTrailShort[i] = trailShortStop; serTrailDir[i] = trailDir;
 
     // --- anchored VWAP ---
     const avBarPV = hlc3[i] * volNz[i];
@@ -949,6 +969,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
     } else if (!isNa(avHiPV)) { avHiPV += avBarPV; avHiV += volNz[i]; }
     const avwapLow = !isNa(avLoV) && avLoV > 0 ? avLoPV / avLoV : NaN;
     const avwapHigh = !isNa(avHiV) && avHiV > 0 ? avHiPV / avHiV : NaN;
+    serAvwapLow[i] = avwapLow; serAvwapHigh[i] = avwapHigh;
     const avwapLongOk = !cfg.requireAvwap || (!isNa(avwapLow) && C[i] > avwapLow);
     const avwapShortOk = !cfg.requireAvwap || (!isNa(avwapHigh) && C[i] < avwapHigh);
 
@@ -956,10 +977,26 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
     const csL = confirmState(true, i), csS = confirmState(false, i);
     const [ofLong, scoreLong] = scoreTally(csL);
     const [ofShort, scoreShort] = scoreTally(csS);
-    const bullHardOk = intSt.trend === 'up' && effBullHit && !inRange && idxLongOkAt(i) && avwapLongOk;
-    const bearHardOk = intSt.trend === 'down' && effBearHit && !inRange && idxShortOkAt(i) && avwapShortOk;
+    const bullHardOk = intSt.trend === 'up' && effBullHit && !inRange && htfLongOk(i) && idxLongOkAt(i) && avwapLongOk;
+    const bearHardOk = intSt.trend === 'down' && effBearHit && !inRange && htfShortOk(i) && idxShortOkAt(i) && avwapShortOk;
     const longSetup = bullHardOk && scoreLong >= cfg.minScore && filtLongOk(i);
     const shortSetup = bearHardOk && scoreShort >= cfg.minScore;
+    serLongSetup[i] = longSetup ? 1 : 0; serShortSetup[i] = shortSetup ? 1 : 0;
+    if (i === n - 1) {
+      // Pine lines 1075-1089 (gate row) and 2021-2023 (marks): the side follows the internal trend (na falls back to long),
+      // and the reason is the FIRST unmet condition in the order the gate applies them. 'bar not closed' is the panel's.
+      const gl = intSt.trend !== 'down', cs = gl ? csL : csS;
+      const gScore = gl ? scoreLong : scoreShort, gOf = gl ? ofLong : ofShort;
+      const reason = intSt.trend === null ? 'no trend' : inRange ? 'in range'
+        : !(gl ? htfLongOk(i) : htfShortOk(i)) ? 'htf bias'
+        : !(gl ? idxLongOkAt(i) : idxShortOkAt(i)) ? 'index trend'
+        : !(gl ? avwapLongOk : avwapShortOk) ? 'anchored vwap'
+        : (cfg.requireConfirmation && (gl ? pend.bull.active : pend.bear.active)) ? 'awaiting confirmation'
+        : !(gl ? effBullHit : effBearHit) ? 'no zone touch'
+        : gScore < cfg.minScore ? 'score short' : 'READY';
+      const mark = (on, ok) => (!on ? '–' : ok ? '✓' : '✗');
+      gate = { long: gl, score: gScore, of: gOf, reason, marks: { mom: mark(momOn, cs.momOk), part: mark(cs.partOn, cs.partOk), ichi: mark(cs.ichiOn, cs.ichiOk) } };
+    }
     let setupScore = 0, setupOf = 0, setupGrade = null;
     if (longSetup) { setupScore = scoreLong; setupOf = ofLong; setupGrade = gradeFor(scoreLong, ofLong); }
     if (shortSetup) { setupScore = scoreShort; setupOf = ofShort; setupGrade = gradeFor(scoreShort, ofShort); }
@@ -984,6 +1021,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
         if (pbRiskOk(risk, i)) {
           const tg = selectTargets(true, C[i], risk, cfg.minTargetR, structAtr[i]);
           pbTrade = mkTrade('long', setupGrade, setupScore, setupOf, C[i], st, zTop, zBot, tg, i, cfg.runnerMode, false, csL, effBullTier, effBullBar);
+          noteOpen('PB', pbTrade, i);
         }
       }
     }
@@ -994,6 +1032,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
         if (pbRiskOk(risk, i)) {
           const tg = selectTargets(false, C[i], risk, cfg.minTargetR, structAtr[i]);
           pbTrade = mkTrade('short', setupGrade, setupScore, setupOf, C[i], st, zTop, zBot, tg, i, cfg.runnerMode, false, csS, effBearTier, effBearBar);
+          noteOpen('PB', pbTrade, i);
         }
       }
     }
@@ -1014,6 +1053,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
               const cs = w.isLong ? csL : csS, [of, sc] = scoreTally(cs);
               pbTrade = mkTrade(w.isLong ? 'long' : 'short', gradeFor(sc, of), sc, of, C[i], st, NaN, NaN, tg, i, cfg.runnerMode, false, cs, 'RE');
               pbTrade.isReentry = true;
+              noteOpen('PB', pbTrade, i);
             }
           }
           reWatch = null; // one attempt per stop-out
@@ -1032,6 +1072,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
         if (trRiskOk(risk, i)) {
           const tg = selectTargets(true, C[i], risk, cfg.trailMinTargetR, structAtr[i]);
           trTrade = mkTrade('long', gradeFor(scoreLong, ofLong), scoreLong, ofLong, C[i], st, C[i], st, tg, i, cfg.runnerMode, cfg.trailUsesOwnStop, csL, 'NONE');
+          noteOpen('TR', trTrade, i);
         }
       }
       if (!trTrade && trailShortEntry) {
@@ -1039,13 +1080,27 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
         if (trRiskOk(risk, i)) {
           const tg = selectTargets(false, C[i], risk, cfg.trailMinTargetR, structAtr[i]);
           trTrade = mkTrade('short', gradeFor(scoreShort, ofShort), scoreShort, ofShort, C[i], st, st, C[i], tg, i, cfg.runnerMode, cfg.trailUsesOwnStop, csS, 'NONE');
+          noteOpen('TR', trTrade, i);
         }
       }
     }
   }
 
   const openTrades = [pbTrade, trTrade].filter((t) => t && t.closeReason === null);
-  return { trades, openTrades, cfg };
+  const live = (t) => (t && t.closeReason === null ? t : null);
+  return {
+    trades, openTrades, cfg,
+    series: {
+      ma, rsi, structAtr, spanA, spanB, killzoneActive: Float64Array.from(killzoneActive),
+      trailLong: serTrailLong, trailShort: serTrailShort, trailDir: serTrailDir, avwapLow: serAvwapLow, avwapHigh: serAvwapHigh,
+      longSetup: serLongSetup, shortSetup: serShortSetup,
+    },
+    events, opens,
+    final: {
+      majorSt, intSt, inRange: n > 0 && inRangeNow(n - 1), majorHighs, majorLows, intHighs, intLows,
+      bullFvg, bearFvg, bullOb, bearOb, pbTrade: live(pbTrade), trTrade: live(trTrade), gate,
+    },
+  };
 }
 
 // Summary helper shared by run.mjs and the validation script.

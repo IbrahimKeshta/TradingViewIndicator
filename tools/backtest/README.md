@@ -42,10 +42,17 @@ Displacement, Apply Costs, and `recordResult` (scale-out in thirds, `blendedResu
 time against Test Start). Every record has the `logTrade()` fields plus `openIdx` / `closeIdx` (bar indices), `grossR`
 and `costR`.
 
-Not ported: Require HTF Bias on a timeframe above the chart (on 1D with the default Bias Timeframe 1D the Pine filter
-turns itself off, which is what the port does; any other Bias Timeframe throws), all drawing, panels and alerts, and the
-watch-zone ATR (display only). Only closed trades are returned, as the Pine panel counts them; `result.openTrades` holds a
-still-open one.
+Not ported: the HTF bias computation itself (Require HTF Bias reads a per-bar `opts.htfBias` Int8Array of 1 / -1 / 0 plus
+`opts.htfActive`; without them the filter is off, which is what Pine does on 1D with the default Bias Timeframe), all
+drawing, panels and alerts, and the watch-zone ATR (display only). Only closed trades are returned, as the Pine panel
+counts them; `result.openTrades` holds a still-open one.
+
+Render state (for the ThndrX overlay, `tools/thndrx`; observation only, no effect on trades): the result also carries
+`series` (per-bar ma, rsi, structAtr, spanA/B, killzoneActive, trailLong/Short/Dir, avwapLow/High, longSetup/shortSetup),
+`events` (every BOS/CHoCH per tier), `opens` (every trade opened, PB or TR) and `final` (swings, structure state,
+zones with their `left` edge, live trades, and `final.gate`: the Pine gate row for the last bar, side, score/of, first
+unmet reason and the Mom/Part/Ichi marks). Trades carry `liq1..3`. The `killzoneAlwaysEarned` option (on in `egx-daily`,
+Pine `egxPreset`) counts the killzone point as earned on every bar. Tests: `node --test tools/backtest/ict-engine.test.mjs`.
 
 ## Two things the validation taught
 
