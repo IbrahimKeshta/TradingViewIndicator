@@ -293,7 +293,7 @@ function weeklySma(bars, len) {
   }
   return out;
 }
-function taPivots(src, L, isHigh, ties) {
+export function taPivots(src, L, isHigh, ties) {
   const n = src.length, out = mkNa(n);
   const strictLeft = ties === 'strict' || ties === 'strictLeft';
   const strictRight = ties === 'strict' || ties === 'strictRight';
