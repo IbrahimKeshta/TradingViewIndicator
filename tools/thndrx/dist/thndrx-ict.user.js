@@ -2611,6 +2611,13 @@ function place(doc, el, placement) {
 
 function css(el, styles) { Object.assign(el.style, styles); return el; }
 
+// ThndrX itself is right-to-left (Arabic); every root this script injects would inherit that and swap its columns and
+// the sign of numbers ('+0.67R' shows as '0.67R+'). Each root is forced left-to-right and isolated from the page's direction.
+function ltr(el) {
+  el.dir = 'ltr';
+  return css(el, { direction: 'ltr', unicodeBidi: 'isolate' });
+}
+
 // Keeps the panel and the button in their corners after the chart is resized (called on the watch poll).
 function placeUi(doc) {
   const panel = doc.getElementById(PANEL_ID), button = doc.getElementById(BUTTON_ID);
@@ -2623,9 +2630,9 @@ function renderPanel(doc, panel) {
   let el = doc.getElementById(PANEL_ID);
   if (!panel) { if (el) el.remove(); return; }
   if (!el) {
-    el = css(doc.createElement('div'), {
+    el = ltr(css(doc.createElement('div'), {
       position: 'absolute', zIndex: '1000', font: FONT, borderRadius: '2px', overflow: 'auto', maxHeight: 'calc(100% - 8px)', pointerEvents: 'auto',
-    });
+    }));
     el.id = PANEL_ID;
     el.dataset.collapsed = '0';
   }
@@ -2660,10 +2667,10 @@ function renderPanel(doc, panel) {
 function mountButton(doc, onClick) {
   const old = doc.getElementById(BUTTON_ID);
   if (old) old.remove(); // a fresh element drops the previous click handler
-  const btn = css(doc.createElement('button'), {
+  const btn = ltr(css(doc.createElement('button'), {
     position: 'absolute', zIndex: '1001', font: '600 10px/1.4 sans-serif', padding: '1px 6px', border: '0', borderRadius: '3px',
     background: 'rgba(41, 98, 255, 0.85)', color: '#FFFFFF', cursor: 'pointer', pointerEvents: 'auto',
-  });
+  }));
   btn.id = BUTTON_ID;
   btn.type = 'button';
   btn.textContent = 'ICT';
@@ -2733,9 +2740,9 @@ function makeField(doc, input, value) {
 function openSettings(doc, values, onSave) {
   const old = doc.getElementById(SETTINGS_ID);
   if (old) old.remove();
-  const overlay = css(doc.createElement('div'), {
+  const overlay = ltr(css(doc.createElement('div'), {
     position: 'fixed', inset: '0', zIndex: '1002', background: 'rgba(0, 0, 0, 0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-  });
+  }));
   overlay.id = SETTINGS_ID;
   // Typing in the form must not reach TradingView's chart hotkeys.
   for (const type of ['keydown', 'keyup', 'keypress', 'wheel']) overlay.addEventListener(type, (e) => e.stopPropagation());

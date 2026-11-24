@@ -2,8 +2,8 @@
 // The DOM side runs inside ThndrX's chart iframe; these tests cover the pure conversions it relies on.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseColor, formatColor, cairoDate, cairoMidnight, parseField, panelPlacement } from './ui.mjs';
-import { INPUTS } from './inputs.mjs';
+import { parseColor, formatColor, cairoDate, cairoMidnight, parseField, panelPlacement, renderPanel, mountButton, openSettings } from './ui.mjs';
+import { INPUTS, defaultValues } from './inputs.mjs';
 import { withTransp } from './render-plan.mjs';
 
 const input = (id) => INPUTS.find((i) => i.id === id);
@@ -56,4 +56,40 @@ test('panelPlacement keeps the panel inside the price pane, clear of the axes an
   assert.deepEqual(panelPlacement('bottom_left', area, pane), { bottom: 71, left: 4 });
   assert.deepEqual(panelPlacement('top_left', area, pane), { top: 28, left: 4 });
   assert.deepEqual(panelPlacement('bottom_right', area, null), { bottom: 32, right: 60 });
+});
+
+// ---- direction: ThndrX is right-to-left, our injected roots must not inherit it ----
+
+// Just enough DOM for the three injected roots; no layout.
+class FakeEl {
+  constructor(tag) { this.tagName = tag; this.style = {}; this.dataset = {}; this.children = []; this.parentNode = null; this.id = ''; this.dir = ''; }
+  appendChild(c) { c.parentNode = this; this.children.push(c); return c; }
+  append(...cs) { for (const c of cs) if (typeof c !== 'string') this.appendChild(c); }
+  replaceChildren(...cs) { this.children = []; this.append(...cs); }
+  addEventListener() {}
+  remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((c) => c !== this); this.parentNode = null; }
+  getBoundingClientRect() { return { left: 0, top: 0, right: 400, bottom: 300 }; }
+  scrollIntoView() {}
+}
+function fakeDoc() {
+  const body = new FakeEl('body');
+  const find = (el, id) => (el.id === id ? el : el.children.map((c) => find(c, id)).find(Boolean) || null);
+  return { body, createElement: (t) => new FakeEl(t), getElementById: (id) => find(body, id), querySelector: () => null };
+}
+
+test('the panel, the settings button and the settings dialog are forced left-to-right', () => {
+  const doc = fakeDoc();
+  const panel = { position: 'top_right', bg: '#000000', rows: [{ cells: [{ text: 'Net R', color: '#fff' }, { text: '+0.67R', color: '#fff' }] }] };
+  renderPanel(doc, panel);
+  mountButton(doc, () => {});
+  openSettings(doc, defaultValues(), () => {});
+  for (const id of ['thndrx-ict-panel', 'thndrx-ict-button', 'thndrx-ict-settings']) {
+    const el = doc.getElementById(id);
+    assert.ok(el, id);
+    assert.equal(el.dir, 'ltr', `${id} dir`);
+    assert.equal(el.style.direction, 'ltr', `${id} direction`);
+    assert.equal(el.style.unicodeBidi, 'isolate', `${id} unicode-bidi`);
+  }
+  renderPanel(doc, panel); // a re-render keeps the same root
+  assert.equal(doc.getElementById('thndrx-ict-panel').dir, 'ltr');
 });
