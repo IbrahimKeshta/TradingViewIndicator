@@ -32,6 +32,14 @@ export function formatColor(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${a})`;
 }
 
+// The opacity field (percent) -> alpha 0..1. Empty or unreadable is opaque: Number('') is 0, which would save an
+// invisible colour.
+export function parseOpacity(raw) {
+  const text = String(raw).trim(), pct = Number(text);
+  if (text === '' || !Number.isFinite(pct)) return 1;
+  return Math.min(100, Math.max(0, pct)) / 100;
+}
+
 // The Test Start input is a Pine input.time (ms); the dialog edits its Cairo calendar date.
 export const cairoDate = (ms) => cairoDay.format(new Date(ms));
 
@@ -190,7 +198,7 @@ function makeField(doc, input, value) {
     css(opacity, { width: '46px' });
     control = doc.createElement('span');
     control.append(color, ' ', opacity, '%');
-    read = () => formatColor(color.value, Number(opacity.value) / 100);
+    read = () => formatColor(color.value, parseOpacity(opacity.value));
     write = (v) => { const c = parseColor(v); color.value = c.hex; opacity.value = String(Math.round(c.alpha * 100)); };
     control.setDisabled = (d) => { color.disabled = d; opacity.disabled = d; };
   } else if (input.options || input.type === 'timeframe') {

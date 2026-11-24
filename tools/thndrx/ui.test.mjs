@@ -2,7 +2,7 @@
 // The DOM side runs inside ThndrX's chart iframe; these tests cover the pure conversions it relies on.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseColor, formatColor, cairoDate, cairoMidnight, parseField, panelPlacement, renderPanel, mountButton, openSettings } from './ui.mjs';
+import { parseColor, formatColor, parseOpacity, cairoDate, cairoMidnight, parseField, panelPlacement, renderPanel, mountButton, openSettings } from './ui.mjs';
 import { INPUTS, defaultValues } from './inputs.mjs';
 import { withTransp } from './render-plan.mjs';
 
@@ -92,4 +92,16 @@ test('the panel, the settings button and the settings dialog are forced left-to-
   }
   renderPanel(doc, panel); // a re-render keeps the same root
   assert.equal(doc.getElementById('thndrx-ict-panel').dir, 'ltr');
+});
+
+test('parseOpacity: an empty or unreadable opacity field is opaque, never invisible (M2)', () => {
+  assert.equal(parseOpacity(''), 1);
+  assert.equal(parseOpacity('   '), 1);
+  assert.equal(parseOpacity('abc'), 1);
+  assert.equal(parseOpacity('50'), 0.5);
+  assert.equal(parseOpacity(' 20 '), 0.2);
+  assert.equal(parseOpacity('0'), 0);
+  assert.equal(parseOpacity('150'), 1);
+  assert.equal(parseOpacity('-5'), 0);
+  assert.equal(formatColor('#ff9800', parseOpacity('')), '#FF9800');
 });
