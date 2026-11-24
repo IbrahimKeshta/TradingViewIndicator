@@ -4,8 +4,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   toBars, mergeTail, isLastBarOpen, historyNote, chartInfo, loadAllBars, findChart, subscribe, makePort, HISTORY_NOTE,
-  planWindow, MAX_PLAN_BARS, CAP_NOTE,
+  planWindow, MAX_PLAN_BARS, CAP_NOTE, windowStart, closedBars, historyFrom, LOAD_TIMEOUT_MS,
 } from './chart-port.mjs';
+import { buildRenderPlan } from './render-plan.mjs';
+import { defaultValues } from './inputs.mjs';
+import { makeBars } from './test-bars.mjs';
 
 const sec = (iso) => Date.parse(iso) / 1000;
 
@@ -43,6 +46,29 @@ test('toBars sorts by time and keeps one bar per time', () => {
   const t = sec('2024-01-02T00:00:00Z');
   const { bars } = toBars(exported([[t + 86400, 2, 2, 2, 2, 1], [t, 1, 1, 1, 1, 1], [t + 86400, 3, 3, 3, 3, 1]]));
   assert.deepEqual(bars.map((b) => [b.time, b.close]), [[t, 1], [t + 86400, 3]]);
+});
+
+test('toBars gives every bar its Cairo calendar date, across midnight and both daylight-saving changes', () => {
+  const cairo = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' });
+  // every 7 minutes over Egypt's 2024 summer-time start (26 Apr) and end (31 Oct), and an ordinary week
+  const times = [];
+  for (const from of ['2024-04-24T00:00:00Z', '2024-10-29T00:00:00Z', '2025-01-05T00:00:00Z']) {
+    for (let k = 0; k < (4 * 24 * 60) / 7; k++) times.push(sec(from) + k * 420);
+  }
+  const { bars } = toBars(exported(times.map((t) => [t, 1, 2, 0.5, 1.5, 10])));
+  assert.equal(bars.length, times.length);
+  for (const b of bars) assert.equal(b.date, cairo.format(new Date(b.time * 1000)), String(b.time));
+});
+
+test('toBars converts 300000 one-minute rows well under 500 ms', () => {
+  const t0 = sec('2021-11-24T08:00:00Z');
+  const rows = Array.from({ length: 300000 }, (_, k) => Float64Array.from([t0 + k * 60, 1, 2, 0.5, 1.5, 10]));
+  toBars({ schema: SCHEMA, data: rows.slice(0, 1000) }); // warm up the JIT
+  const begin = performance.now();
+  const { bars } = toBars({ schema: SCHEMA, data: rows });
+  const ms = performance.now() - begin;
+  assert.equal(bars.length, 300000);
+  assert.ok(ms < 500, `took ${ms.toFixed(0)} ms`);
 });
 
 test('toBars refuses an export without the price columns', () => {
@@ -128,11 +154,12 @@ function historyChart(steps, { volume = true } = {}) {
     const r = [t0 - (n - 1 - k) * 86400, 1, 2, 0.5, 1.5];
     return volume ? [...r, 100] : r;
   });
-  let loaded = 0, ranges = [];
+  let loaded = 0;
+  const ranges = [];
   return {
     ranges,
     getVisibleRange: () => ({ from: 111, to: 222 }),
-    setVisibleRange: async (r) => { ranges.push(r); if (r.from === sec('1990-01-01T00:00:00Z')) loaded = Math.min(loaded + 1, steps.length - 1); },
+    setVisibleRange: async (r) => { ranges.push(r); if (r.from !== 111) loaded = Math.min(loaded + 1, steps.length - 1); }, // any request but the restore
     exportData: async () => exported(rows(steps[loaded]), volume ? SCHEMA : SCHEMA.slice(0, 5)),
   };
 }
@@ -248,7 +275,7 @@ test('loadAllBars stops asking once cancelled and still restores the view', asyn
   const res = await loadAllBars(chart, { sleep: async () => { rounds++; }, cancelled: () => rounds >= 2 });
   assert.equal(res.cancelled, true);
   assert.equal(res.complete, false);
-  const asks = chart.ranges.filter((r) => r.from === sec('1990-01-01T00:00:00Z')).length;
+  const asks = chart.ranges.filter((r) => r.from !== 111).length;
   assert.equal(asks, 2, 'no history request after the cancel');
   assert.deepEqual(chart.ranges[chart.ranges.length - 1], { from: 111, to: 222 });
 
@@ -280,4 +307,85 @@ test('planWindow caps the plan at the newest 20000 bars and joins the notes', ()
   const bigYoung = mk(20001, sec('2026-01-01T00:00:00Z'));
   assert.equal(planWindow(bigYoung, now).note, CAP_NOTE);
   assert.deepEqual(planWindow([], now), { bars: [], note: null });
+});
+
+test('historyFrom: daily and above ask from 1990; intraday asks back far enough for the 20000-bar plan only', () => {
+  const now = sec('2026-11-24T12:00:00Z');
+  const y1990 = sec('1990-01-01T00:00:00Z');
+  for (const r of ['1D', 'D', '1W', 'W', '1M', 'M', undefined]) assert.equal(historyFrom(r, now), y1990, String(r));
+  // EGX trades 270 minutes a day, five days a week: 20000 one-minute bars are 75 sessions, about 105 calendar days
+  const days = (r) => (now - historyFrom(r, now)) / 86400;
+  assert.ok(days('1') >= 105 && days('1') <= 200, `1m: ${days('1')} days`);
+  assert.ok(days('5') >= 5 * 105 && days('5') <= 5 * 200, `5m: ${days('5')} days`);
+  for (const r of ['1', '5', '10']) assert.ok(days(r) < 5 * 365, r + ' stays inside the 5-year feed');
+  for (const r of ['30', '60', '240']) assert.equal(historyFrom(r, now), y1990, r + ': 20000 bars need more than the feed holds');
+});
+
+test('loadAllBars asks an intraday chart only for the history the plan uses', async () => {
+  const chart = historyChart([300, 900, 900]);
+  const now = sec('2026-11-24T12:00:00Z');
+  await loadAllBars(chart, { sleep: async () => {}, now: () => now, resolution: '1' });
+  assert.equal(chart.ranges[0].from, historyFrom('1', now));
+  assert.ok(chart.ranges[0].from > sec('2026-01-01T00:00:00Z'));
+});
+
+test('loadAllBars without a readable view uses the loaded bars and never zooms out', async () => {
+  const chart = historyChart([300, 1213]);
+  chart.getVisibleRange = () => { throw new Error('no range yet'); };
+  const res = await loadAllBars(chart, { sleep: async () => {} });
+  assert.equal(res.bars.length, 300);
+  assert.equal(res.complete, false);
+  assert.deepEqual(chart.ranges, [], 'no history request, so nothing to restore');
+  const empty = historyChart([300, 1213]);
+  empty.getVisibleRange = () => null;
+  await loadAllBars(empty, { sleep: async () => {} });
+  assert.deepEqual(empty.ranges, []);
+});
+
+test('loadAllBars ends a hung load after the timeout as cancelled, with the view restored', async () => {
+  assert.equal(LOAD_TIMEOUT_MS, 90000);
+  const chart = historyChart([300, 900, 1213]);
+  let reads = 0;
+  const exportData = chart.exportData;
+  chart.exportData = (...a) => (++reads >= 2 ? new Promise(() => {}) : exportData(...a)); // the chart stops answering after the first ask
+  const timers = { setTimeout: (fn, ms) => setTimeout(fn, ms / 9000), clearTimeout }; // 90 s -> 10 ms
+  const res = await loadAllBars(chart, { sleep: async () => {}, timers });
+  assert.deepEqual([res.cancelled, res.timedOut, res.complete], [true, true, false]);
+  assert.deepEqual(chart.ranges.at(-1), { from: 111, to: 222 }, 'user view restored');
+  assert.equal(chart.ranges.filter((r) => r.from === 111).length, 1, 'restored once');
+
+  const fine = await loadAllBars(historyChart([300, 1213, 1213]), { sleep: async () => {}, timers: { setTimeout, clearTimeout } });
+  assert.equal(fine.timedOut, false);
+  assert.equal(fine.complete, true);
+});
+
+test('windowStart pins the window at load; appending bars keeps the start and the earlier keys (I1)', () => {
+  const now = sec('2026-11-24T12:00:00Z');
+  const wave = (n) => Array.from({ length: n }, (_, i) => +(100 + 20 * Math.sin(i / 9) + 8 * Math.sin(i / 3.1) + 0.02 * i).toFixed(4));
+  const grown = makeBars(wave(801)), loaded = grown.slice(0, 800);
+  const start = windowStart(loaded, 600);
+  assert.equal(start, loaded[200].time);
+  assert.equal(windowStart(loaded.slice(0, 500), 600), -Infinity);
+  const before = planWindow(loaded, now, start), after = planWindow(grown, now, start);
+  assert.equal(before.bars.length, 600);
+  assert.equal(after.bars.length, 601);
+  assert.equal(after.bars[0], before.bars[0], 'the window start does not move with a new bar');
+  assert.equal(after.note, CAP_NOTE);
+  const values = { ...defaultValues(), minScore: 3, minRiskAtr: 0.5 };
+  const ctx = { symbol: 'TEST', mintick: 0.01, resolution: '1D', lastBarOpen: false };
+  const keys = (plan) => new Set([...plan.labels, ...plan.lines].map((x) => x.key).filter((k) => /^(res|brk):/.test(k)));
+  const k1 = keys(buildRenderPlan(before.bars, values, ctx)), k2 = keys(buildRenderPlan(after.bars, values, ctx));
+  assert.ok(k1.size > 10, 'the series has trade results and breaks');
+  for (const k of k1) assert.ok(k2.has(k), 'kept: ' + k);
+  // the old newest-N window shifts every bar index by one, so the same drawings get new keys
+  const shifted = keys(buildRenderPlan(grown.slice(-600), values, ctx));
+  assert.ok([...k1].some((k) => !shifted.has(k)));
+});
+
+test('closedBars drops the forming last bar only', () => {
+  const t = sec('2026-11-24T00:00:00Z'); // a Tuesday; the daily bar closes at 14:30 Cairo (12:30 UTC)
+  const bars = [{ time: t - 86400 }, { time: t }];
+  assert.deepEqual(closedBars(bars, '1D', sec('2026-11-24T10:00:00Z')), [bars[0]]);
+  assert.equal(closedBars(bars, '1D', sec('2026-11-24T13:00:00Z')), bars);
+  assert.deepEqual(closedBars([], '1D', t), []);
 });

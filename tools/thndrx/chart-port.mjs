@@ -10,6 +10,9 @@ export const HISTORY_NOTE = 'History: 5 years (Thndr limit)';
 const FEED_YEARS = 5, NOTE_SLACK_SEC = 30 * 86400;
 const EXPORT_OPTS = { includeTime: true, includeSeries: true, includedStudies: 'all' };
 const EGX_CLOSE_MIN = 14 * 60 + 30;                       // EGX session 10:00-14:30 Africa/Cairo, Sunday to Thursday
+const EGX_SESSION_MIN = 270;                              // minutes in that session
+const CALENDAR_SLACK = 2, CALENDAR_PAD_DAYS = 10;         // calendar days per session (weekends are 7/5, plus holidays)
+export const LOAD_TIMEOUT_MS = 90000;                     // a history load that has not finished by then is given up
 
 const cairoClock = new Intl.DateTimeFormat('en-US', {
   timeZone: 'Africa/Cairo', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
@@ -22,7 +25,14 @@ function cairoParts(timeSec) {
   return { y: p.year, mo: p.month, d: p.day, day, minutes: p.hour * 60 + p.minute, dow: new Date(day * 86400000).getUTCDay() };
 }
 const pad = (n) => String(n).padStart(2, '0');
-const cairoDateOf = (timeSec) => { const c = cairoParts(timeSec); return `${c.y}-${pad(c.mo)}-${pad(c.d)}`; };
+// Both Cairo offsets (UTC+2 / +3) are whole hours and the clocks change on the hour, so the Cairo date is constant
+// within a UTC hour: one Intl call per hour, not per bar (330k one-minute rows took 2.3 s with a call per row).
+let memoHour = NaN, memoDate = '';
+const cairoDateOf = (timeSec) => {
+  const hour = Math.floor(timeSec / 3600);
+  if (hour !== memoHour) { const c = cairoParts(hour * 3600); memoHour = hour; memoDate = `${c.y}-${pad(c.mo)}-${pad(c.d)}`; }
+  return memoDate;
+};
 const isWeekend = (dow) => dow === 5 || dow === 6; // Friday and Saturday
 
 // ---- pure parts ----
@@ -39,15 +49,20 @@ export function toBars({ schema, data }) {
   });
   for (const k of ['time', 'open', 'high', 'low', 'close']) if (col[k] === undefined) throw new Error(`exportData has no ${k} column`);
   const volumeMissing = col.volume === undefined;
-  const byTime = new Map();
+  const out = [];
+  let ascending = true; // the export is normally in time order with one row per time: then no map and no sort
   for (const row of data) {
     const time = row[col.time], close = row[col.close];
     if (!Number.isFinite(time) || !Number.isFinite(close)) continue;
-    byTime.set(time, {
+    if (out.length && time <= out[out.length - 1].time) ascending = false;
+    out.push({
       time, date: cairoDateOf(time), open: row[col.open], high: row[col.high], low: row[col.low], close,
       volume: volumeMissing ? NaN : row[col.volume],
     });
   }
+  if (ascending) return { bars: out, volumeMissing };
+  const byTime = new Map();
+  for (const b of out) byTime.set(b.time, b); // the last row for a time wins
   return { bars: [...byTime.values()].sort((a, b) => a.time - b.time), volumeMissing };
 }
 
@@ -90,6 +105,20 @@ export function isLastBarOpen(bars, resolution, now) {
     return cur.y === bar.y && cur.mo === bar.mo && before(last);
   }
   return false;
+}
+
+export const closedBars = (bars, resolution, now) => (isLastBarOpen(bars, resolution, now) ? bars.slice(0, -1) : bars);
+
+// Where the history request starts. Daily and above: 1990, before any EGX series (the feed clamps to what it has).
+// Intraday: only back far enough for the MAX_PLAN_BARS bars the plan uses, so a 1m chart does not pull 5 years
+// (about 330k rows) to use 20000: sessions needed at ceil(270 / minutes) bars each, CALENDAR_SLACK calendar days per
+// session. When that reaches past the 5-year feed anyway (15m and up), ask from 1990.
+export function historyFrom(resolution, now) {
+  const r = String(resolution);
+  if (!/^\d+$/.test(r) || Number(r) <= 0) return HISTORY_FROM;
+  const sessions = Math.ceil(MAX_PLAN_BARS / Math.ceil(EGX_SESSION_MIN / Number(r)));
+  const days = sessions * CALENDAR_SLACK + CALENDAR_PAD_DAYS;
+  return days > FEED_YEARS * 366 ? HISTORY_FROM : Math.floor(now - days * 86400);
 }
 
 // Ruling R12: the panel says the history is cut when the first bar sits on Thndr's 5-year feed limit (within 30 days).
@@ -136,41 +165,78 @@ export function chartInfo(chart) {
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const readBars = async (chart, from) => toBars(await chart.exportData(from === undefined ? EXPORT_OPTS : { ...EXPORT_OPTS, from }));
 
-// History back to the series start (recon): ask for everything since 1990, re-read every 2 s until the first bar
-// stops moving (endOfData() is unreliable), then put the user's view back. complete = the first bar settled.
-// cancelled() is checked every round: a cancelled load stops asking and leaves through the same view restore.
-export async function loadAllBars(chart, { sleep = wait, maxRounds = 30, now = () => Date.now() / 1000, cancelled = () => false } = {}) {
+// History back to the series start (recon): ask for everything since historyFrom(resolution), re-read every 2 s
+// until the first bar stops moving (endOfData() is unreliable), then put the user's view back. complete = the first
+// bar settled. cancelled() is checked every round: a cancelled load stops asking and leaves through the same view
+// restore. Without a readable view there is nothing to restore, so the load never zooms out and uses what is loaded.
+// A load still running after timeoutMs ends as cancelled with timedOut = true and the view restored (a chart that
+// stops answering must not block later reloads).
+export async function loadAllBars(chart, {
+  sleep = wait, maxRounds = 30, now = () => Date.now() / 1000, cancelled = () => false, resolution,
+  timeoutMs = LOAD_TIMEOUT_MS, timers = globalThis,
+} = {}) {
   let saved = null;
   try { saved = chart.getVisibleRange(); } catch { /* no range yet */ }
-  const ask = () => chart.setVisibleRange({ from: HISTORY_FROM, to: Math.floor(now()) });
-  let read = await readBars(chart), complete = false;
-  try {
-    if (cancelled()) return { bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: true };
-    await ask();
-    for (let round = 1; round < maxRounds; round++) {
-      await sleep(POLL_MS);
-      if (cancelled()) return { bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: true };
-      const next = await readBars(chart);
-      const settled = next.bars.length > 0 && read.bars.length > 0 && next.bars[0].time === read.bars[0].time;
-      read = next;
-      if (settled) { complete = true; break; }
-      await ask(); // the feed may hand history over in chunks
+  let timedOut = false, restored = false;
+  const stop = () => timedOut || cancelled();
+  const restore = async () => {
+    if (restored || !saved) return;
+    restored = true;
+    await Promise.resolve().then(() => chart.setVisibleRange(saved)).catch(() => {});
+  };
+  const from = historyFrom(resolution, now());
+  const ask = () => chart.setVisibleRange({ from, to: Math.floor(now()) });
+
+  const run = async () => {
+    let read = await readBars(chart), complete = false;
+    const out = (wasCancelled) => ({ bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: wasCancelled, timedOut });
+    if (!saved) return out(false);
+    try {
+      if (stop()) return out(true);
+      await ask();
+      for (let round = 1; round < maxRounds; round++) {
+        await sleep(POLL_MS);
+        if (stop()) return out(true);
+        const next = await readBars(chart);
+        const settled = next.bars.length > 0 && read.bars.length > 0 && next.bars[0].time === read.bars[0].time;
+        read = next;
+        if (settled) { complete = true; break; }
+        await ask(); // the feed may hand history over in chunks
+      }
+    } finally {
+      await restore();
     }
+    return out(false);
+  };
+
+  let handle;
+  const deadline = new Promise((resolve) => { handle = timers.setTimeout(() => { timedOut = true; resolve(null); }, timeoutMs); });
+  try {
+    const res = await Promise.race([run(), deadline]);
+    if (res) return res;
   } finally {
-    if (saved) await Promise.resolve().then(() => chart.setVisibleRange(saved)).catch(() => {});
+    timers.clearTimeout(handle);
   }
-  return { bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: false };
+  await restore(); // the hung run never got to its own restore; if it resumes, stop() sends it out without asking
+  return { bars: [], complete: false, volumeMissing: false, cancelled: true, timedOut: true };
 }
 
 // Ruling R20: the plan is computed on the newest MAX_PLAN_BARS bars, so a 1m/5m chart's 5-year feed cannot stall the
 // page. The note joins the 5-year feed note (judged on the full history) and the cap note.
 export const MAX_PLAN_BARS = 20000;
 export const CAP_NOTE = `Computed on the last ${MAX_PLAN_BARS} bars`;
-export function planWindow(bars, now) {
+
+// The time the plan window starts at, fixed when the history loads (I1): render-plan keys carry bar indices, so a
+// window that slid by one bar on every new bar would give every drawing a new key and redraw them all.
+export const windowStart = (bars, max = MAX_PLAN_BARS) => (bars.length > max ? bars[bars.length - max].time : -Infinity);
+
+// The bars from `start` on; new bars only lengthen the window until the next load pins a new start.
+export function planWindow(bars, now, start = windowStart(bars)) {
   const notes = [historyNote(bars.length ? bars[0].time : undefined, now)];
-  const capped = bars.length > MAX_PLAN_BARS;
-  if (capped) notes.push(CAP_NOTE);
-  return { bars: capped ? bars.slice(-MAX_PLAN_BARS) : bars, note: notes.filter(Boolean).join(' · ') || null };
+  let lo = 0, hi = bars.length; // first bar at or after start (bars are sorted by time)
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (bars[mid].time < start) lo = mid + 1; else hi = mid; }
+  if (lo > 0) notes.push(CAP_NOTE);
+  return { bars: lo > 0 ? bars.slice(lo) : bars, note: notes.filter(Boolean).join(' · ') || null };
 }
 
 // Bars from `fromTime` on (all bars when omitted): the cheap live read the tick poll uses.
