@@ -24,7 +24,7 @@ __m['backtest/ict-engine.mjs'] = (function () {
 //  * Every bar is treated as confirmed (historical bars), which is what a backtest reads.
 //
 // Not ported here: the HTF bias computation itself (the per-bar bias arrives through opts.htfBias / opts.htfActive;
-// without it the filter is off, which is what Pine does on a 1D chart with the default Bias Timeframe; the ThndrX
+// without it the filter is off on the default 1D Bias Timeframe and any other Bias Timeframe throws; the ThndrX
 // overlay builds the bias in tools/thndrx/htf.mjs), all drawing, panels and alerts. For the ThndrX overlay the engine also returns the state a renderer needs (series, events, opens, final).
 
 const NA = NaN;
@@ -79,7 +79,7 @@ const DEFAULTS = Object.freeze({
   trailFromEntry: false,
   longOnly: false,
   // Trade filters
-  requireHtfBias: false, // needs opts.htfActive + opts.htfBias (per chart bar 1 / -1 / 0); inactive without them (see header)
+  requireHtfBias: false, // needs opts.htfActive + opts.htfBias (per chart bar 1 / -1 / 0); without them: off on 1D, throws above (see header)
   htfBiasTf: '1D',
   requireDisplacement: false,
   dispMult: 1.0,
@@ -385,6 +385,8 @@ function mergeIndex(bars, s) {
 // the rest is render state: per-bar series, BOS/CHoCH events, every trade opened, and the engine state after the last bar.
 function runEngine(bars, userCfg = {}, opts = {}) {
   const cfg = { ...DEFAULTS, ...userCfg };
+  // Backtest callers have no bias series: refuse a bias timeframe above the chart rather than silently ignore it (R26).
+  if (cfg.requireHtfBias && cfg.htfBiasTf !== '1D' && !opts.htfBias) throw new Error('Require HTF Bias above the chart timeframe is not ported');
   const symbol = opts.symbol || '';
   const mintick = opts.mintick ?? 0.01;
   const n = bars.length;
@@ -1651,7 +1653,14 @@ function buildPanel(res, resolved, ctx, { lastClose = NaN, warnings = [] } = {})
   if (warnings.length > 0) rows.push(row('Data', warnings.join(' · '), C.orange));
   return { position: POSITIONS[display.panelPos] ?? 'bottom_left', bg: display.panelBg, rows };
 }
-return { buildPanel };
+
+// A one-row panel for a status message ('Loading…', 'History load timed out'), placed like the full panel. `values`
+// are the raw inputs (no engine run behind a message); hidden, like the full panel, when Show Structure Panel is off.
+function messagePanel(values, text) {
+  if (!values.showStructurePanel) return null;
+  return { position: POSITIONS[values.panelPosInput] ?? 'bottom_left', bg: values.panelBgColor, rows: [{ cells: [cell(text, C.white, HEADER_BG)] }] };
+}
+return { buildPanel, messagePanel };
 })();
 __m['thndrx/render-plan.mjs'] = (function () {
 'use strict';
@@ -2064,7 +2073,7 @@ function runPlanEngine(bars, values, ctx) {
       ({ bias: htfBias, active: htfActive } = htfBiasSeries(bars, { htfBiasTf: display.htfBiasTf, htfSwingLen: display.htfSwingLen }, ctx.resolution));
     } catch (err) {
       warnings.push(`HTF bias filter inactive: ${err.message}`);
-      htfBias = undefined; htfActive = false;
+      htfBias = new Int8Array(bars.length); htfActive = false; // a bias is supplied, so the engine never throws (R26)
     }
   }
   const res = runEngine(bars, engineCfg, { symbol: ctx.symbol, mintick: ctx.mintick, htfBias, htfActive });
@@ -2134,7 +2143,7 @@ const KINDS = [['bands', 'band'], ['fills', 'fill'], ['boxes', 'box'], ['series'
 const opts = (shape, overrides, extra = {}) => ({ shape, overrides, ...extra, ...SAFE });
 
 // Maps one plan item to one chart call, or null when Pine would draw nothing (runs too short to be a line or polygon).
-// `meta` is plan.meta: bands need its price range. Returns { multi, points, options }.
+// `meta` is plan.meta: bands need its price range (fixed per load by the caller; see desiredItems). Returns { multi, points, options }.
 function toShapeCalls(item, kind, meta) {
   switch (kind) {
     case 'box':
@@ -2215,9 +2224,9 @@ function hashString(str) {
 }
 
 // Hash of everything that is drawn: all fields but `order` (creation order never changes the picture).
-function itemHash(item, extra) {
+function itemHash(item) {
   const { order, ...drawn } = item; // eslint-disable-line no-unused-vars
-  return hashString(stableStringify(extra === undefined ? drawn : { drawn, extra }));
+  return hashString(stableStringify(drawn));
 }
 
 // The items a plan wants on screen, keyed by "kind|key", in back-to-front order.
@@ -2231,8 +2240,9 @@ function desiredItems(plan) {
     for (const item of items) {
       const call = toShapeCalls(item, kind, meta);
       if (!call) continue;
-      const range = kind === 'band' ? [meta.priceLow, meta.priceHigh] : undefined;
-      wanted.set(`${kind}|${item.key}`, { call, hash: itemHash(item, range) });
+      // The band's price span is not in its hash: the caller fixes it per load (R25), so a new high or low on a live
+      // bar does not redraw every band (each redraw is a removal, and any removal makes Thndr re-save drawings).
+      wanted.set(`${kind}|${item.key}`, { call, hash: itemHash(item) });
     }
   }
   return wanted;
@@ -2319,6 +2329,9 @@ const HISTORY_NOTE = 'History: 5 years (Thndr limit)';
 const FEED_YEARS = 5, NOTE_SLACK_SEC = 30 * 86400;
 const EXPORT_OPTS = { includeTime: true, includeSeries: true, includedStudies: 'all' };
 const EGX_CLOSE_MIN = 14 * 60 + 30;                       // EGX session 10:00-14:30 Africa/Cairo, Sunday to Thursday
+const EGX_SESSION_MIN = 270;                              // minutes in that session
+const CALENDAR_SLACK = 2, CALENDAR_PAD_DAYS = 10;         // calendar days per session (weekends are 7/5, plus holidays)
+const LOAD_TIMEOUT_MS = 90000;                     // a history load that has not finished by then is given up
 
 const cairoClock = new Intl.DateTimeFormat('en-US', {
   timeZone: 'Africa/Cairo', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
@@ -2331,7 +2344,14 @@ function cairoParts(timeSec) {
   return { y: p.year, mo: p.month, d: p.day, day, minutes: p.hour * 60 + p.minute, dow: new Date(day * 86400000).getUTCDay() };
 }
 const pad = (n) => String(n).padStart(2, '0');
-const cairoDateOf = (timeSec) => { const c = cairoParts(timeSec); return `${c.y}-${pad(c.mo)}-${pad(c.d)}`; };
+// Both Cairo offsets (UTC+2 / +3) are whole hours and the clocks change on the hour, so the Cairo date is constant
+// within a UTC hour: one Intl call per hour, not per bar (330k one-minute rows took 2.3 s with a call per row).
+let memoHour = NaN, memoDate = '';
+const cairoDateOf = (timeSec) => {
+  const hour = Math.floor(timeSec / 3600);
+  if (hour !== memoHour) { const c = cairoParts(hour * 3600); memoHour = hour; memoDate = `${c.y}-${pad(c.mo)}-${pad(c.d)}`; }
+  return memoDate;
+};
 const isWeekend = (dow) => dow === 5 || dow === 6; // Friday and Saturday
 
 // ---- pure parts ----
@@ -2348,15 +2368,20 @@ function toBars({ schema, data }) {
   });
   for (const k of ['time', 'open', 'high', 'low', 'close']) if (col[k] === undefined) throw new Error(`exportData has no ${k} column`);
   const volumeMissing = col.volume === undefined;
-  const byTime = new Map();
+  const out = [];
+  let ascending = true; // the export is normally in time order with one row per time: then no map and no sort
   for (const row of data) {
     const time = row[col.time], close = row[col.close];
     if (!Number.isFinite(time) || !Number.isFinite(close)) continue;
-    byTime.set(time, {
+    if (out.length && time <= out[out.length - 1].time) ascending = false;
+    out.push({
       time, date: cairoDateOf(time), open: row[col.open], high: row[col.high], low: row[col.low], close,
       volume: volumeMissing ? NaN : row[col.volume],
     });
   }
+  if (ascending) return { bars: out, volumeMissing };
+  const byTime = new Map();
+  for (const b of out) byTime.set(b.time, b); // the last row for a time wins
   return { bars: [...byTime.values()].sort((a, b) => a.time - b.time), volumeMissing };
 }
 
@@ -2399,6 +2424,20 @@ function isLastBarOpen(bars, resolution, now) {
     return cur.y === bar.y && cur.mo === bar.mo && before(last);
   }
   return false;
+}
+
+const closedBars = (bars, resolution, now) => (isLastBarOpen(bars, resolution, now) ? bars.slice(0, -1) : bars);
+
+// Where the history request starts. Daily and above: 1990, before any EGX series (the feed clamps to what it has).
+// Intraday: only back far enough for the MAX_PLAN_BARS bars the plan uses, so a 1m chart does not pull 5 years
+// (about 330k rows) to use 20000: sessions needed at ceil(270 / minutes) bars each, CALENDAR_SLACK calendar days per
+// session. When that reaches past the 5-year feed anyway (15m and up), ask from 1990.
+function historyFrom(resolution, now) {
+  const r = String(resolution);
+  if (!/^\d+$/.test(r) || Number(r) <= 0) return HISTORY_FROM;
+  const sessions = Math.ceil(MAX_PLAN_BARS / Math.ceil(EGX_SESSION_MIN / Number(r)));
+  const days = sessions * CALENDAR_SLACK + CALENDAR_PAD_DAYS;
+  return days > FEED_YEARS * 366 ? HISTORY_FROM : Math.floor(now - days * 86400);
 }
 
 // Ruling R12: the panel says the history is cut when the first bar sits on Thndr's 5-year feed limit (within 30 days).
@@ -2445,41 +2484,78 @@ function chartInfo(chart) {
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const readBars = async (chart, from) => toBars(await chart.exportData(from === undefined ? EXPORT_OPTS : { ...EXPORT_OPTS, from }));
 
-// History back to the series start (recon): ask for everything since 1990, re-read every 2 s until the first bar
-// stops moving (endOfData() is unreliable), then put the user's view back. complete = the first bar settled.
-// cancelled() is checked every round: a cancelled load stops asking and leaves through the same view restore.
-async function loadAllBars(chart, { sleep = wait, maxRounds = 30, now = () => Date.now() / 1000, cancelled = () => false } = {}) {
+// History back to the series start (recon): ask for everything since historyFrom(resolution), re-read every 2 s
+// until the first bar stops moving (endOfData() is unreliable), then put the user's view back. complete = the first
+// bar settled. cancelled() is checked every round: a cancelled load stops asking and leaves through the same view
+// restore. Without a readable view there is nothing to restore, so the load never zooms out and uses what is loaded.
+// A load still running after timeoutMs ends as cancelled with timedOut = true and the view restored (a chart that
+// stops answering must not block later reloads).
+async function loadAllBars(chart, {
+  sleep = wait, maxRounds = 30, now = () => Date.now() / 1000, cancelled = () => false, resolution,
+  timeoutMs = LOAD_TIMEOUT_MS, timers = globalThis,
+} = {}) {
   let saved = null;
   try { saved = chart.getVisibleRange(); } catch { /* no range yet */ }
-  const ask = () => chart.setVisibleRange({ from: HISTORY_FROM, to: Math.floor(now()) });
-  let read = await readBars(chart), complete = false;
-  try {
-    if (cancelled()) return { bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: true };
-    await ask();
-    for (let round = 1; round < maxRounds; round++) {
-      await sleep(POLL_MS);
-      if (cancelled()) return { bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: true };
-      const next = await readBars(chart);
-      const settled = next.bars.length > 0 && read.bars.length > 0 && next.bars[0].time === read.bars[0].time;
-      read = next;
-      if (settled) { complete = true; break; }
-      await ask(); // the feed may hand history over in chunks
+  let timedOut = false, restored = false;
+  const stop = () => timedOut || cancelled();
+  const restore = async () => {
+    if (restored || !saved) return;
+    restored = true;
+    await Promise.resolve().then(() => chart.setVisibleRange(saved)).catch(() => {});
+  };
+  const from = historyFrom(resolution, now());
+  const ask = () => chart.setVisibleRange({ from, to: Math.floor(now()) });
+
+  const run = async () => {
+    let read = await readBars(chart), complete = false;
+    const out = (wasCancelled) => ({ bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: wasCancelled, timedOut });
+    if (!saved) return out(false);
+    try {
+      if (stop()) return out(true);
+      await ask();
+      for (let round = 1; round < maxRounds; round++) {
+        await sleep(POLL_MS);
+        if (stop()) return out(true);
+        const next = await readBars(chart);
+        const settled = next.bars.length > 0 && read.bars.length > 0 && next.bars[0].time === read.bars[0].time;
+        read = next;
+        if (settled) { complete = true; break; }
+        await ask(); // the feed may hand history over in chunks
+      }
+    } finally {
+      await restore();
     }
+    return out(false);
+  };
+
+  let handle;
+  const deadline = new Promise((resolve) => { handle = timers.setTimeout(() => { timedOut = true; resolve(null); }, timeoutMs); });
+  try {
+    const res = await Promise.race([run(), deadline]);
+    if (res) return res;
   } finally {
-    if (saved) await Promise.resolve().then(() => chart.setVisibleRange(saved)).catch(() => {});
+    timers.clearTimeout(handle);
   }
-  return { bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: false };
+  await restore(); // the hung run never got to its own restore; if it resumes, stop() sends it out without asking
+  return { bars: [], complete: false, volumeMissing: false, cancelled: true, timedOut: true };
 }
 
 // Ruling R20: the plan is computed on the newest MAX_PLAN_BARS bars, so a 1m/5m chart's 5-year feed cannot stall the
 // page. The note joins the 5-year feed note (judged on the full history) and the cap note.
 const MAX_PLAN_BARS = 20000;
 const CAP_NOTE = `Computed on the last ${MAX_PLAN_BARS} bars`;
-function planWindow(bars, now) {
+
+// The time the plan window starts at, fixed when the history loads (I1): render-plan keys carry bar indices, so a
+// window that slid by one bar on every new bar would give every drawing a new key and redraw them all.
+const windowStart = (bars, max = MAX_PLAN_BARS) => (bars.length > max ? bars[bars.length - max].time : -Infinity);
+
+// The bars from `start` on; new bars only lengthen the window until the next load pins a new start.
+function planWindow(bars, now, start = windowStart(bars)) {
   const notes = [historyNote(bars.length ? bars[0].time : undefined, now)];
-  const capped = bars.length > MAX_PLAN_BARS;
-  if (capped) notes.push(CAP_NOTE);
-  return { bars: capped ? bars.slice(-MAX_PLAN_BARS) : bars, note: notes.filter(Boolean).join(' · ') || null };
+  let lo = 0, hi = bars.length; // first bar at or after start (bars are sorted by time)
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (bars[mid].time < start) lo = mid + 1; else hi = mid; }
+  if (lo > 0) notes.push(CAP_NOTE);
+  return { bars: lo > 0 ? bars.slice(lo) : bars, note: notes.filter(Boolean).join(' · ') || null };
 }
 
 // Bars from `fromTime` on (all bars when omitted): the cheap live read the tick poll uses.
@@ -2509,7 +2585,7 @@ function makePort(chart) {
     removeEntity: (id, options) => chart.removeEntity(id, options),
   };
 }
-return { HISTORY_NOTE, toBars, mergeTail, isLastBarOpen, historyNote, probeChart, findChart, chartInfo, loadAllBars, MAX_PLAN_BARS, CAP_NOTE, planWindow, readTail, subscribe, makePort };
+return { HISTORY_NOTE, LOAD_TIMEOUT_MS, toBars, mergeTail, isLastBarOpen, closedBars, historyFrom, historyNote, probeChart, findChart, chartInfo, loadAllBars, MAX_PLAN_BARS, CAP_NOTE, windowStart, planWindow, readTail, subscribe, makePort };
 })();
 __m['thndrx/ui.mjs'] = (function () {
 'use strict';
@@ -2545,6 +2621,14 @@ function formatColor(hex, alpha) {
   if (a >= 1) return hex.toUpperCase();
   const [r, g, b] = [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
   return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+// The opacity field (percent) -> alpha 0..1. Empty or unreadable is opaque: Number('') is 0, which would save an
+// invisible colour.
+function parseOpacity(raw) {
+  const text = String(raw).trim(), pct = Number(text);
+  if (text === '' || !Number.isFinite(pct)) return 1;
+  return Math.min(100, Math.max(0, pct)) / 100;
 }
 
 // The Test Start input is a Pine input.time (ms); the dialog edits its Cairo calendar date.
@@ -2705,7 +2789,7 @@ function makeField(doc, input, value) {
     css(opacity, { width: '46px' });
     control = doc.createElement('span');
     control.append(color, ' ', opacity, '%');
-    read = () => formatColor(color.value, Number(opacity.value) / 100);
+    read = () => formatColor(color.value, parseOpacity(opacity.value));
     write = (v) => { const c = parseColor(v); color.value = c.hex; opacity.value = String(Math.round(c.alpha * 100)); };
     control.setDisabled = (d) => { color.disabled = d; opacity.disabled = d; };
   } else if (input.options || input.type === 'timeframe') {
@@ -2828,24 +2912,39 @@ function openSettings(doc, values, onSave) {
   doc.body.appendChild(overlay);
   return overlay;
 }
-return { parseColor, formatColor, cairoDate, cairoMidnight, parseField, panelPlacement, placeUi, renderPanel, mountButton, hasButton, unmountUi, openSettings };
+return { parseColor, formatColor, parseOpacity, cairoDate, cairoMidnight, parseField, panelPlacement, placeUi, renderPanel, mountButton, hasButton, unmountUi, openSettings };
 })();
 __m['thndrx/main.mjs'] = (function () {
 'use strict';
 // ThndrX overlay entry point: watches for the chart iframe, loads the bars, builds the render plan, paints it and shows
-// the panel; reloads on symbol / interval change and on a new chart iframe, recomputes on live bar changes and on save.
-const { buildRenderPlan, applyPineCaps } = __m['thndrx/render-plan.mjs'];
+// the panel; reloads on symbol / interval change and on a new chart iframe.
+//
+// Ruling R25 (any change to an existing drawing makes Thndr re-save the user's own drawings): the chart drawings are
+// computed from CLOSED bars only and repainted only on load, on settings save and when a bar closes, at most once per
+// REPAINT_MIN_MS. Ticks only refresh the HTML panel, which is computed with the forming bar, as Pine shows it.
+const { buildRenderPlan, applyPineCaps, priceRange } = __m['thndrx/render-plan.mjs'];
 const { Painter } = __m['thndrx/painter.mjs'];
 const { loadValues, saveValues } = __m['thndrx/inputs.mjs'];
-const { probeChart, loadAllBars, readTail, mergeTail, chartInfo, isLastBarOpen, planWindow, subscribe, makePort } = __m['thndrx/chart-port.mjs'];
+const { probeChart, loadAllBars, readTail, mergeTail, chartInfo, isLastBarOpen, planWindow, windowStart, closedBars, subscribe, makePort } = __m['thndrx/chart-port.mjs'];
+const { messagePanel } = __m['thndrx/panel.mjs'];
 const { renderPanel, mountButton, hasButton, openSettings, placeUi, unmountUi } = __m['thndrx/ui.mjs'];
 
 const WATCH_MS = 2000;          // chart iframe watch (ThndrX workspaces can drop and recreate the chart widget)
-const MIN_RECOMPUTE_MS = 2000;  // live updates recompute at most this often
+const MIN_PANEL_MS = 2000;      // live updates recompute the panel at most this often
+const REPAINT_MIN_MS = 60000;   // a closed bar repaints the drawings at most this often (R25)
 const RELOAD_DEBOUNCE_MS = 500; // symbol and interval events can arrive together
 const TAG = '[thndrx-ict]';
+const LOADING_TEXT = 'Loading…', TIMEOUT_TEXT = 'History load timed out';
+const INCOMPLETE_NOTE = 'History incomplete: the chart stopped loading';
 
-function start(win = window) {
+// Time of the newest closed bar (undefined when none): what a paint draws up to.
+function lastClosedTime(bars, resolution, nowSec) {
+  const closed = isLastBarOpen(bars, resolution, nowSec) ? bars.length - 2 : bars.length - 1;
+  return closed >= 0 ? bars[closed].time : undefined;
+}
+
+// opts.now: the wall clock in ms (tests set it); opts.onPaint(result): called after every finished paint.
+function start(win = window, { now = () => Date.now(), onPaint = () => {} } = {}) {
   const log = (level, ...args) => { try { win.console[level](TAG, ...args); } catch { /* no console */ } };
   let values = loadValues(win.localStorage);
   let s = null; // the attached chart session
@@ -2854,8 +2953,9 @@ function start(win = window) {
     const port = makePort(found.chart);
     const sess = {
       ...found, doc: found.iframe.contentDocument, painter: new Painter(port),
-      gen: 0, bars: [], volumeMissing: false, info: null, ready: false, busy: false, dirty: false, lastCompute: 0,
-      reloadTimer: null, loading: null,
+      gen: 0, bars: [], volumeMissing: false, info: null, ready: false, busy: false, reloadTimer: null, loading: null,
+      start: -Infinity, bandSpan: null, loadNote: null, // fixed per load: plan window start (I1), band price span, history note
+      paintedTime: undefined, lastPaint: -Infinity, paintWanted: false, lastPanel: -Infinity, panelDirty: false,
     };
     s = sess;
     mountSettings(sess);
@@ -2869,12 +2969,12 @@ function start(win = window) {
     sess.reloadTimer = win.setTimeout(() => reload(sess), RELOAD_DEBOUNCE_MS);
   }
 
-  // Settings save = store, re-read (so the values are the validated ones) and recompute on the bars already loaded.
+  // Settings save = store, re-read (so the values are the validated ones) and repaint on the bars already loaded.
   function mountSettings(sess) {
     mountButton(sess.doc, () => openSettings(sess.doc, values, (next) => {
       saveValues(win.localStorage, next);
       values = loadValues(win.localStorage);
-      recompute(sess).catch((err) => log('error', 'recompute after save failed', err));
+      paint(sess).catch((err) => log('error', 'repaint after save failed', err));
     }));
   }
 
@@ -2890,6 +2990,7 @@ function start(win = window) {
 
   // Full reload, one history load per session at a time: the new generation cancels the running load, which leaves
   // through its view restore; only then does the next load read the user's view. Older waiting reloads drop out.
+  // A load that hangs ends after loadAllBars' timeout, so it cannot block later reloads for longer than that.
   async function reload(sess) {
     const gen = ++sess.gen;
     sess.ready = false;
@@ -2901,47 +3002,86 @@ function start(win = window) {
     if (sess.loading === run) sess.loading = null;
   }
 
-  // Drop our drawings, pull the whole history, then paint from scratch.
+  // Drop our drawings, show 'Loading…' (never the old symbol's rows), pull the history, then paint from scratch.
   async function load(sess, gen) {
     const current = () => gen === sess.gen && s === sess;
     try {
       await sess.painter.clear();
+      renderPanel(sess.doc, messagePanel(values, LOADING_TEXT));
       const info = chartInfo(sess.chart);
-      const { bars, complete, volumeMissing } = await loadAllBars(sess.chart, {
+      const res = await loadAllBars(sess.chart, {
         sleep: (ms) => new Promise((resolve) => win.setTimeout(resolve, ms)),
         cancelled: () => !current(),
+        now: () => now() / 1000,
+        resolution: info.resolution,
+        timers: win,
       });
       if (!current()) return;
-      const now = chartInfo(sess.chart);
-      if (now.symbol !== info.symbol || now.resolution !== info.resolution) { scheduleReload(sess); return; } // changed while loading
-      if (!complete) log('warn', `history did not settle; running on ${bars.length} bars`);
-      Object.assign(sess, { bars, volumeMissing, info: now, ready: true, dirty: false });
-      await recompute(sess);
+      if (res.timedOut) {
+        log('warn', 'history load timed out');
+        renderPanel(sess.doc, messagePanel(values, TIMEOUT_TEXT));
+        return;
+      }
+      const cur = chartInfo(sess.chart);
+      if (cur.symbol !== info.symbol || cur.resolution !== info.resolution) { scheduleReload(sess); return; } // changed while loading
+      if (!res.complete) log('warn', `history did not settle; running on ${res.bars.length} bars`);
+      const startTime = windowStart(res.bars);
+      Object.assign(sess, {
+        bars: res.bars, volumeMissing: res.volumeMissing, info: cur, ready: true,
+        start: startTime, bandSpan: priceRange(planWindow(res.bars, now() / 1000, startTime).bars),
+        loadNote: res.complete ? null : INCOMPLETE_NOTE,
+      });
+      await paint(sess);
     } catch (err) {
       log('error', 'reload failed', err);
     }
   }
 
-  async function recompute(sess) {
-    if (!sess.ready || s !== sess) return;
-    const gen = sess.gen;
-    sess.lastCompute = Date.now();
-    const nowSec = Date.now() / 1000;
-    const { bars, note } = planWindow(sess.bars, nowSec); // newest 20000 bars (R20); the tail poll keeps them all
-    const ctx = {
+  function planCtx(sess, bars, nowSec, windowNote) {
+    return {
       ...sess.info,
       lastBarOpen: isLastBarOpen(bars, sess.info.resolution, nowSec),
-      historyNote: note,
+      historyNote: [windowNote, sess.loadNote].filter(Boolean).join(' · ') || null,
       volumeMissing: sess.volumeMissing,
     };
-    const plan = buildRenderPlan(bars, values, ctx);
-    if (gen !== sess.gen || s !== sess) return;
-    renderPanel(sess.doc, plan.panel);
-    const result = await sess.painter.apply(applyPineCaps(plan), sess.painter.begin());
-    if (result !== 'stale' && result.failed) log('warn', `${result.failed} drawings failed`);
   }
 
-  // Live poll: read the bars from the last known one on; recompute when they changed, at most every 2 s.
+  // The panel plan: on every bar of the window, the forming one included.
+  function panelPlan(sess, nowSec) {
+    const { bars, note } = planWindow(sess.bars, nowSec, sess.start);
+    sess.lastPanel = now();
+    sess.panelDirty = false;
+    return { bars, note, plan: buildRenderPlan(bars, values, planCtx(sess, bars, nowSec, note)) };
+  }
+
+  // Drawings from the closed bars, with the band span fixed at load; the panel with the forming bar.
+  async function paint(sess) {
+    if (!sess.ready || s !== sess) return;
+    const gen = sess.gen, nowSec = now() / 1000;
+    sess.paintWanted = false;
+    sess.lastPaint = now();
+    sess.paintedTime = lastClosedTime(sess.bars, sess.info.resolution, nowSec);
+    const { bars, note, plan: shown } = panelPlan(sess, nowSec);
+    const closed = closedBars(bars, sess.info.resolution, nowSec);
+    const drawn = closed === bars ? shown : buildRenderPlan(closed, values, planCtx(sess, closed, nowSec, note));
+    if (gen !== sess.gen || s !== sess) return;
+    renderPanel(sess.doc, shown.panel);
+    const plan = applyPineCaps({ ...drawn, meta: { ...drawn.meta, ...sess.bandSpan } });
+    const result = await sess.painter.apply(plan, sess.painter.begin());
+    if (result === 'stale') return;
+    if (result.failed) log('warn', `${result.failed} drawings failed`);
+    onPaint(result);
+  }
+
+  async function refreshPanel(sess) {
+    const gen = sess.gen;
+    const { plan } = panelPlan(sess, now() / 1000);
+    if (gen === sess.gen && s === sess && sess.ready) renderPanel(sess.doc, plan.panel);
+  }
+
+  // Live poll (every 2 s): read the bars from the last known one on. A newly closed bar repaints the drawings, at
+  // most once per REPAINT_MIN_MS; one that closes inside that wait is painted by the first poll after it. Anything
+  // else (the forming bar moving) only refreshes the panel, at most every 2 s.
   async function tick(sess) {
     if (!sess.ready || sess.busy || s !== sess) return;
     sess.busy = true;
@@ -2956,11 +3096,11 @@ function start(win = window) {
       const { bars: tail } = await readTail(sess.chart, sess.bars[sess.bars.length - 1].time);
       if (gen !== sess.gen || !sess.ready) return;
       const merged = mergeTail(sess.bars, tail);
-      if (merged.changed) { sess.bars = merged.bars; sess.dirty = true; }
-      if (sess.dirty && Date.now() - sess.lastCompute >= MIN_RECOMPUTE_MS) {
-        sess.dirty = false;
-        await recompute(sess);
-      }
+      if (merged.changed) { sess.bars = merged.bars; sess.panelDirty = true; }
+      const t = now();
+      if (lastClosedTime(sess.bars, sess.info.resolution, t / 1000) !== sess.paintedTime) sess.paintWanted = true;
+      if (sess.paintWanted && t - sess.lastPaint >= REPAINT_MIN_MS) await paint(sess);
+      else if ((sess.panelDirty || sess.paintWanted) && t - sess.lastPanel >= MIN_PANEL_MS) await refreshPanel(sess);
     } catch (err) {
       log('error', 'live update failed', err);
     } finally {
@@ -2984,7 +3124,7 @@ function start(win = window) {
   const timer = win.setInterval(watch, WATCH_MS);
   return () => { win.clearInterval(timer); if (s) detach(); };
 }
-return { start };
+return { INCOMPLETE_NOTE, start };
 })();
 const { start } = __m['thndrx/main.mjs'];
 start();
