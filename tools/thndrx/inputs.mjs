@@ -177,14 +177,34 @@ export function resolveConfig(values) {
   return { engineCfg, display, presetTag: egx ? ' · EGX DAILY' : '' };
 }
 
-function validFor(input, v) {
+// Colours are stored as '#RRGGBB' or 'rgba(r, g, b, a)' only: the two forms render-plan's withTransp reads.
+const HEX6 = /^#[0-9a-f]{6}$/i;
+const RGBA = /^rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d*\.?\d+)\s*\)$/i;
+function validColor(v) {
+  if (typeof v !== 'string') return false;
+  if (HEX6.test(v)) return true;
+  const m = RGBA.exec(v);
+  return !!m && [m[1], m[2], m[3]].every((x) => +x <= 255) && +m[4] <= 1;
+}
+
+// The engine evaluates killzones with Intl in this zone; an unknown zone would throw there.
+function validTimeZone(v) {
+  if (typeof v !== 'string' || v === '') return false;
+  try { new Intl.DateTimeFormat('en-US', { timeZone: v }); return true; } catch { return false; }
+}
+
+// The value check loadValues and saveValues apply; the settings dialog runs it before saving.
+export function isValidValue(input, v) {
   switch (input.type) {
     case 'bool': return typeof v === 'boolean';
     case 'int': case 'float': case 'time':
       return Number.isFinite(v) && (input.type !== 'int' || Number.isInteger(v))
         && (input.min === undefined || v >= input.min) && (input.max === undefined || v <= input.max);
-    case 'color': return typeof v === 'string' && /^(#[0-9a-f]{3,8}|rgba?\(.*\))$/i.test(v);
-    default: return typeof v === 'string' && v !== '' && (!input.options || input.options.includes(v));
+    case 'color': return validColor(v);
+    case 'session': return typeof v === 'string' && /^\d{4}-\d{4}$/.test(v);
+    default:
+      if (input.id === 'sessionTimezone') return validTimeZone(v);
+      return typeof v === 'string' && v !== '' && (!input.options || input.options.includes(v));
   }
 }
 
@@ -194,13 +214,13 @@ export function loadValues(storage) {
   let saved = null;
   try { saved = JSON.parse(storage.getItem(STORAGE_KEY)); } catch { /* corrupt or absent: defaults */ }
   if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
-    for (const input of INPUTS) if (input.id in saved && validFor(input, saved[input.id])) values[input.id] = saved[input.id];
+    for (const input of INPUTS) if (input.id in saved && isValidValue(input, saved[input.id])) values[input.id] = saved[input.id];
   }
   return values;
 }
 
 export function saveValues(storage, values) {
   const clean = {};
-  for (const input of INPUTS) clean[input.id] = validFor(input, values[input.id]) ? values[input.id] : input.def;
+  for (const input of INPUTS) clean[input.id] = isValidValue(input, values[input.id]) ? values[input.id] : input.def;
   storage.setItem(STORAGE_KEY, JSON.stringify(clean));
 }

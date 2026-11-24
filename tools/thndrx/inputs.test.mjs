@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { DEFAULTS, PRESETS } from '../backtest/ict-engine.mjs';
-import { INPUTS, defaultValues, resolveConfig, loadValues, saveValues } from './inputs.mjs';
+import { INPUTS, defaultValues, resolveConfig, loadValues, saveValues, isValidValue } from './inputs.mjs';
 import { PINE_COLORS, colorNew } from './colors.mjs';
 import { fmtPrice, fmtNum } from './format.mjs';
 
@@ -114,4 +114,32 @@ test('format', () => {
   assert.equal(colorNew('#FF9800', 80), 'rgba(255, 152, 0, 0.2)');
   assert.equal(colorNew('#fff', 0), 'rgba(255, 255, 255, 1)');
   assert.equal(colorNew(PINE_COLORS.red, 85), 'rgba(242, 54, 69, 0.15)');
+});
+
+test('loadValues accepts only #RRGGBB and rgba(r, g, b, a) colours', () => {
+  const load = (c) => loadValues(fakeStorage({ 'thndrx-ict:inputs:v1': JSON.stringify({ majorTagColor: c }) })).majorTagColor;
+  const def = INPUTS.find((i) => i.id === 'majorTagColor').def;
+  for (const ok of ['#112233', '#AbCdEf', 'rgba(54, 58, 69, 0.2)', 'rgba(0,0,0,1)', 'rgba(255, 255, 255, 0)']) assert.equal(load(ok), ok, ok);
+  for (const bad of ['#123', '#1122334', '#11223344', 'rgb(1, 2, 3)', 'rgba(1, 2, 3)', 'rgba(256, 0, 0, 0.5)', 'rgba(1, 2, 3, 1.5)', 'rgba(1, 2, 3, 0.5) x', 'red', 7]) {
+    assert.equal(load(bad), def, String(bad));
+  }
+});
+
+test('loadValues falls back to defaults for malformed sessions and unknown timezones', () => {
+  const s = fakeStorage({ 'thndrx-ict:inputs:v1': JSON.stringify({ londonSession: '0300-0600', newYorkSession: '7-10', asiaSession: '2000-0000x', sessionTimezone: 'Mars/Olympus' }) });
+  const v = loadValues(s);
+  assert.equal(v.londonSession, '0300-0600');
+  assert.equal(v.newYorkSession, '0700-1000');
+  assert.equal(v.asiaSession, '2000-0000');
+  assert.equal(v.sessionTimezone, 'America/New_York');
+  const ok = loadValues(fakeStorage({ 'thndrx-ict:inputs:v1': JSON.stringify({ sessionTimezone: 'Africa/Cairo' }) }));
+  assert.equal(ok.sessionTimezone, 'Africa/Cairo');
+});
+
+test('isValidValue is the check loadValues and saveValues apply', () => {
+  const tz = INPUTS.find((i) => i.id === 'sessionTimezone'), rsi = INPUTS.find((i) => i.id === 'rsiLength');
+  assert.equal(isValidValue(tz, 'Europe/London'), true);
+  assert.equal(isValidValue(tz, ''), false);
+  assert.equal(isValidValue(rsi, 0), false);
+  assert.equal(isValidValue(rsi, 14), true);
 });
