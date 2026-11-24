@@ -1506,8 +1506,12 @@ as the Pine indicator, including the EGX Daily preset); they are saved in that b
   bands are shaded.
 - Thndr's prices are **split-adjusted but not dividend-adjusted**: compare with a TradingView chart at `ADJ` off, not
   with the dividend-adjusted data the backtests above used.
-- **Nothing is saved to Thndr.** The drawings are unsaved and are gone on reload. One measured side effect: removing any
-  drawing makes Thndr re-save your own saved drawings, unchanged.
+- Drawings update when a bar closes; the panel updates live.
+- **Nothing is saved to Thndr.** The drawings are unsaved and are gone on reload. One measured side effect: any change
+  to a drawing (ours or yours) makes Thndr re-save your saved drawings for that stock. The overlay limits this to its
+  repaints on closed bars, about once per bar and at most once a minute. The saved set is this tab's current set, so
+  drawings you edited meanwhile in another tab or the phone app can be overwritten by the older set, the same as when
+  you edit a drawing in Thndr itself.
 
 ---
 
