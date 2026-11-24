@@ -47,3 +47,19 @@ signed numbers render as `0.67R+`. Fixed by forcing `dir="ltr"` on everything th
   dividend-adjusted data the engine backtests were run on. Signals are scale-free inside each dividend period, so they
   differ only where a lookback window spans a dividend date. The overlay's numbers should be compared with TradingView
   at ADJ off.
+
+## After the final fix wave (bundle at 6d6a495)
+
+Same session, every write to `/tvcharts/drawings|layouts` blocked and counted:
+
+| Step | Thndr drawing syncs |
+|---|---|
+| Inject overlay on COMI 1D, full load (203 shapes) | 0 |
+| One idle minute (market closed) | 0 |
+| Switch 1D → 60 (clear + repaint, 886 shapes) | 1 (one debounced burst) |
+| One idle minute on 60m | 0 |
+| Switch 60 → 1D (back to 203 shapes) | 1 |
+
+No layout writes at all, including during the history zoom-out (the review's open question M5). The panel now renders
+left-to-right on ThndrX's Arabic UI (`+0.67R`, labels in the left column). During market hours expect one sync per
+repaint, i.e. one per closed bar at most once a minute; not yet observed live with the market open.
