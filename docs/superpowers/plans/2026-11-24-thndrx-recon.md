@@ -34,8 +34,10 @@ request to `users-service/tvcharts/drawings/*` or `.../layouts` in 20 s (only th
 - `exportData` times are public unix seconds. Use them. The internal model (`chart.chartModel().mainSeries().bars()`,
   `.valueAt(k)` → `[time, o, h, l, c, vol, …]`) stores times differently on intraday (a 60m bar read 04:00Z), so do not
   take times from it.
-- Prices are **dividend/split-adjusted** (COMI 2021-11-23 close 31.54). Matches the dividend-adjusted data the engine
-  was validated on.
+- Prices are **split-adjusted but not dividend-adjusted** (corrected after the live data comparison in
+  `2026-11-24-thndrx-live-results.md`: the ratio to TradingView's dividend-adjusted series steps at every April
+  dividend). ThndrX therefore matches a TradingView chart with ADJ off, not the dividend-adjusted data the engine was
+  validated on.
 - Daily bar times are not uniform (old bars at 07:00Z, recent at 00:00Z); both map to the right Cairo date. Always
   derive `date` from the time in Africa/Cairo.
 
