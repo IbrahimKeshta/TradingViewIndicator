@@ -148,12 +148,14 @@ test('htf bias blocks longs when active and bias is -1', () => {
   assert.ok(bull.opens.some((o) => o.side === 'long') && !bull.opens.some((o) => o.side === 'short'));
 });
 
-test('htf bias filter is inactive without the input, and no longer throws', () => {
+test('htf bias filter: off on the 1D default without a bias, a throw above 1D without one (R26)', () => {
   const base = runEngine(bars, LOOSE, {});
-  for (const cfg of [{ requireHtfBias: true }, { requireHtfBias: true, htfBiasTf: '1W' }]) {
-    const r = runEngine(bars, { ...LOOSE, ...cfg }, {});
-    assert.deepEqual(r.trades, base.trades);
-  }
+  assert.deepEqual(runEngine(bars, { ...LOOSE, requireHtfBias: true }, {}).trades, base.trades);
+  // a backtest caller asking for a bias above the chart without supplying one gets an error, not a silent no-op
+  assert.throws(() => runEngine(bars, { ...LOOSE, requireHtfBias: true, htfBiasTf: '1W' }, {}), /not ported/);
+  // the overlay supplies the bias itself: no throw, and an all-zero inactive bias leaves the trades alone
+  const supplied = runEngine(bars, { ...LOOSE, requireHtfBias: true, htfBiasTf: '1W' }, { htfActive: false, htfBias: new Int8Array(bars.length) });
+  assert.deepEqual(supplied.trades, base.trades);
   // htfActive false (bias timeframe not above the chart) leaves the filter off even with a bias array
   const off = runEngine(bars, { ...LOOSE, requireHtfBias: true }, { htfActive: false, htfBias: new Int8Array(bars.length).fill(-1) });
   assert.deepEqual(off.trades, base.trades);

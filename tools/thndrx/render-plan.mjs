@@ -407,7 +407,7 @@ export function runPlanEngine(bars, values, ctx) {
       ({ bias: htfBias, active: htfActive } = htfBiasSeries(bars, { htfBiasTf: display.htfBiasTf, htfSwingLen: display.htfSwingLen }, ctx.resolution));
     } catch (err) {
       warnings.push(`HTF bias filter inactive: ${err.message}`);
-      htfBias = undefined; htfActive = false;
+      htfBias = new Int8Array(bars.length); htfActive = false; // a bias is supplied, so the engine never throws (R26)
     }
   }
   const res = runEngine(bars, engineCfg, { symbol: ctx.symbol, mintick: ctx.mintick, htfBias, htfActive });

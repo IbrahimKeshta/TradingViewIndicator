@@ -237,6 +237,10 @@ test('an unsupported chart timeframe turns the HTF filter off with a warning', (
   assert.match(p.meta.warnings[0], /HTF bias/);
   assert.ok(p.boxes.length > 0);
   assert.equal(buildRenderPlan(bars, looseValues({ requireHtfBias: true, htfBiasTf: '1W' }), ctx).meta.warnings.length, 0);
+  // a bias timeframe above 1D on an unsupported chart: still the warning, never the engine's backtest-caller throw
+  const w = buildRenderPlan(bars, looseValues({ requireHtfBias: true, htfBiasTf: '1W' }), { ...ctx, resolution: '1S' });
+  assert.match(w.meta.warnings[0], /HTF bias/);
+  assert.ok(w.boxes.length > 0);
 });
 
 test('priceRange handles 200000 bars without a stack overflow', () => {

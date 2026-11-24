@@ -10,7 +10,7 @@
 //  * Every bar is treated as confirmed (historical bars), which is what a backtest reads.
 //
 // Not ported here: the HTF bias computation itself (the per-bar bias arrives through opts.htfBias / opts.htfActive;
-// without it the filter is off, which is what Pine does on a 1D chart with the default Bias Timeframe; the ThndrX
+// without it the filter is off on the default 1D Bias Timeframe and any other Bias Timeframe throws; the ThndrX
 // overlay builds the bias in tools/thndrx/htf.mjs), all drawing, panels and alerts. For the ThndrX overlay the engine also returns the state a renderer needs (series, events, opens, final).
 
 export const NA = NaN;
@@ -65,7 +65,7 @@ export const DEFAULTS = Object.freeze({
   trailFromEntry: false,
   longOnly: false,
   // Trade filters
-  requireHtfBias: false, // needs opts.htfActive + opts.htfBias (per chart bar 1 / -1 / 0); inactive without them (see header)
+  requireHtfBias: false, // needs opts.htfActive + opts.htfBias (per chart bar 1 / -1 / 0); without them: off on 1D, throws above (see header)
   htfBiasTf: '1D',
   requireDisplacement: false,
   dispMult: 1.0,
@@ -371,6 +371,8 @@ function mergeIndex(bars, s) {
 // the rest is render state: per-bar series, BOS/CHoCH events, every trade opened, and the engine state after the last bar.
 export function runEngine(bars, userCfg = {}, opts = {}) {
   const cfg = { ...DEFAULTS, ...userCfg };
+  // Backtest callers have no bias series: refuse a bias timeframe above the chart rather than silently ignore it (R26).
+  if (cfg.requireHtfBias && cfg.htfBiasTf !== '1D' && !opts.htfBias) throw new Error('Require HTF Bias above the chart timeframe is not ported');
   const symbol = opts.symbol || '';
   const mintick = opts.mintick ?? 0.01;
   const n = bars.length;
