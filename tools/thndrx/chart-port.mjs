@@ -138,15 +138,18 @@ const readBars = async (chart, from) => toBars(await chart.exportData(from === u
 
 // History back to the series start (recon): ask for everything since 1990, re-read every 2 s until the first bar
 // stops moving (endOfData() is unreliable), then put the user's view back. complete = the first bar settled.
-export async function loadAllBars(chart, { sleep = wait, maxRounds = 30, now = () => Date.now() / 1000 } = {}) {
+// cancelled() is checked every round: a cancelled load stops asking and leaves through the same view restore.
+export async function loadAllBars(chart, { sleep = wait, maxRounds = 30, now = () => Date.now() / 1000, cancelled = () => false } = {}) {
   let saved = null;
   try { saved = chart.getVisibleRange(); } catch { /* no range yet */ }
   const ask = () => chart.setVisibleRange({ from: HISTORY_FROM, to: Math.floor(now()) });
   let read = await readBars(chart), complete = false;
   try {
+    if (cancelled()) return { bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: true };
     await ask();
     for (let round = 1; round < maxRounds; round++) {
       await sleep(POLL_MS);
+      if (cancelled()) return { bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: true };
       const next = await readBars(chart);
       const settled = next.bars.length > 0 && read.bars.length > 0 && next.bars[0].time === read.bars[0].time;
       read = next;
@@ -156,10 +159,21 @@ export async function loadAllBars(chart, { sleep = wait, maxRounds = 30, now = (
   } finally {
     if (saved) await Promise.resolve().then(() => chart.setVisibleRange(saved)).catch(() => {});
   }
-  return { bars: read.bars, complete, volumeMissing: read.volumeMissing };
+  return { bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: false };
 }
 
-// Bars from `fromTime` on: the cheap live read the tick poll uses.
+// Ruling R20: the plan is computed on the newest MAX_PLAN_BARS bars, so a 1m/5m chart's 5-year feed cannot stall the
+// page. The note joins the 5-year feed note (judged on the full history) and the cap note.
+export const MAX_PLAN_BARS = 20000;
+export const CAP_NOTE = `Computed on the last ${MAX_PLAN_BARS} bars`;
+export function planWindow(bars, now) {
+  const notes = [historyNote(bars.length ? bars[0].time : undefined, now)];
+  const capped = bars.length > MAX_PLAN_BARS;
+  if (capped) notes.push(CAP_NOTE);
+  return { bars: capped ? bars.slice(-MAX_PLAN_BARS) : bars, note: notes.filter(Boolean).join(' · ') || null };
+}
+
+// Bars from `fromTime` on (all bars when omitted): the cheap live read the tick poll uses.
 export const readTail = (chart, fromTime) => readBars(chart, fromTime);
 
 // Symbol and interval changes reload; there is no tick event, so the last bar is polled every 2 s.

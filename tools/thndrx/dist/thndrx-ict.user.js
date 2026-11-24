@@ -2447,15 +2447,18 @@ const readBars = async (chart, from) => toBars(await chart.exportData(from === u
 
 // History back to the series start (recon): ask for everything since 1990, re-read every 2 s until the first bar
 // stops moving (endOfData() is unreliable), then put the user's view back. complete = the first bar settled.
-async function loadAllBars(chart, { sleep = wait, maxRounds = 30, now = () => Date.now() / 1000 } = {}) {
+// cancelled() is checked every round: a cancelled load stops asking and leaves through the same view restore.
+async function loadAllBars(chart, { sleep = wait, maxRounds = 30, now = () => Date.now() / 1000, cancelled = () => false } = {}) {
   let saved = null;
   try { saved = chart.getVisibleRange(); } catch { /* no range yet */ }
   const ask = () => chart.setVisibleRange({ from: HISTORY_FROM, to: Math.floor(now()) });
   let read = await readBars(chart), complete = false;
   try {
+    if (cancelled()) return { bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: true };
     await ask();
     for (let round = 1; round < maxRounds; round++) {
       await sleep(POLL_MS);
+      if (cancelled()) return { bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: true };
       const next = await readBars(chart);
       const settled = next.bars.length > 0 && read.bars.length > 0 && next.bars[0].time === read.bars[0].time;
       read = next;
@@ -2465,10 +2468,21 @@ async function loadAllBars(chart, { sleep = wait, maxRounds = 30, now = () => Da
   } finally {
     if (saved) await Promise.resolve().then(() => chart.setVisibleRange(saved)).catch(() => {});
   }
-  return { bars: read.bars, complete, volumeMissing: read.volumeMissing };
+  return { bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: false };
 }
 
-// Bars from `fromTime` on: the cheap live read the tick poll uses.
+// Ruling R20: the plan is computed on the newest MAX_PLAN_BARS bars, so a 1m/5m chart's 5-year feed cannot stall the
+// page. The note joins the 5-year feed note (judged on the full history) and the cap note.
+const MAX_PLAN_BARS = 20000;
+const CAP_NOTE = `Computed on the last ${MAX_PLAN_BARS} bars`;
+function planWindow(bars, now) {
+  const notes = [historyNote(bars.length ? bars[0].time : undefined, now)];
+  const capped = bars.length > MAX_PLAN_BARS;
+  if (capped) notes.push(CAP_NOTE);
+  return { bars: capped ? bars.slice(-MAX_PLAN_BARS) : bars, note: notes.filter(Boolean).join(' · ') || null };
+}
+
+// Bars from `fromTime` on (all bars when omitted): the cheap live read the tick poll uses.
 const readTail = (chart, fromTime) => readBars(chart, fromTime);
 
 // Symbol and interval changes reload; there is no tick event, so the last bar is polled every 2 s.
@@ -2495,7 +2509,7 @@ function makePort(chart) {
     removeEntity: (id, options) => chart.removeEntity(id, options),
   };
 }
-return { HISTORY_NOTE, toBars, mergeTail, isLastBarOpen, historyNote, probeChart, findChart, chartInfo, loadAllBars, readTail, subscribe, makePort };
+return { HISTORY_NOTE, toBars, mergeTail, isLastBarOpen, historyNote, probeChart, findChart, chartInfo, loadAllBars, MAX_PLAN_BARS, CAP_NOTE, planWindow, readTail, subscribe, makePort };
 })();
 __m['thndrx/ui.mjs'] = (function () {
 'use strict';
@@ -2816,7 +2830,7 @@ __m['thndrx/main.mjs'] = (function () {
 const { buildRenderPlan, applyPineCaps } = __m['thndrx/render-plan.mjs'];
 const { Painter } = __m['thndrx/painter.mjs'];
 const { loadValues, saveValues } = __m['thndrx/inputs.mjs'];
-const { probeChart, loadAllBars, readTail, mergeTail, chartInfo, isLastBarOpen, historyNote, subscribe, makePort } = __m['thndrx/chart-port.mjs'];
+const { probeChart, loadAllBars, readTail, mergeTail, chartInfo, isLastBarOpen, planWindow, subscribe, makePort } = __m['thndrx/chart-port.mjs'];
 const { renderPanel, mountButton, hasButton, openSettings, placeUi, unmountUi } = __m['thndrx/ui.mjs'];
 
 const WATCH_MS = 2000;          // chart iframe watch (ThndrX workspaces can drop and recreate the chart widget)
@@ -2833,16 +2847,19 @@ function start(win = window) {
     const port = makePort(found.chart);
     const sess = {
       ...found, doc: found.iframe.contentDocument, painter: new Painter(port),
-      gen: 0, bars: [], volumeMissing: false, info: null, ready: false, busy: false, dirty: false, lastCompute: 0, reloadTimer: null,
+      gen: 0, bars: [], volumeMissing: false, info: null, ready: false, busy: false, dirty: false, lastCompute: 0,
+      reloadTimer: null, loading: null,
     };
     s = sess;
     mountSettings(sess);
-    const scheduleReload = () => {
-      win.clearTimeout(sess.reloadTimer);
-      sess.reloadTimer = win.setTimeout(() => reload(sess), RELOAD_DEBOUNCE_MS);
-    };
-    sess.off = subscribe(found.chart, { onReload: scheduleReload, onTick: () => tick(sess) }, win);
+    sess.off = subscribe(found.chart, { onReload: () => scheduleReload(sess), onTick: () => tick(sess) }, win);
     reload(sess);
+  }
+
+  // Every reload trigger after attach goes through here: symbol and interval events can arrive together.
+  function scheduleReload(sess) {
+    win.clearTimeout(sess.reloadTimer);
+    sess.reloadTimer = win.setTimeout(() => reload(sess), RELOAD_DEBOUNCE_MS);
   }
 
   // Settings save = store, re-read (so the values are the validated ones) and recompute on the bars already loaded.
@@ -2864,17 +2881,32 @@ function start(win = window) {
     try { unmountUi(sess.doc); } catch { /* document gone */ }
   }
 
-  // Full reload: drop our drawings, pull the whole history, then paint from scratch.
+  // Full reload, one history load per session at a time: the new generation cancels the running load, which leaves
+  // through its view restore; only then does the next load read the user's view. Older waiting reloads drop out.
   async function reload(sess) {
     const gen = ++sess.gen;
     sess.ready = false;
+    if (sess.loading) await sess.loading; // never rejects: load() logs its own errors
+    if (gen !== sess.gen || s !== sess) return;
+    const run = load(sess, gen);
+    sess.loading = run;
+    await run;
+    if (sess.loading === run) sess.loading = null;
+  }
+
+  // Drop our drawings, pull the whole history, then paint from scratch.
+  async function load(sess, gen) {
+    const current = () => gen === sess.gen && s === sess;
     try {
       await sess.painter.clear();
       const info = chartInfo(sess.chart);
-      const { bars, complete, volumeMissing } = await loadAllBars(sess.chart);
-      if (gen !== sess.gen || s !== sess) return;
+      const { bars, complete, volumeMissing } = await loadAllBars(sess.chart, {
+        sleep: (ms) => new Promise((resolve) => win.setTimeout(resolve, ms)),
+        cancelled: () => !current(),
+      });
+      if (!current()) return;
       const now = chartInfo(sess.chart);
-      if (now.symbol !== info.symbol || now.resolution !== info.resolution) return reload(sess); // changed while loading
+      if (now.symbol !== info.symbol || now.resolution !== info.resolution) { scheduleReload(sess); return; } // changed while loading
       if (!complete) log('warn', `history did not settle; running on ${bars.length} bars`);
       Object.assign(sess, { bars, volumeMissing, info: now, ready: true, dirty: false });
       await recompute(sess);
@@ -2885,13 +2917,14 @@ function start(win = window) {
 
   async function recompute(sess) {
     if (!sess.ready || s !== sess) return;
-    const gen = sess.gen, bars = sess.bars;
+    const gen = sess.gen;
     sess.lastCompute = Date.now();
     const nowSec = Date.now() / 1000;
+    const { bars, note } = planWindow(sess.bars, nowSec); // newest 20000 bars (R20); the tail poll keeps them all
     const ctx = {
       ...sess.info,
       lastBarOpen: isLastBarOpen(bars, sess.info.resolution, nowSec),
-      historyNote: historyNote(bars.length ? bars[0].time : undefined, nowSec),
+      historyNote: note,
       volumeMissing: sess.volumeMissing,
     };
     const plan = buildRenderPlan(bars, values, ctx);
@@ -2907,7 +2940,11 @@ function start(win = window) {
     sess.busy = true;
     try {
       const info = chartInfo(sess.chart);
-      if (info.symbol !== sess.info.symbol || info.resolution !== sess.info.resolution) { reload(sess); return; } // a missed event
+      if (info.symbol !== sess.info.symbol || info.resolution !== sess.info.resolution) { scheduleReload(sess); return; } // a missed event
+      if (!sess.bars.length) { // the load found nothing: reload once the chart has bars
+        if ((await readTail(sess.chart)).bars.length) scheduleReload(sess);
+        return;
+      }
       const gen = sess.gen;
       const { bars: tail } = await readTail(sess.chart, sess.bars[sess.bars.length - 1].time);
       if (gen !== sess.gen || !sess.ready) return;

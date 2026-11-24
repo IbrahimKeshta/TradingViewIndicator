@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   toBars, mergeTail, isLastBarOpen, historyNote, chartInfo, loadAllBars, findChart, subscribe, makePort, HISTORY_NOTE,
+  planWindow, MAX_PLAN_BARS, CAP_NOTE,
 } from './chart-port.mjs';
 
 const sec = (iso) => Date.parse(iso) / 1000;
@@ -239,4 +240,44 @@ test('makePort forwards to the chart drawing API', async () => {
     ['multi', [{ time: 1, price: 2 }], { shape: 'path' }],
     ['remove', 'a', { disableUndo: true }],
   ]);
+});
+
+test('loadAllBars stops asking once cancelled and still restores the view', async () => {
+  const chart = historyChart(Array.from({ length: 50 }, (_, k) => 300 + k * 10));
+  let rounds = 0;
+  const res = await loadAllBars(chart, { sleep: async () => { rounds++; }, cancelled: () => rounds >= 2 });
+  assert.equal(res.cancelled, true);
+  assert.equal(res.complete, false);
+  const asks = chart.ranges.filter((r) => r.from === sec('1990-01-01T00:00:00Z')).length;
+  assert.equal(asks, 2, 'no history request after the cancel');
+  assert.deepEqual(chart.ranges[chart.ranges.length - 1], { from: 111, to: 222 });
+
+  const before = historyChart([300, 1213]);
+  const early = await loadAllBars(before, { sleep: async () => {}, cancelled: () => true });
+  assert.equal(early.cancelled, true);
+  assert.deepEqual(before.ranges, [{ from: 111, to: 222 }], 'cancelled before the first request: only the restore');
+});
+
+test('planWindow caps the plan at the newest 20000 bars and joins the notes', () => {
+  const now = sec('2026-11-24T12:00:00Z');
+  const mk = (n, first) => Array.from({ length: n }, (_, k) => ({ time: first + k * 60 }));
+  assert.equal(MAX_PLAN_BARS, 20000);
+  assert.equal(CAP_NOTE, 'Computed on the last 20000 bars');
+
+  const small = mk(1213, sec('2021-11-24T00:00:00Z'));
+  assert.deepEqual(planWindow(small, now), { bars: small, note: HISTORY_NOTE });
+
+  const young = mk(500, sec('2024-01-01T00:00:00Z'));
+  assert.deepEqual(planWindow(young, now), { bars: young, note: null });
+
+  const big = mk(300000, sec('2021-11-24T00:00:00Z'));
+  const w = planWindow(big, now);
+  assert.equal(w.bars.length, 20000);
+  assert.equal(w.bars[0], big[280000]);
+  assert.equal(w.bars[19999], big[299999]);
+  assert.equal(w.note, `${HISTORY_NOTE} · ${CAP_NOTE}`);
+
+  const bigYoung = mk(20001, sec('2026-01-01T00:00:00Z'));
+  assert.equal(planWindow(bigYoung, now).note, CAP_NOTE);
+  assert.deepEqual(planWindow([], now), { bars: [], note: null });
 });
