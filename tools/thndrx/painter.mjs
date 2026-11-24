@@ -17,7 +17,7 @@ const KINDS = [['bands', 'band'], ['fills', 'fill'], ['boxes', 'box'], ['series'
 const opts = (shape, overrides, extra = {}) => ({ shape, overrides, ...extra, ...SAFE });
 
 // Maps one plan item to one chart call, or null when Pine would draw nothing (runs too short to be a line or polygon).
-// `meta` is plan.meta: bands need its price range. Returns { multi, points, options }.
+// `meta` is plan.meta: bands need its price range (fixed per load by the caller; see desiredItems). Returns { multi, points, options }.
 export function toShapeCalls(item, kind, meta) {
   switch (kind) {
     case 'box':
@@ -98,9 +98,9 @@ function hashString(str) {
 }
 
 // Hash of everything that is drawn: all fields but `order` (creation order never changes the picture).
-export function itemHash(item, extra) {
+export function itemHash(item) {
   const { order, ...drawn } = item; // eslint-disable-line no-unused-vars
-  return hashString(stableStringify(extra === undefined ? drawn : { drawn, extra }));
+  return hashString(stableStringify(drawn));
 }
 
 // The items a plan wants on screen, keyed by "kind|key", in back-to-front order.
@@ -114,8 +114,9 @@ function desiredItems(plan) {
     for (const item of items) {
       const call = toShapeCalls(item, kind, meta);
       if (!call) continue;
-      const range = kind === 'band' ? [meta.priceLow, meta.priceHigh] : undefined;
-      wanted.set(`${kind}|${item.key}`, { call, hash: itemHash(item, range) });
+      // The band's price span is not in its hash: the caller fixes it per load (R25), so a new high or low on a live
+      // bar does not redraw every band (each redraw is a removal, and any removal makes Thndr re-save drawings).
+      wanted.set(`${kind}|${item.key}`, { call, hash: itemHash(item) });
     }
   }
   return wanted;

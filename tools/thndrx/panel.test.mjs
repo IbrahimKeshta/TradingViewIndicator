@@ -7,7 +7,7 @@ import { defaultValues, resolveConfig } from './inputs.mjs';
 import { PINE_COLORS, colorNew } from './colors.mjs';
 import { makeBars } from './test-bars.mjs';
 import { buildRenderPlan } from './render-plan.mjs';
-import { buildPanel } from './panel.mjs';
+import { buildPanel, messagePanel } from './panel.mjs';
 
 const wave = (n) => Array.from({ length: n }, (_, i) => +(100 + 20 * Math.sin(i / 9) + 8 * Math.sin(i / 3.1) + 0.02 * i).toFixed(4));
 const bars = makeBars(wave(500));
@@ -265,4 +265,12 @@ test('VLMRA EGX Daily panel numbers', { skip: !dataDir }, () => {
       if (tr.n > 0) assert.equal(trBlock[3].cells[1].text, rTxt(tr.r));
     }
   }
+});
+
+test('messagePanel: one row with the message, in the chosen corner and background, hidden with the panel', () => {
+  const values = { ...defaultValues(), panelPosInput: 'Top Left' };
+  const p = messagePanel(values, 'Loading…');
+  assert.deepEqual(p, { position: 'top_left', bg: values.panelBgColor, rows: [{ cells: [{ text: 'Loading…', color: PINE_COLORS.white, bg: colorNew(PINE_COLORS.gray, 50) }] }] });
+  assert.equal(messagePanel({ ...defaultValues(), panelPosInput: 'Bottom Left' }, 'x').position, 'bottom_left');
+  assert.equal(messagePanel({ ...values, showStructurePanel: false }, 'Loading…'), null);
 });

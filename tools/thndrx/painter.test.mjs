@@ -259,13 +259,17 @@ test('only the newest 300 killzone bands are drawn', async () => {
   assert.deepEqual([r2.created, r2.removed, r2.kept], [1, 1, 299]);
 });
 
-test('bands follow the price range in meta', async () => {
+test('bands span the price range in meta, and a new high or low does not redraw them (the caller fixes it per load)', async () => {
   const port = new FakePort();
   const painter = new Painter(port);
   const bands = [band('kz:A:0', 1000)];
   await painter.apply(emptyPlan({ bands }), painter.begin());
+  assert.deepEqual(port.calls.at(-1).args.map((p) => p.price), [40, 240]);
   const r = await painter.apply(emptyPlan({ bands, meta: { priceLow: 50, priceHigh: 120 } }), painter.begin());
-  assert.deepEqual([r.created, r.removed], [1, 1]);
+  assert.deepEqual([r.created, r.removed, r.kept], [0, 0, 1]);
+  // a band drawn fresh uses the range it is given
+  const fresh = new Painter(port);
+  await fresh.apply(emptyPlan({ bands, meta: { priceLow: 50, priceHigh: 120 } }), fresh.begin());
   assert.equal(port.calls.at(-1).args[0].price, 25);
   // with no price range in meta nothing is drawn rather than a bad rectangle
   const none = await painter.apply(emptyPlan({ bands, meta: { priceLow: null, priceHigh: null } }), painter.begin());

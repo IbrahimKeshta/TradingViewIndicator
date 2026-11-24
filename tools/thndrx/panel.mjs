@@ -140,3 +140,10 @@ export function buildPanel(res, resolved, ctx, { lastClose = NaN, warnings = [] 
   if (warnings.length > 0) rows.push(row('Data', warnings.join(' · '), C.orange));
   return { position: POSITIONS[display.panelPos] ?? 'bottom_left', bg: display.panelBg, rows };
 }
+
+// A one-row panel for a status message ('Loading…', 'History load timed out'), placed like the full panel. `values`
+// are the raw inputs (no engine run behind a message); hidden, like the full panel, when Show Structure Panel is off.
+export function messagePanel(values, text) {
+  if (!values.showStructurePanel) return null;
+  return { position: POSITIONS[values.panelPosInput] ?? 'bottom_left', bg: values.panelBgColor, rows: [{ cells: [cell(text, C.white, HEADER_BG)] }] };
+}
