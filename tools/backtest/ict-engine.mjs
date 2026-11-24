@@ -9,9 +9,9 @@
 //    confirmation -> OB create -> gate -> exits -> record -> free slot -> open pullback -> open trail.
 //  * Every bar is treated as confirmed (historical bars), which is what a backtest reads.
 //
-// Not ported: the HTF bias computation itself (the per-bar bias arrives through opts.htfBias / opts.htfActive; without
-// it the filter is off, which is what Pine does on a 1D chart with the default Bias Timeframe), all drawing, panels and
-// alerts. For the ThndrX overlay the engine also returns the state a renderer needs (series, events, opens, final).
+// Not ported here: the HTF bias computation itself (the per-bar bias arrives through opts.htfBias / opts.htfActive;
+// without it the filter is off, which is what Pine does on a 1D chart with the default Bias Timeframe; the ThndrX
+// overlay builds the bias in tools/thndrx/htf.mjs), all drawing, panels and alerts. For the ThndrX overlay the engine also returns the state a renderer needs (series, events, opens, final).
 
 export const NA = NaN;
 const isNa = (x) => x !== x || x === null || x === undefined;

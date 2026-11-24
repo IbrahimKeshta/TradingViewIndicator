@@ -43,9 +43,10 @@ Displacement, Apply Costs, and `recordResult` (scale-out in thirds, `blendedResu
 time against Test Start). Every record has the `logTrade()` fields plus `openIdx` / `closeIdx` (bar indices), `grossR`
 and `costR`.
 
-Not ported: the HTF bias computation itself (Require HTF Bias reads a per-bar `opts.htfBias` Int8Array of 1 / -1 / 0 plus
-`opts.htfActive`; without them the filter is off, which is what Pine does on 1D with the default Bias Timeframe), all
-drawing, panels and alerts, and the watch-zone ATR (display only). Only closed trades are returned, as the Pine panel
+Not ported here: the HTF bias computation itself (Require HTF Bias reads a per-bar `opts.htfBias` Int8Array of 1 / -1 / 0 plus
+`opts.htfActive`; without them the filter is off, which is what Pine does on 1D with the default Bias Timeframe; the ThndrX
+overlay computes the bias from the chart bars in `tools/thndrx/htf.mjs`), all drawing, panels and alerts, and the
+watch-zone ATR (display only). Only closed trades are returned, as the Pine panel
 counts them; `result.openTrades` holds a still-open one.
 
 Render state (for the ThndrX overlay, `tools/thndrx`; observation only, no effect on trades): the result also carries

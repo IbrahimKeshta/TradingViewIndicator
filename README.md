@@ -18,6 +18,8 @@ trades through TradingView's Strategy Tester.
 They are independent. Run any one on its own, or several together. TradingView caps how many
 indicators one chart can hold on its lower plan tiers, so check yours before stacking all four.
 
+The confluence indicator also runs inside the ThndrX web app, as a userscript: see [ThndrX overlay](#thndrx-overlay).
+
 ---
 
 ## Installing
@@ -1483,6 +1485,32 @@ closed. The dashboard itself reads the live bar, so its text can change until th
 
 ---
 
+# ThndrX overlay
+
+The confluence indicator also runs inside the **ThndrX** web app (`x.thndr.app`). ThndrX embeds TradingView's charting
+library, which cannot run Pine, so `tools/thndrx/` is a userscript that runs the same trade engine (the Node port in
+`tools/backtest/`) in your browser and draws it on the ThndrX chart: swing tags, break lines, order blocks, fair value
+gaps, killzone bands, trade boxes and targets, and the information panel. Full details: [`tools/thndrx/README.md`](tools/thndrx/README.md).
+
+**Install.** Add the [Tampermonkey](https://www.tampermonkey.net/) extension to desktop Chrome or Edge, install
+`tools/thndrx/dist/thndrx-ict.user.js`, then open the ThndrX trade workspace (`x.thndr.app/workspaces/default/trade`).
+It attaches to the chart by itself. The `ICT` button in the corner of the price pane opens the settings (the same inputs
+as the Pine indicator, including the EGX Daily preset); they are saved in that browser's `localStorage`.
+
+**What to know.**
+
+- Works on daily and intraday charts. **`Require Index Trend` is unavailable** (ThndrX gives the script no index
+  series); it is forced off and shown disabled.
+- Thndr serves **5 years** of history, so the panel's performance totals are smaller than TradingView's, and the panel
+  says so. On 1 to 15 minute charts the plan is computed on the newest 20,000 bars, and only the newest 300 killzone
+  bands are shaded.
+- Thndr's prices are **split-adjusted but not dividend-adjusted**: compare with a TradingView chart at `ADJ` off, not
+  with the dividend-adjusted data the backtests above used.
+- **Nothing is saved to Thndr.** The drawings are unsaved and are gone on reload. One measured side effect: removing any
+  drawing makes Thndr re-save your own saved drawings, unchanged.
+
+---
+
 ## Things worth knowing before you trade any of these
 
 **Nothing repaints, but confirmation is late by design.** A swing is only recognised `lookback` bars
@@ -1556,6 +1584,7 @@ src/                    the Pine scripts, the order layer fragment (strategy-lay
                         and the generated strategy (ict-rsi-ma-strategy.pine — never edit)
 tools/                  build-strategy.ps1, which generates the strategy, and its tests
 tools/backtest/         offline Node port of the ICT trade engine, EGX data fetcher, analysis scripts
+tools/thndrx/           the ThndrX overlay: userscript that draws the ICT engine on the ThndrX chart (README inside)
 docs/img/               diagrams used by this README
 docs/superpowers/
   specs/                design documents — what each feature does and why
