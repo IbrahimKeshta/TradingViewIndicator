@@ -5,41 +5,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { readBarsCsv } from './tv-feed.mjs';
-import { signedVolumeSeries } from './sof-engine.mjs';
+import { buildChart } from './sof-engine.mjs';
+
+export { buildChart };
 
 export const SOF_DATA = path.resolve('data/sof');
-
-const col = (rows, k) => Float64Array.from(rows, (r) => r[k]);
-
-export function buildChart({ symbol, bars, ltfBars = null, tfSecs, symType, exTz, weekStart, mintick, from = null, to = null }) {
-  let b = bars;
-  if (from != null) b = b.filter((r) => r[0] >= from);
-  if (to != null) b = b.filter((r) => r[0] < to);
-  const chart = {
-    symbol, mintick, symType, exTz, weekStart, tfSecs,
-    isIntraday: tfSecs < 86400, isDaily: tfSecs === 86400, isWeekly: tfSecs === 604800,
-    time: col(b, 0), open: col(b, 1), high: col(b, 2), low: col(b, 3), close: col(b, 4), volume: col(b, 5),
-    ltf: null,
-  };
-  if (ltfBars && ltfBars.length) {
-    const L = ltfBars;
-    const ltf = { time: col(L, 0), open: col(L, 1), high: col(L, 2), low: col(L, 3), close: col(L, 4), vol: col(L, 5) };
-    const n = chart.time.length, start = new Int32Array(n), end = new Int32Array(n);
-    let k = 0;
-    for (let i = 0; i < n; i++) {
-      const t0 = chart.time[i], t1 = i + 1 < n ? chart.time[i + 1] : Infinity;
-      while (k < L.length && ltf.time[k] < t0) k++;
-      start[i] = k;
-      let e = k;
-      while (e < L.length && ltf.time[e] < t1) e++;
-      end[i] = e; k = e;
-    }
-    ltf.start = start; ltf.end = end;
-    ltf.signedFor = { tick: signedVolumeSeries(ltf.open, ltf.close, ltf.vol, 'tick'), zero: signedVolumeSeries(ltf.open, ltf.close, ltf.vol, 'zero') };
-    chart.ltf = ltf;
-  }
-  return chart;
-}
 
 // ---------------------------------------------------------------- EGX
 let egxMeta = null;

@@ -1,5 +1,9 @@
 # ThndrX overlay
 
+Two userscripts for the chart inside the ThndrX web app: `dist/thndrx-ict.user.js` (ICT + RSI/MA Confluence, most of
+this page) and `dist/thndrx-sof.user.js` (Session Order Flow, see [Session Order Flow](#session-order-flow)). They share
+the chart watch, history load, painter and UI code, and can run together.
+
 The ICT + RSI/MA Confluence indicator, drawn on the chart inside the ThndrX web app (`x.thndr.app`). ThndrX embeds
 TradingView's charting library, which cannot run Pine scripts, so this is a userscript that runs the same trade engine
 in the browser and draws the result with the library's drawing API: swing tags, break lines, order blocks, fair value
@@ -12,12 +16,13 @@ it unchanged. The Pine file stays the source of truth.
 ## Install
 
 1. Install the [Tampermonkey](https://www.tampermonkey.net/) extension in desktop Chrome or Edge.
-2. Open `tools/thndrx/dist/thndrx-ict.user.js` (the raw file, or drag it onto the browser) and let Tampermonkey install it.
+2. Open `tools/thndrx/dist/thndrx-ict.user.js` and/or `tools/thndrx/dist/thndrx-sof.user.js` (the raw file, or drag it onto
+   the browser) and let Tampermonkey install it.
 3. Open the ThndrX trade workspace (`https://x.thndr.app/workspaces/default/trade`) and wait for the chart. The overlay
    attaches by itself; if the workspace drops and re-creates the chart widget, it re-attaches.
 
-`dist/thndrx-ict.user.js` is generated. After changing anything under `tools/thndrx/` or the engine, rebuild it
-(see [Build and test](#build-and-test)) and reinstall the script.
+Both `dist/` files are generated. After changing anything under `tools/thndrx/` or an engine, rebuild them
+(see [Build and test](#build-and-test)) and reinstall the scripts.
 
 ## Where it runs and what it shows
 
@@ -91,20 +96,69 @@ phone app, a save from this tab can overwrite them with the older set; that is t
 when you edit a drawing in this tab. This was observed with every write to the drawings and layouts endpoints blocked
 in the page, so nothing reached the server during the test.
 
+## Session Order Flow
+
+`dist/thndrx-sof.user.js` draws `src/session-orderflow.pine` the same way: session boxes (24h mode) or the opening-range
+box (single-session mode, the EGX default) with their state text, the reference high / low lines, chart and
+higher-timeframe liquidity pools (live and faded taken ones), the developing POC / VAH / VAL with their tags, the prior
+period's sets, the trade module (liquidity run and sweep reversal: entry and stop lines, BUY / SELL, result labels) and
+the dashboard table with the same rows and texts. The `SOF` button (next to `ICT`) opens all 60 Pine inputs; they are
+stored under `thndrx-sof:inputs:v1`. `Log Closed Trades` is shown disabled: Pine Logs exist only on TradingView.
+
+The engine is `tools/backtest/sof-engine.mjs` in render mode: the same file the backtests run, which also records every
+Pine drawing through a small registry with Pine's caps (200 boxes, 500 lines, 500 labels, oldest deleted at creation).
+
+**Intrabars.** Pine builds the profile and the delta from `request.security_lower_tf` bars: 1 minute on intraday charts,
+30 minutes on daily, 4 hours above (`Lower Timeframe` setting). The overlay reads them from Thndr's own datafeed object in
+the chart frame (`ChartApiInstance._studyEngine._externalDatafeed`), which signs its own requests, so the script never
+handles the login token. Thndr's base resolutions are 1, 5, 10 and 60 minutes; 3, 15, 30 and 240 minutes are built from
+them, aligned to the 10:00 session open as TradingView aligns its bars. The history is paged backwards from now to the
+chart window's first bar (1-minute bars reach the full 5 years). Timings measured live: daily first load about 8 s,
+60-minute first load about 20 s (5 years of 1-minute bars); repeat loads of the same stock about 5 to 6 s (memory and
+IndexedDB cache, written on loads and bar closes, refetched in full when a split rescales the history). Intrabars are
+topped up when a bar closes and, for the live dashboard, at most once a minute, after the panel has refreshed. The live
+panel refresh skips the drawings: about 100 ms at the worst case measured (20,000 15-minute bars, 300,000 intrabars). Without the datafeed, or if it keeps failing, the engine uses the chart
+bar's own direction (Pine's own fallback) and the dashboard's `Data` row says so; a failed load is retried on a bar close
+at most every 5 minutes.
+
+Why fetch them at all: on 100 EGX daily charts, the version without intrabars kept every liquidity-run entry but only
+39.9% of the FAVOURABLE days (`docs/superpowers/specs/2026-11-26-thndrx-sof-overlay-design.md`). TradingView itself
+currently blocks sub-daily EGX data on the user's plan, so TradingView's own copy of the indicator on EGX runs without
+intrabars.
+
+Live results and the bugs found there: `docs/superpowers/plans/2026-11-26-thndrx-sof-live-results.md`.
+
+## Both overlays on one chart
+
+The buttons sit side by side, panels in the same corner stack instead of overlapping, and the two history loads queue on
+a lock kept on the chart frame (a load zooms the chart out and back; two at once would restore each other's zoom).
+**Install both scripts from the same build (version 0.2.0 or later).** An older ICT script (0.1.0, before the lock)
+loads at the same moment as Session Order Flow; TradingView then rejects one of the two zoom requests (`Value is null`,
+`Rejected by timeout`) and the 0.1.0 script stays on `Loading…` (seen 2026-11-26). From 0.2.0 a rejected zoom request
+only costs a round, and a history load that still fails says so in the panel and is retried after 5 s, 10 s, ... up to
+a minute apart. When
+many drawings are created or removed at once, Thndr's own analytics library logs `[PostHog.js] This capture call is
+ignored due to client rate limiting` in the console; no analytics request was seen leaving the page.
+
 ## Modules
 
 | File | What |
 |---|---|
-| `main.mjs` | Entry point: watches for the chart iframe, loads the bars, builds the render plan, paints it, shows the panel; reloads on symbol or time-frame change; repaints the drawings when a bar closes (at most once a minute) and on save; refreshes the panel on live bars. |
+| `overlay.mjs` | The loop both userscripts run: watches for the chart iframe, loads the bars, builds the app's render plan, paints it, shows the panel; reloads on symbol or time-frame change; repaints the drawings when a bar closes (at most once a minute) and on save; refreshes the panel on live bars. Hooks let an app prepare extra data before the first paint and top it up later. |
+| `main.mjs`, `ict-ui.mjs` | The ICT app (render plan, inputs, panel) and its UI binding. |
 | `chart-port.mjs` | Finds the chart in the page, loads the history (restoring your view afterwards; 90 s timeout), reads bars with `exportData`, watches symbol, interval and the last bar, applies the 20,000-bar window pinned at load. |
 | `render-plan.mjs` | Engine result to a drawing plan (boxes, lines, labels, bands, the MA path, the panel) with Pine's caps and colours. |
 | `painter.mjs` | Plan to TradingView drawing calls, diffing against what is already on the chart; removes only its own ids; 300-band cap. |
 | `panel.mjs`, `format.mjs`, `colors.mjs` | The information panel rows, number and time formatting, Pine colours and transparency. |
 | `inputs.mjs` | The Pine inputs: groups, defaults, validation, preset handling, `localStorage` persistence. |
 | `htf.mjs` | Higher-time-frame bias built from the chart's own bars (Pine `htfBiasCalc` with `lookahead_on` and `[1]`). |
-| `ui.mjs` | Panel table, `ICT` button and settings dialog, injected into the chart iframe (forced left-to-right: ThndrX itself is right-to-left). |
+| `ui.mjs` | `createUi(spec)`: panel table, settings button and settings dialog for one overlay, injected into the chart iframe (forced left-to-right: ThndrX itself is right-to-left). |
+| `sof-main.mjs` | The Session Order Flow app: intrabar load before the first paint, tail refresh, `SOF` button. |
+| `sof-plan.mjs`, `sof-panel.mjs` | Engine drawings to painter items; the dashboard rows. |
+| `sof-ltf.mjs` | Intrabars: datafeed lookup, backwards paging with retries, session-aligned aggregation, cache. |
+| `sof-inputs.mjs` | The 60 Pine inputs (parsed from the script), validation, persistence, engine options. |
 | `parity.mjs` | Offline check of the render plan against TradingView: panel rows and trade diff from CSV bars and a Pine trade log. |
-| `build.mjs`, `VERSION` | Bundles the modules and the engine into `dist/thndrx-ict.user.js`; the version goes in the userscript header. |
+| `build.mjs`, `VERSION` | Bundles the modules and each engine into `dist/thndrx-ict.user.js` and `dist/thndrx-sof.user.js`; the version goes in the userscript headers. |
 
 No npm dependencies; the bundle is plain JavaScript with `@grant none`.
 
@@ -114,9 +168,9 @@ Node is not on `PATH` on the development machine: prefix it first
 (`export PATH="/c/Users/PC/AppData/Roaming/fnm/aliases/default:$PATH"`).
 
 ```bash
-node tools/thndrx/build.mjs          # writes tools/thndrx/dist/thndrx-ict.user.js
+node tools/thndrx/build.mjs          # writes tools/thndrx/dist/thndrx-ict.user.js and thndrx-sof.user.js
 node --test tools/thndrx/            # unit tests for every module
-node --test tools/backtest/          # the engine the bundle embeds
+node --test tools/backtest/          # the engines the bundles embed (SOF_DATA=<data/sof> runs the TradingView trade-log checks)
 ```
 
 Some tests read real bars and skip when the `ICT_DATA` environment variable (a folder of bars such as `data/egx-div`, gitignored) is

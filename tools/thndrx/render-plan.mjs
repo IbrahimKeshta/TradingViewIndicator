@@ -10,9 +10,10 @@
 import { runEngine, inSession } from '../backtest/ict-engine.mjs';
 import { htfBiasSeries } from './htf.mjs';
 import { resolveConfig } from './inputs.mjs';
-import { PINE_COLORS, colorNew } from './colors.mjs';
+import { PINE_COLORS, colorNew, withTransp as colorWithTransp } from './colors.mjs';
 import { fmtNum, fmtPrice } from './format.mjs';
 import { buildPanel } from './panel.mjs';
+import { priceRange as barPriceRange } from './chart-port.mjs';
 
 export const HIST_LIMIT = 5000;           // Pine line 1765
 export const ANCHOR_LIMIT = HIST_LIMIT - 1;
@@ -37,16 +38,7 @@ export const PHASE = Object.freeze({
   RESULT_TR: 1907,
 });
 
-// Pine color.new(c, transp) for any colour string a user can hold: '#RGB', '#RRGGBB', '#RRGGBBAA' or 'rgb(a)(...)'.
-// color.new replaces the transparency, it does not compose with an existing one.
-export function withTransp(c, transp) {
-  if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c)) return colorNew(c, transp);
-  const hex8 = /^#([0-9a-f]{6})[0-9a-f]{2}$/i.exec(c);
-  if (hex8) return colorNew('#' + hex8[1], transp);
-  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*[\d.]+\s*)?\)$/i.exec(c);
-  if (rgb) return colorNew('#' + [1, 2, 3].map((k) => Number(rgb[k]).toString(16).padStart(2, '0')).join(''), transp);
-  throw new Error(`unsupported colour ${c}`);
-}
+export const withTransp = colorWithTransp; // moved to colors.mjs; kept here for existing callers
 
 const emptyPlan = () => ({ meta: null, boxes: [], lines: [], labels: [], series: [], fills: [], markers: [], bands: [], panel: null });
 
@@ -414,13 +406,7 @@ export function runPlanEngine(bars, values, ctx) {
   return { res, resolved, warnings };
 }
 
-// Min low / max high in one loop: spreading 150k+ bars into Math.min/max overflows the call stack.
-export function priceRange(bars) {
-  if (!bars.length) return { priceLow: null, priceHigh: null };
-  let priceLow = Infinity, priceHigh = -Infinity;
-  for (const b of bars) { if (b.low < priceLow) priceLow = b.low; if (b.high > priceHigh) priceHigh = b.high; }
-  return { priceLow, priceHigh };
-}
+export const priceRange = barPriceRange; // moved to chart-port.mjs; kept here for existing callers
 
 // ctx: { symbol, mintick, resolution, lastBarOpen, historyNote?: string|null, volumeMissing?: boolean }
 export function buildRenderPlan(bars, values, ctx) {

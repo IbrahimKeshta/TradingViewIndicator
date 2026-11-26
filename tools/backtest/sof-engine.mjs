@@ -1,15 +1,17 @@
-// Offline, bar-by-bar port of the decision logic in src/session-orderflow.pine (Session Order Flow):
-// Asia session range (24h mode), range used, reference range and its sweep events, liquidity pools
-// (chart and higher timeframe), the developing volume profile from lower-timeframe bars, the
-// estimated delta, the conditions verdict, and the experimental trade module. Drawing, the dashboard,
-// alerts, London / New York boxes and the opening range are not ported: none of them feeds a trade.
+// Offline, bar-by-bar port of src/session-orderflow.pine (Session Order Flow): sessions (Asia / London /
+// New York in 24h mode, the opening range in single-session mode), range used, reference range and its
+// sweep events, liquidity pools (chart and higher timeframe), the developing volume profile from
+// lower-timeframe bars, the estimated delta, the conditions verdict, both trade-module entry models
+// (sweep reversal, liquidity run) and, with `render: true`, every Pine drawing and the dashboard's
+// last-bar values (the ThndrX overlay). Only alerts are not ported. No imports: the browser bundle uses it.
 //
 // Statement order follows the Pine global scope, because several blocks read state that an earlier
 // block on the same bar has just changed (e.g. the reference reset happens before the sweep test).
 //
 //   import { runSof, SOF_DEFAULTS } from './sof-engine.mjs';
-//   const res = runSof(chart, cfg);   // chart: see buildChart() in sof-data.mjs
-//   res.trades  -> closed trades, res.open -> a still-open trade or null, res.series -> per-bar debug values
+//   const res = runSof(chart, cfg);   // chart: see buildChart() below
+//   res.trades -> closed sweep trades, res.open -> a still-open one or null, res.runTrades / res.runOpen ->
+//   the liquidity-run model's, res.series -> per-bar debug values, res.drawings / res.final -> render mode
 //
 // Pine semantics reproduced here (each one matters for matching TradingView):
 //   ta.pivothigh/low   ties allowed on the left, strict on the right (validated in the ICT port)
@@ -51,6 +53,24 @@ export const SOF_DEFAULTS = Object.freeze({
   // Corrections made 2026-11-21. Set to the old values to reproduce the pre-fix script.
   deltaTieRule: 'tick',          // 'tick' (TradingView CVD rule) | 'zero' (old: unchanged bars count 0)
   beSameBar: true,               // TP1 + return to entry on one bar = breakeven stop (old: false)
+  // Trade module. The Pine default model is 'Liquidity run (trend)' with the module off; the backtests keep the
+  // sweep model on, so these defaults reproduce them. The overlay passes the Pine values explicitly.
+  showTrades: true,
+  entryModel: 'Sweep reversal',  // 'Liquidity run (trend)' | 'Sweep reversal'
+  runStopAtr: 8.0,
+  runTrendLen: 200,
+  // Live-chart and drawing options (the ThndrX overlay). lastBarOpen: the last bar is still forming, so it is not
+  // barstate.isconfirmed (no pool resolution, sweep events, breakouts or entries on it).
+  lastBarOpen: false,
+  render: false,                 // record every Pine drawing (result.drawings) and the dashboard values (result.final)
+  showAsia: true, showLondon: true, showNewYork: true,
+  londonSession: '0200-0500', newYorkSession: '0700-1000',
+  showOpenRange: true,
+  showPools: true,
+  keepTaken: 3,
+  poolThickMult: 0.1,
+  showProfile: true, showPrevProfile: true, prevKeep: 2,
+  showRefLines: true,
   // Backtest-only additions (not in the Pine script)
   longOnly: false,
   shortOnly: false,
@@ -111,12 +131,15 @@ function inSession(timeSec, session, tz) {
 
 // Period id of a bar for timeframe.change(tf): equal ids = same higher-timeframe bar.
 // weekStart: 0 = Sunday (EGX), 1 = Monday (crypto / most markets).
-function periodIds(times, tf, exTz, weekStart) {
+// sessionStartMin (optional, minutes after local midnight): intraday periods start at the session open, as
+// TradingView's session-aligned bars do (EGX 4h bars run 10:00-14:00 and 14:00-14:30 Cairo, not on the UTC grid).
+function periodIds(times, tf, exTz, weekStart, sessionStartMin = null) {
   const n = times.length, out = new Float64Array(n);
   const secs = tfSecondsOf(tf, 0);
   for (let i = 0; i < n; i++) {
     const t = times[i];
-    if (secs < 86400) out[i] = Math.floor(t / secs);                       // whole-hour offsets: UTC grid = exchange grid
+    if (secs < 86400 && sessionStartMin != null) out[i] = dayNum(t, exTz) * 10000 + Math.floor((minutesOfDay(t, exTz) - sessionStartMin) / (secs / 60));
+    else if (secs < 86400) out[i] = Math.floor(t / secs);                  // whole-hour offsets: UTC grid = exchange grid
     else if (secs === 86400) out[i] = dayNum(t, exTz);
     else if (secs === 604800) { const d = dayNum(t, exTz); out[i] = Math.floor((d + 4 - weekStart) / 7); } // 1970-01-01 was a Thursday
     else if (secs === 2592000) { const p = partsIn(t, exTz); out[i] = (+p.year) * 12 + (+p.month); }
@@ -179,6 +202,87 @@ export function signedVolumeSeries(open, close, vol, rule = 'tick') {
 
 const roundToMintick = (x, mt) => Math.round(x / mt) * mt;
 
+// Pine ta.ema: seeded with the first value (pine_ema in the Pine reference), not with an SMA.
+function pineEma(src, len) {
+  const n = src.length, out = new Float64Array(n), a = 2 / (len + 1);
+  let p = NA;
+  for (let i = 0; i < n; i++) { p = isNa(p) ? src[i] : a * src[i] + (1 - a) * p; out[i] = p; }
+  return out;
+}
+
+// Intrabar rows [time, open, high, low, close, volume] -> column arrays plus both signed-volume series. Building this
+// is the costly part of buildChart (hundreds of thousands of rows), so a caller that reuses the same intrabars for many
+// runs (the ThndrX overlay's live panel) builds it once and passes it as `ltf`.
+export function buildLtf(ltfBars) {
+  const L = ltfBars, n = L.length;
+  const ltf = { time: new Float64Array(n), open: new Float64Array(n), high: new Float64Array(n), low: new Float64Array(n), close: new Float64Array(n), vol: new Float64Array(n) };
+  for (let k = 0; k < n; k++) { const r = L[k]; ltf.time[k] = r[0]; ltf.open[k] = r[1]; ltf.high[k] = r[2]; ltf.low[k] = r[3]; ltf.close[k] = r[4]; ltf.vol[k] = r[5]; }
+  ltf.signedFor = { tick: signedVolumeSeries(ltf.open, ltf.close, ltf.vol, 'tick'), zero: signedVolumeSeries(ltf.open, ltf.close, ltf.vol, 'zero') };
+  return ltf;
+}
+
+// Chart bars + optional intrabars -> the engine's chart object. Bars are [time, open, high, low, close, volume]
+// rows (seconds); an intrabar belongs to the chart bar whose [time, next time) holds it, as request.security_lower_tf.
+// Intrabars come as rows (ltfBars) or prebuilt by buildLtf (ltf); only the per-bar [start, end) index is made here.
+// ltfEnd (seconds, optional): where the last bar's intrabars stop. Without it the last bar takes every later intrabar;
+// a chart cut at its last CLOSED bar (the overlay's drawings) passes the forming bar's open, so the forming bar's
+// intrabars are not counted into the closed one.
+// sessionStartMin (optional): minutes after local midnight the exchange session opens; intraday higher timeframes
+// (timeframe.change("240") etc.) are then aligned to it like TradingView's session-aligned bars.
+export function buildChart({ symbol, bars, ltfBars = null, ltf: prebuilt = null, ltfEnd = Infinity, tfSecs, symType, exTz, weekStart, mintick, from = null, to = null, sessionStartMin = null }) {
+  let b = bars;
+  if (from != null) b = b.filter((r) => r[0] >= from);
+  if (to != null) b = b.filter((r) => r[0] < to);
+  const col = (rows, k) => Float64Array.from(rows, (r) => r[k]);
+  const chart = {
+    symbol, mintick, symType, exTz, weekStart, tfSecs, sessionStartMin,
+    isIntraday: tfSecs < 86400, isDaily: tfSecs === 86400, isWeekly: tfSecs === 604800,
+    time: col(b, 0), open: col(b, 1), high: col(b, 2), low: col(b, 3), close: col(b, 4), volume: col(b, 5),
+    ltf: null,
+  };
+  const base = prebuilt || (ltfBars && ltfBars.length ? buildLtf(ltfBars) : null);
+  if (base && base.time.length) {
+    const L = base.time.length, n = chart.time.length, start = new Int32Array(n), end = new Int32Array(n);
+    let k = 0;
+    for (let i = 0; i < n; i++) {
+      const t0 = chart.time[i], t1 = i + 1 < n ? chart.time[i + 1] : ltfEnd;
+      while (k < L && base.time[k] < t0) k++;
+      start[i] = k;
+      let e = k;
+      while (e < L && base.time[e] < t1) e++;
+      end[i] = e; k = e;
+    }
+    chart.ltf = { ...base, start, end }; // the shared columns are never written to
+  }
+  return chart;
+}
+
+// Pine drawing registry: box / line / label objects in creation order with Pine's per-type caps. Creating one past
+// the cap deletes the oldest live object of that type at once (as Pine does); set() on a deleted object is a no-op,
+// delete() on null or a deleted object too. Objects are plain records the render plan reads at the end.
+export const PINE_DRAW_CAPS = Object.freeze({ box: 200, line: 500, label: 500 }); // session-orderflow.pine line 25
+export function makeRegistry(caps = PINE_DRAW_CAPS) {
+  let seq = 0;
+  const live = { box: [], line: [], label: [] };
+  return {
+    live,
+    make(type, props) {
+      const o = { type, seq: seq++, deleted: false, ...props };
+      const a = live[type];
+      a.push(o);
+      if (a.length > caps[type]) a.shift().deleted = true;
+      return o;
+    },
+    set(o, props) { if (o && !o.deleted) Object.assign(o, props); },
+    del(o) {
+      if (!o || o.deleted) return;
+      o.deleted = true;
+      const a = live[o.type], k = a.lastIndexOf(o);
+      if (k >= 0) a.splice(k, 1);
+    },
+  };
+}
+
 // ================================================================================================
 // chart = {
 //   symbol, mintick, symType ('crypto'|'stock'|...), exTz, weekStart (0|1),
@@ -192,23 +296,34 @@ export function runSof(chart, userCfg = {}) {
   const { time, open, high, low, close, volume, mintick } = chart;
   const n = time.length;
   const tfSeconds = chart.tfSecs;
+  const R = cfg.render ? makeRegistry() : null; // the Pine drawings, only when asked for (the overlay)
+  // time_close: an intraday bar closes tfSecs after it opens; a daily / weekly bar at the next bar's open (the last
+  // one a period later). Drawings anchored there end at the bar's right edge, as Pine's xloc.bar_time boxes do.
+  const timeClose = (i) => (chart.isIntraday || i + 1 >= n ? time[i] + tfSeconds : time[i + 1]);
 
   const autoIs24h = ['crypto', 'forex', 'cfd', 'futures', 'spot'].includes(chart.symType);
   const is24hMode = cfg.marketMode === '24h sessions' || (cfg.marketMode === 'Auto' && autoIs24h);
   const sessionsOn = is24hMode && chart.isIntraday && tfSeconds <= 3600;
+  const openRangeOn = !is24hMode && chart.isIntraday && tfSeconds <= cfg.openRangeMins * 60;
   const anchorTf = chart.isIntraday ? 'D' : chart.isDaily ? 'W' : chart.isWeekly ? 'M' : '12M';
+  const anchorName = chart.isIntraday ? 'day' : chart.isDaily ? 'week' : chart.isWeekly ? 'month' : 'year';
 
-  const newAnchor = changeFlags(periodIds(time, anchorTf, chart.exTz, chart.weekStart));
+  const ids = (tf) => periodIds(time, tf, chart.exTz, chart.weekStart, chart.sessionStartMin);
+  const newAnchor = changeFlags(ids(anchorTf));
+  const newDay = chart.isIntraday ? changeFlags(ids('D')) : null;
 
   const htfBumped = chart.isIntraday ? 'D' : chart.isDaily ? 'W' : 'M';
   const htfTf = tfSecondsOf(cfg.htfInput, tfSeconds) > tfSeconds ? cfg.htfInput : htfBumped;
   const htfSecs = tfSecondsOf(htfTf, tfSeconds);
   const htfOn = cfg.showHtfPools && htfSecs > tfSeconds;
-  const htfNew = changeFlags(periodIds(time, htfTf, chart.exTz, chart.weekStart));
+  const htfNew = changeFlags(ids(htfTf));
 
   const atr = taAtr(high, low, close, 14);
   const pivHiS = taPivots(high, cfg.pivotLen, true);
   const pivLoS = taPivots(low, cfg.pivotLen, false);
+  const runOn = cfg.showTrades && cfg.entryModel === 'Liquidity run (trend)';
+  const sweepOn = cfg.showTrades && !runOn;
+  const emaTrend = runOn ? pineEma(close, cfg.runTrendLen) : null;
 
   // ---- delta inputs
   const barVolArr = Float64Array.from(volume, (v) => nz(v));
@@ -228,48 +343,93 @@ export function runSof(chart, userCfg = {}) {
   const volNormalS = (() => { const L = cfg.pressureLen * 5, s = slidingSum(barVolArr, L); return Float64Array.from(s, (v) => v / L); })();
 
   // ---- state
-  const asia = { active: false, state: 'idle', hi: NA, lo: NA, ended: false };
+  // Sessions (Pine type Sess). Asia feeds the reference range; London / New York and the opening range only draw.
+  const mkSess = (name, extend = false) => ({ name, extend, active: false, state: 'idle', hi: NA, lo: NA, bx: null, ended: false, brokeUp: false, brokeDn: false });
+  const asia = mkSess('ASIA'), london = mkSess('LONDON'), newYork = mkSess('NEW YORK'), openRng = mkSess('OR', true);
+  let dayOpenTime = NA;
   let curHi = NA, curLo = NA, prevHi = NA, prevLo = NA, periods = 0;
   const pastRanges = [];
-  let refHi = NA, refLo = NA, hiTouched = false, loTouched = false;
-  const pools = []; // {level, isHigh, htf}
-  let aggHi = NA, aggLo = NA;
-  const hHi = [], hLo = [];
+  let refHi = NA, refLo = NA, hiTouched = false, loTouched = false, refHiLine = null, refLoLine = null;
+  const pools = []; // {level, isHigh, htf, bx}
+  let aggHi = NA, aggLo = NA, aggT = NA;
+  const hHi = [], hLo = [], hT = [];
   const htfWindow = 2 * cfg.htfPivotLen + 1;
+  const takenBoxes = [];
+  let lastLiq = null, lastLiqBar = NA; // { isHigh, htf, accepted, level }
   // profile
   let prof = [], profBase = NA, profStep = NA, profTotal = 0, pocRow = NA, pocVol = 0;
-  let devPoc = NA, devVah = NA, devVal = NA, prevPoc = NA, prevVah = NA, prevVal = NA;
+  let devPoc = NA, devVah = NA, devVal = NA, prevPoc = NA, prevVah = NA, prevVal = NA, sawVolume = false;
+  let lPoc = null, lVah = null, lVal = null, lpPoc = null, lpVah = null, lpVal = null, periodStartT = NA;
+  const prevLines = [];
   let cumDelta = 0;
   // trades
   let trade = null;
   const trades = [];
+  let rDir = 0, rEntry = NA, rStop = NA, rRisk = NA, rBest = NA, rOpenIdx = -1, rLnEntry = null, rLnStop = null;
+  const runTrades = [];
+  let final = null;
   const series = cfg.keepSeries ? { devPoc: new Float64Array(n), devVah: new Float64Array(n), devVal: new Float64Array(n), prevPoc: new Float64Array(n), barDelta, cumDelta: new Float64Array(n), verdict: new Int8Array(n), bias: new Int8Array(n), refHi: new Float64Array(n), refLo: new Float64Array(n), rangeUsedPct: new Float64Array(n), npools: new Int16Array(n), ev: new Uint8Array(n) } : null;
 
-  const addPool = (level, isHigh, htf) => {
+  // Pine Sess.update (lines 157-189) with its box drawing; `confirmed` is barstate.isconfirmed.
+  const sessUpdate = (s, inSess, show, i, confirmed) => {
+    const h = high[i], l = low[i], c = close[i];
+    s.ended = false; s.brokeUp = false; s.brokeDn = false;
+    if (inSess && !s.active) {
+      s.hi = h; s.lo = l; s.state = 'forming';
+      s.bx = R && show ? R.make('box', { kind: 'sess', name: s.name, dir: 0, t1: time[i], t2: timeClose(i), top: h, bottom: l }) : null;
+    } else if (inSess) {
+      s.hi = Math.max(s.hi, h); s.lo = Math.min(s.lo, l);
+      if (R) R.set(s.bx, { top: s.hi, bottom: s.lo, t2: timeClose(i) });
+    }
+    if (R && !inSess && s.extend && s.state !== 'idle') R.set(s.bx, { t2: timeClose(i) });
+    if (!inSess && s.active) { s.state = 'watch'; s.ended = true; }
+    if (!inSess && s.state === 'watch' && confirmed) {
+      if (c > s.hi) { s.state = 'bull'; s.brokeUp = true; if (R) R.set(s.bx, { dir: 1 }); }
+      else if (c < s.lo) { s.state = 'bear'; s.brokeDn = true; if (R) R.set(s.bx, { dir: -1 }); }
+    }
+    s.active = inSess;
+  };
+
+  // Pine poolBox / addPool (lines 349-386). `i` is the bar the call runs on (for the thickness and the right edge).
+  const poolBox = (level, t0, isHigh, htf, i, atrValue) => {
+    if (!R || !(htf ? cfg.showHtfPools : cfg.showPools)) return null;
+    const th = Math.max(atrValue * cfg.poolThickMult, mintick) * (htf ? 2 : 1);
+    return R.make('box', { kind: 'pool', isHigh, htf, taken: false, outcome: null, t1: t0, t2: timeClose(i), top: isHigh ? level : level + th, bottom: isHigh ? level - th : level });
+  };
+  const addPool = (level, t0, isHigh, htf, i, atrValue) => {
     let same = -1;
-    for (let i = 0; i < pools.length; i++) { const q = pools[i]; if (q.isHigh === isHigh && Math.abs(q.level - level) <= mintick) same = i; }
+    for (let k = 0; k < pools.length; k++) { const q = pools[k]; if (q.isHigh === isHigh && Math.abs(q.level - level) <= mintick) same = k; }
     if (same >= 0) {
       const q = pools[same];
-      if (htf && !q.htf) q.htf = true;
+      if (htf && !q.htf) {
+        if (R) R.del(q.bx);
+        q.htf = true;
+        q.bx = poolBox(level, t0, isHigh, true, i, atrValue);
+      }
     } else {
-      pools.push({ level, isHigh, htf });
+      pools.push({ level, isHigh, htf, bx: poolBox(level, t0, isHigh, htf, i, atrValue) });
       let count = 0, oldest = -1;
-      for (let i = 0; i < pools.length; i++) { const q = pools[i]; if (q.isHigh === isHigh && q.htf === htf) { count++; if (oldest < 0) oldest = i; } }
-      if (count > cfg.maxPools) pools.splice(oldest, 1);
+      for (let k = 0; k < pools.length; k++) { const q = pools[k]; if (q.isHigh === isHigh && q.htf === htf) { count++; if (oldest < 0) oldest = k; } }
+      if (count > cfg.maxPools) { const gone = pools.splice(oldest, 1)[0]; if (R) R.del(gone.bx); }
     }
   };
+  const tag = (i, y, which, extra = {}) => R.make('label', { kind: 'tag', which, t: timeClose(i), y, ...extra });
 
   for (let i = 0; i < n; i++) {
     const h = high[i], l = low[i], c = close[i], t = time[i];
     const barVol = barVolArr[i];
+    const confirmed = !(cfg.lastBarOpen && i === n - 1); // barstate.isconfirmed
+    const isLast = i === n - 1;
 
-    // ================= SESSION (Asia only feeds the reference range) =================
+    // ================= SESSIONS =================
+    if (newDay && (newDay[i] || isNa(dayOpenTime))) dayOpenTime = t;
     const inAsia = sessionsOn && inSession(t, cfg.asiaSession, cfg.sessionTz);
-    asia.ended = false;
-    if (inAsia && !asia.active) { asia.hi = h; asia.lo = l; asia.state = 'forming'; }
-    else if (inAsia) { asia.hi = Math.max(asia.hi, h); asia.lo = Math.min(asia.lo, l); }
-    if (!inAsia && asia.active) { asia.state = 'watch'; asia.ended = true; }
-    asia.active = inAsia;
+    sessUpdate(asia, inAsia, cfg.showAsia, i, confirmed);
+    if (R) {
+      sessUpdate(london, sessionsOn && cfg.showLondon && inSession(t, cfg.londonSession, cfg.sessionTz), true, i, confirmed);
+      sessUpdate(newYork, sessionsOn && cfg.showNewYork && inSession(t, cfg.newYorkSession, cfg.sessionTz), true, i, confirmed);
+      sessUpdate(openRng, openRangeOn && cfg.showOpenRange && t - dayOpenTime < cfg.openRangeMins * 60, true, i, confirmed);
+    }
 
     // ================= RANGE USED =================
     if (isNa(curHi)) { curHi = h; curLo = l; }
@@ -290,46 +450,59 @@ export function runSof(chart, userCfg = {}) {
     // ================= REFERENCE RANGE =================
     let refReset = false, newRefHi = NA, newRefLo = NA;
     if (sessionsOn) {
-      if (asia.active) { refHi = NA; refLo = NA; }
+      if (asia.active) { refHi = NA; refLo = NA; if (R) { R.del(refHiLine); R.del(refLoLine); } }
       else if (asia.ended) { refReset = true; newRefHi = asia.hi; newRefLo = asia.lo; }
     } else if (newAnchor[i] && !isNa(prevHi)) { refReset = true; newRefHi = prevHi; newRefLo = prevLo; }
-    if (refReset) { refHi = newRefHi; refLo = newRefLo; hiTouched = false; loTouched = false; }
+    if (refReset) {
+      refHi = newRefHi; refLo = newRefLo; hiTouched = false; loTouched = false;
+      if (R) {
+        R.del(refHiLine); R.del(refLoLine); refHiLine = null; refLoLine = null;
+        if (cfg.showRefLines) {
+          refHiLine = R.make('line', { kind: 'ref', t1: t, t2: timeClose(i), y: refHi });
+          refLoLine = R.make('line', { kind: 'ref', t1: t, t2: timeClose(i), y: refLo });
+        }
+      }
+    } else if (R && !isNa(refHi) && refHiLine) { R.set(refHiLine, { t2: timeClose(i) }); R.set(refLoLine, { t2: timeClose(i) }); }
     const hiTouchedNow = !isNa(refHi) && h > refHi;
     const loTouchedNow = !isNa(refLo) && l < refLo;
-    const hiSweepEvent = hiTouchedNow && !hiTouched && c <= refHi;
-    const loSweepEvent = loTouchedNow && !loTouched && c >= refLo;
-    const hiRunEvent = hiTouchedNow && !hiTouched && c > refHi;
-    const loRunEvent = loTouchedNow && !loTouched && c < refLo;
+    const hiSweepEvent = confirmed && hiTouchedNow && !hiTouched && c <= refHi;
+    const loSweepEvent = confirmed && loTouchedNow && !loTouched && c >= refLo;
+    const hiRunEvent = confirmed && hiTouchedNow && !hiTouched && c > refHi;
+    const loRunEvent = confirmed && loTouchedNow && !loTouched && c < refLo;
     if (hiTouchedNow) hiTouched = true;
     if (loTouchedNow) loTouched = true;
 
     // ================= POOLS =================
     const atrValue = nz(atr[i], h - l);
-    if (!isNa(pivHiS[i])) addPool(pivHiS[i], true, false);
-    if (!isNa(pivLoS[i])) addPool(pivLoS[i], false, false);
+    if (!isNa(pivHiS[i])) addPool(pivHiS[i], time[i - cfg.pivotLen], true, false, i, atrValue);
+    if (!isNa(pivLoS[i])) addPool(pivLoS[i], time[i - cfg.pivotLen], false, false, i, atrValue);
     if (htfOn) {
       if (htfNew[i] && !isNa(aggHi)) {
-        hHi.push(aggHi); hLo.push(aggLo);
-        if (hHi.length > htfWindow) { hHi.shift(); hLo.shift(); }
+        hHi.push(aggHi); hLo.push(aggLo); hT.push(aggT);
+        if (hHi.length > htfWindow) { hHi.shift(); hLo.shift(); hT.shift(); }
         if (hHi.length === htfWindow) {
           const k = cfg.htfPivotLen, midHi = hHi[k], midLo = hLo[k];
-          if (midHi === Math.max(...hHi) && hHi.indexOf(midHi) === k && hHi.lastIndexOf(midHi) === k) addPool(midHi, true, true);
-          if (midLo === Math.min(...hLo) && hLo.indexOf(midLo) === k && hLo.lastIndexOf(midLo) === k) addPool(midLo, false, true);
+          if (midHi === Math.max(...hHi) && hHi.indexOf(midHi) === k && hHi.lastIndexOf(midHi) === k) addPool(midHi, hT[k], true, true, i, atrValue);
+          if (midLo === Math.min(...hLo) && hLo.indexOf(midLo) === k && hLo.lastIndexOf(midLo) === k) addPool(midLo, hT[k], false, true, i, atrValue);
         }
       }
-      if (htfNew[i] || isNa(aggHi)) { aggHi = h; aggLo = l; }
+      if (htfNew[i] || isNa(aggHi)) { aggHi = h; aggLo = l; aggT = t; }
       else { aggHi = Math.max(aggHi, h); aggLo = Math.min(aggLo, l); }
     }
     let bslSwept = false, sslSwept = false, bslRun = false, sslRun = false;
     for (let k = pools.length - 1; k >= 0; k--) {
       const p = pools[k];
       const hit = p.isHigh ? h > p.level : l < p.level;
-      if (hit) {
+      if (hit && confirmed) {
         const accepted = p.isHigh ? c > p.level : c < p.level;
         if (p.isHigh) { bslSwept = bslSwept || !accepted; bslRun = bslRun || accepted; } else { sslSwept = sslSwept || !accepted; sslRun = sslRun || accepted; }
+        lastLiq = { isHigh: p.isHigh, htf: p.htf, accepted, level: p.level };
+        lastLiqBar = i;
+        if (R) { R.set(p.bx, { t2: timeClose(i), taken: true, outcome: accepted ? 'run' : 'swept' }); takenBoxes.push(p.bx); }
         pools.splice(k, 1);
-      }
+      } else if (R) R.set(p.bx, { t2: timeClose(i) });
     }
+    if (R) while (takenBoxes.length > cfg.keepTaken) R.del(takenBoxes.shift());
 
     // ================= VOLUME PROFILE =================
     if (newAnchor[i] || isNa(profStep)) {
@@ -343,6 +516,7 @@ export function runSof(chart, userCfg = {}) {
     if (hasLtf) for (let k = ltf.start[i]; k < ltf.end[i]; k++) ltfVolSum += nz(ltf.vol[k]);
     const useLtf = hasLtf && ltfVolSum > 0;
     if (barVol > 0 && !isNa(profStep)) {
+      sawVolume = true;
       const k0 = useLtf ? ltf.start[i] : 0, k1 = useLtf ? ltf.end[i] : 1;
       for (let k = k0; k < k1; k++) {
         const pHi = useLtf ? ltf.high[k] : h, pLo = useLtf ? ltf.low[k] : l, pV = useLtf ? nz(ltf.vol[k]) : barVol;
@@ -378,6 +552,35 @@ export function runSof(chart, userCfg = {}) {
         devVal = (profBase + vLo) * profStep;
       }
     }
+    // Profile lines (Pine 611-656) and the right-hand tags on the last bar (663-674).
+    if (R) {
+      if (newAnchor[i] || isNa(periodStartT)) {
+        periodStartT = t;
+        R.del(lPoc); R.del(lVah); R.del(lVal);
+        lPoc = lVah = lVal = lpPoc = lpVah = lpVal = null;
+        if (cfg.showPrevProfile && !isNa(prevPoc)) {
+          lpPoc = R.make('line', { kind: 'prev', which: 'poc', t1: t, t2: timeClose(i), y: prevPoc });
+          lpVah = R.make('line', { kind: 'prev', which: 'vah', t1: t, t2: timeClose(i), y: prevVah });
+          lpVal = R.make('line', { kind: 'prev', which: 'val', t1: t, t2: timeClose(i), y: prevVal });
+          prevLines.push(lpPoc, lpVah, lpVal);
+          while (prevLines.length > cfg.prevKeep * 3) R.del(prevLines.shift());
+        }
+      } else if (lpPoc) { for (const ln of [lpPoc, lpVah, lpVal]) R.set(ln, { t2: timeClose(i) }); }
+      if (cfg.showProfile && !isNa(devPoc)) {
+        if (!lPoc) {
+          lPoc = R.make('line', { kind: 'dev', which: 'poc' });
+          lVah = R.make('line', { kind: 'dev', which: 'vah' });
+          lVal = R.make('line', { kind: 'dev', which: 'val' });
+        }
+        R.set(lPoc, { t1: periodStartT, t2: timeClose(i), y: devPoc });
+        R.set(lVah, { t1: periodStartT, t2: timeClose(i), y: devVah });
+        R.set(lVal, { t1: periodStartT, t2: timeClose(i), y: devVal });
+      }
+      if (isLast) {
+        if (cfg.showProfile && !isNa(devPoc)) { tag(i, devPoc, 'POC'); tag(i, devVah, 'VAH'); tag(i, devVal, 'VAL'); }
+        if (cfg.showPrevProfile && lpPoc) { tag(i, prevPoc, 'prior POC', { prior: true }); tag(i, prevVah, 'prior VAH', { prior: true }); tag(i, prevVal, 'prior VAL', { prior: true }); }
+      }
+    }
     const valuePos = isNa(devPoc) ? 0 : c > devVah ? 1 : c < devVal ? -1 : 0;
 
     // ================= DELTA =================
@@ -406,7 +609,7 @@ export function runSof(chart, userCfg = {}) {
       series.ev[i] = (bslSwept ? 1 : 0) | (sslSwept ? 2 : 0) | (bslRun ? 4 : 0) | (sslRun ? 8 : 0) | (hiSweepEvent ? 16 : 0) | (loSweepEvent ? 32 : 0) | (hiRunEvent ? 64 : 0) | (loRunEvent ? 128 : 0);
     }
 
-    // ================= TRADE MANAGEMENT =================
+    // ================= TRADE MANAGEMENT (sweep model) =================
     if (trade && i > trade.openIdx) {
       const tr = trade, isLong = tr.dir > 0;
       const hitStop = isLong ? l <= tr.stop : h >= tr.stop;
@@ -421,7 +624,10 @@ export function runSof(chart, userCfg = {}) {
           const cameBack = isLong ? l <= tr.entry : h >= tr.entry;
           if (hitTp2 && !cameBack) { resultR = 0.5 * cfg.tp1R + 0.5 * tp2R; outcome = 'tp2'; exitPx = tr.tp2; }
           else if (cfg.beAfterTp1 && cfg.beSameBar && cameBack) { resultR = 0.5 * cfg.tp1R; outcome = 'tp1only'; exitPx = tr.entry; }
-          else if (cfg.beAfterTp1) tr.stop = tr.entry;
+          else if (cfg.beAfterTp1) {
+            tr.stop = tr.entry;
+            if (R && tr.d) { R.set(tr.d.lnStop, { y: tr.stop }); R.set(tr.d.lbStop, { y: tr.stop, be: true }); }
+          }
         }
       } else {
         if (hitStop) { const stopR = (tr.stop - tr.entry) * tr.dir / tr.risk; resultR = 0.5 * cfg.tp1R + 0.5 * stopR; outcome = 'tp1only'; exitPx = tr.stop; }
@@ -430,6 +636,11 @@ export function runSof(chart, userCfg = {}) {
       if (isNa(resultR) && cfg.maxTradeBars > 0 && i - tr.openIdx >= cfg.maxTradeBars) {
         const mtmR = (c - tr.entry) * tr.dir / tr.risk;
         resultR = tr.tp1Hit ? 0.5 * cfg.tp1R + 0.5 * mtmR : mtmR; outcome = 'timeout'; exitPx = c;
+      }
+      if (R && tr.d) {
+        for (const ln of [tr.d.lnEntry, tr.d.lnStop, tr.d.lnTp1, tr.d.lnTp2]) R.set(ln, { t2: timeClose(i) });
+        for (const lb of [tr.d.lbStop, tr.d.lbTp1, tr.d.lbTp2]) R.set(lb, { t: timeClose(i) });
+        if (tr.tp1Hit) R.set(tr.d.lbTp1, { hit: true });
       }
       if (!isNa(resultR)) {
         tr.closeIdx = i; tr.closeTime = t; tr.outcome = outcome; tr.grossR = resultR; tr.exitPx = exitPx;
@@ -440,13 +651,15 @@ export function runSof(chart, userCfg = {}) {
         const commR = cfg.commissionPer > 0 ? orders * cfg.commissionPer / ((cfg.positionSize / tr.entry) * tr.risk) : 0;
         tr.costR = slipR + commR;
         tr.r = resultR - tr.costR;
+        if (R) R.make('label', { kind: 'result', model: 'sweep', t, bar: i, y: h, r: resultR });
+        delete tr.d;
         trades.push(tr);
         trade = null;
       }
     }
 
-    // ================= OPEN A NEW TRADE =================
-    if (trade === null) {
+    // ================= OPEN A NEW TRADE (sweep model) =================
+    if (sweepOn && trade === null && confirmed) {
       const lowSwept = (cfg.trigPools && sslSwept) || (cfg.trigRef && loSweepEvent);
       const highSwept = (cfg.trigPools && bslSwept) || (cfg.trigRef && hiSweepEvent);
       let dir = lowSwept && !highSwept ? 1 : highSwept && !lowSwept ? -1 : 0;
@@ -471,11 +684,74 @@ export function runSof(chart, userCfg = {}) {
           const tp2 = isNa(best) || Math.abs(best - entry) > risk * cfg.tp2MaxR ? entry + dir * risk * cfg.tp2FallbackR : best;
           const trig = (dir > 0 ? (cfg.trigPools && sslSwept ? 'pool' : '') + (cfg.trigRef && loSweepEvent ? 'ref' : '') : (cfg.trigPools && bslSwept ? 'pool' : '') + (cfg.trigRef && hiSweepEvent ? 'ref' : ''));
           trade = { dir, entry, stop, risk, tp1, tp2, tp1Hit: false, openIdx: i, openTime: t, riskAtr: risk / atrValue, riskPct: risk / entry * 100, trig, verdict, bias, valuePos, flowAgainst, lowVolume, rangeUsedPct };
+          if (R) {
+            const ln = (part, y) => R.make('line', { kind: 'trade', part, t1: t, t2: timeClose(i), y });
+            const d = { lnEntry: ln('entry', entry), lnStop: ln('stop', stop), lnTp1: ln('tp1', tp1), lnTp2: ln('tp2', tp2) };
+            d.lbStop = tag(i, stop, 'SL', { trade: true }); d.lbTp1 = tag(i, tp1, 'TP1', { trade: true }); d.lbTp2 = tag(i, tp2, 'TP2', { trade: true });
+            R.make('label', { kind: 'entry', dir, t, bar: i, y: c });
+            Object.defineProperty(trade, 'd', { value: d, enumerable: false, configurable: true, writable: true });
+          }
         }
       }
     }
+
+    // ================= LIQUIDITY RUN MODEL (Pine 917-982) =================
+    if (runOn && rDir !== 0 && i > rOpenIdx) {
+      let exitPx = NA, why = '';
+      if (rDir > 0 ? open[i] <= rStop : open[i] >= rStop) { exitPx = open[i]; why = 'gap'; }
+      else if (rDir > 0 ? l <= rStop : h >= rStop) { exitPx = rStop; why = rStop === rEntry - rDir * rRisk ? 'stop' : 'trail'; }
+      if (!isNa(exitPx)) {
+        const rr = (exitPx - rEntry) * rDir / rRisk;
+        runTrades.push({ dir: rDir, entry: rEntry, initStop: rEntry - rDir * rRisk, risk: rRisk, openIdx: rOpenIdx, openTime: time[rOpenIdx], closeIdx: i, closeTime: t, exitPx, why, r: rr });
+        if (R) {
+          R.set(rLnEntry, { t2: t }); R.set(rLnStop, { t2: t });
+          R.make('label', { kind: 'result', model: 'run', t, bar: i, y: h, r: rr });
+        }
+        rDir = 0;
+      } else {
+        rBest = rDir > 0 ? Math.max(rBest, c) : Math.min(rBest, c);
+        const ts = rBest - rDir * cfg.runStopAtr * atr[i];
+        if (rDir > 0 ? ts > rStop : ts < rStop) rStop = ts;
+        if (R) { R.set(rLnEntry, { t2: timeClose(i) }); R.set(rLnStop, { y: rStop, t2: timeClose(i) }); }
+      }
+    }
+    if (runOn && rDir === 0 && confirmed && !isNa(atr[i]) && atr[i] > c * 1e-4) {
+      const d = bslRun && !sslRun ? 1 : sslRun && !bslRun ? -1 : 0;
+      if (d !== 0 && (d > 0 ? c > emaTrend[i] : c < emaTrend[i])) {
+        rDir = d; rEntry = c; rRisk = cfg.runStopAtr * atr[i]; rStop = c - d * rRisk; rBest = c; rOpenIdx = i;
+        if (R) {
+          rLnEntry = R.make('line', { kind: 'run', part: 'entry', t1: t, t2: timeClose(i), y: c });
+          rLnStop = R.make('line', { kind: 'run', part: 'stop', t1: t, t2: timeClose(i), y: rStop });
+          R.make('label', { kind: 'entry', dir: d, t, bar: i, y: c });
+        }
+      }
+    }
+
+    // ================= DASHBOARD VALUES (Pine barstate.islast) =================
+    if (isLast) {
+      let nearBsl = NA, nearSsl = NA;
+      for (const p of pools) {
+        if (p.isHigh && p.level > c && (isNa(nearBsl) || p.level < nearBsl)) nearBsl = p.level;
+        if (!p.isHigh && p.level < c && (isNa(nearSsl) || p.level > nearSsl)) nearSsl = p.level;
+      }
+      const sideStatus = (level, touched, beyond) => (isNa(level) ? 'Forming' : !touched ? 'Intact' : beyond ? 'Broken' : 'Swept');
+      final = {
+        close: c, atrValue, verdict, bias, extended, flowAgainst, lowVolume, valuePos, rangeUsedPct, rangeExhausted,
+        devPoc, devVah, devVal, prevPoc, refHi, refLo, sawVolume, nearBsl, nearSsl, buyPct, cumDelta, volRecent, volNormal,
+        hiStatus: sideStatus(refHi, hiTouched, c > refHi), loStatus: sideStatus(refLo, loTouched, c < refLo),
+        flow: isNa(buyPct) ? 'na' : buyAbsorbed ? 'buyAbsorbed' : sellAbsorbed ? 'sellAbsorbed' : buyDom ? 'buyDom' : sellDom ? 'sellDom' : 'balanced',
+        lastLiq, lastLiqBarsAgo: isNa(lastLiqBar) ? NA : i - lastLiqBar,
+        is24hMode, sessionsOn, openRangeOn, anchorName, refName: sessionsOn ? 'Asia' : 'Prior ' + anchorName, htfSecs, htfTf,
+        trade: trade ? { dir: trade.dir, entry: trade.entry, stop: trade.stop, tp1: trade.tp1, tp2: trade.tp2, tp1Hit: trade.tp1Hit } : null,
+        run: rDir !== 0 ? { dir: rDir, entry: rEntry, stop: rStop, risk: rRisk } : null,
+      };
+    }
   }
-  return { trades, open: trade, series, info: { is24hMode, sessionsOn, anchorTf, htfTf, htfOn, n } };
+  return {
+    trades, open: trade, runTrades, runOpen: rDir !== 0 ? { dir: rDir, entry: rEntry, stop: rStop, risk: rRisk, openIdx: rOpenIdx } : null,
+    series, final, drawings: R ? R.live : null,
+    info: { is24hMode, sessionsOn, openRangeOn, anchorTf, anchorName, htfTf, htfSecs, htfOn, n },
+  };
 }
 
 export function summarize(trades) {

@@ -2,7 +2,8 @@
 // The DOM side runs inside ThndrX's chart iframe; these tests cover the pure conversions it relies on.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseColor, formatColor, parseOpacity, cairoDate, cairoMidnight, parseField, panelPlacement, renderPanel, mountButton, openSettings } from './ui.mjs';
+import { parseColor, formatColor, parseOpacity, cairoDate, cairoMidnight, parseField, panelPlacement } from './ui.mjs';
+import { renderPanel, mountButton, openSettings } from './ict-ui.mjs';
 import { INPUTS, defaultValues } from './inputs.mjs';
 import { withTransp } from './render-plan.mjs';
 
@@ -104,4 +105,44 @@ test('parseOpacity: an empty or unreadable opacity field is opaque, never invisi
   assert.equal(parseOpacity('150'), 1);
   assert.equal(parseOpacity('-5'), 0);
   assert.equal(formatColor('#ff9800', parseOpacity('')), '#FF9800');
+});
+
+// ---- two overlays on one chart (ICT slot 0, Session Order Flow slot 1) ----
+
+test('two overlays: the buttons sit side by side and panels in one corner stack instead of overlapping', async () => {
+  const { createUi, buttonPlacement } = await import('./ui.mjs');
+  const { ictUi } = await import('./ict-ui.mjs');
+  const body = new FakeEl('body');
+  const all = (el) => [el, ...el.children.flatMap(all)];
+  const doc = {
+    body, createElement: (t) => new FakeEl(t), getElementById: (id) => all(body).find((e) => e.id === id) || null,
+    querySelector: () => null, querySelectorAll: (sel) => all(body).filter((e) => sel === '.' + e.className),
+  };
+  const sofUi = createUi({ prefix: 'thndrx-sof', buttonText: 'SOF', buttonTitle: 't', title: 't', inputs: [], defaults: () => ({}), isValid: () => true, slot: 1 });
+  const panel = { position: 'top_right', bg: '#000000', rows: [{ cells: [{ text: 'x', color: '#fff' }] }] };
+  ictUi.renderPanel(doc, panel);
+  const ictEl = doc.getElementById('thndrx-ict-panel');
+  ictEl.offsetHeight = 120;
+  sofUi.renderPanel(doc, panel);
+  const sofEl = doc.getElementById('thndrx-sof-panel');
+  assert.equal(ictEl.style.top, '4px');
+  assert.equal(sofEl.style.top, `${4 + 120 + 4}px`);
+  sofUi.renderPanel(doc, { ...panel, position: 'bottom_left' });
+  assert.equal(sofEl.style.bottom, '32px', 'alone in its corner: no offset');
+  const area = { left: 0, top: 0, right: 400, bottom: 300 };
+  assert.ok(buttonPlacement(area, null, 1).left > buttonPlacement(area, null, 0).left);
+  assert.notEqual(sofUi.ids.button, ictUi.ids.button);
+});
+
+test('history loads are serialised through a lock on the chart frame', async () => {
+  const { withHistoryLock } = await import('./chart-port.mjs');
+  const frame = {}, order = [];
+  const job = (name, ms, fail = false) => () => new Promise((resolve, reject) => setTimeout(() => { order.push(name); fail ? reject(new Error(name)) : resolve(name); }, ms));
+  const a = withHistoryLock(frame, job('a', 30, true));
+  const b = withHistoryLock(frame, job('b', 1));
+  const c = withHistoryLock(frame, job('c', 1));
+  await assert.rejects(a, /a/);
+  assert.equal(await b, 'b');
+  assert.equal(await c, 'c');
+  assert.deepEqual(order, ['a', 'b', 'c'], 'b waits for a even though a fails');
 });

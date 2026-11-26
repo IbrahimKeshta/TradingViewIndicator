@@ -389,3 +389,28 @@ test('closedBars drops the forming last bar only', () => {
   assert.equal(closedBars(bars, '1D', sec('2026-11-24T13:00:00Z')), bars);
   assert.deepEqual(closedBars([], '1D', t), []);
 });
+
+// Seen live (2026-11-26): with two overlays loading at once, TradingView's setVisibleRange rejects ("Rejected by
+// timeout") or throws ("Value is null"). That must cost a round, not the load.
+for (const [how, fail] of [['rejects', () => Promise.reject(new Error('Rejected by timeout'))], ['throws', () => { throw new Error('Value is null'); }]]) {
+  test(`loadAllBars survives a setVisibleRange that ${how} and still restores the view`, async () => {
+    const chart = historyChart([300, 900, 1213]);
+    const ok = chart.setVisibleRange;
+    let failures = 1;
+    chart.setVisibleRange = (r) => (r.from !== 111 && failures-- > 0 ? fail() : ok(r));
+    const { bars, complete } = await loadAllBars(chart, { sleep: async () => {}, now: () => sec('2026-11-24T12:00:00Z') });
+    assert.equal(bars.length, 1213);
+    assert.equal(complete, true);
+    assert.deepEqual(chart.ranges[chart.ranges.length - 1], { from: 111, to: 222 }, 'user view restored');
+  });
+}
+
+test('loadAllBars with every zoom request failing ends incomplete within maxRounds, without throwing, view restored', async () => {
+  const chart = historyChart([300, 900, 1213]);
+  const ok = chart.setVisibleRange;
+  chart.setVisibleRange = (r) => (r.from !== 111 ? Promise.reject(new Error('Rejected by timeout')) : ok(r));
+  const { bars, complete } = await loadAllBars(chart, { sleep: async () => {}, maxRounds: 5 });
+  assert.equal(complete, false);
+  assert.equal(bars.length, 300);
+  assert.deepEqual(chart.ranges[chart.ranges.length - 1], { from: 111, to: 222 });
+});

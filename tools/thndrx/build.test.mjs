@@ -44,7 +44,8 @@ test('every module the bundle carries is registered once, in dependency order', 
   const ids = [...js.matchAll(/^__m\['([^']+)'\] = /gm)].map((m) => m[1]);
   assert.deepEqual(ids, [
     'backtest/ict-engine.mjs', 'thndrx/colors.mjs', 'thndrx/format.mjs', 'thndrx/inputs.mjs', 'thndrx/htf.mjs',
-    'thndrx/panel.mjs', 'thndrx/render-plan.mjs', 'thndrx/painter.mjs', 'thndrx/chart-port.mjs', 'thndrx/ui.mjs', 'thndrx/main.mjs',
+    'thndrx/panel.mjs', 'thndrx/chart-port.mjs', 'thndrx/render-plan.mjs', 'thndrx/painter.mjs', 'thndrx/ui.mjs', 'thndrx/ict-ui.mjs',
+    'thndrx/overlay.mjs', 'thndrx/main.mjs',
   ]);
 });
 
@@ -72,4 +73,38 @@ test('module transform rewrites imports and exports, and refuses what it cannot 
   assert.throws(() => transformModule('export default 1;', 'thndrx/y.mjs', known), /unsupported/);
   assert.throws(() => transformModule('export { hidden };', 'thndrx/y.mjs', known), /unsupported/);
   assert.throws(() => transformModule('const u = import.meta.url;', 'thndrx/y.mjs', known), /unsupported/);
+});
+
+// ---- the Session Order Flow userscript ----
+const SOF_DIST = fileURLToPath(new URL('./dist/thndrx-sof.user.js', import.meta.url));
+
+test('Session Order Flow bundle: header, no imports, its own entry, and it parses', () => {
+  execFileSync(process.execPath, [BUILD]);
+  const js = fs.readFileSync(SOF_DIST, 'utf8');
+  assert.match(js, /@name\s+ThndrX Session Order Flow$/m);
+  assert.match(js, /@match\s+https:\/\/x\.thndr\.app\/\*/);
+  assert.match(js, /@grant\s+none$/m);
+  assert.match(js, new RegExp(`@version\\s+${VERSION.replace(/\./g, '\\.')}$`, 'm'));
+  assert.doesNotMatch(js, /^\s*(import|export)\s/m);
+  assert.match(js, /startSof\(\);\s*\}\)\(\);\s*$/);
+  assert.doesNotMatch(js, /__m\['backtest\/ict-engine\.mjs'\]/, 'the ICT engine is not carried');
+  const ids = [...js.matchAll(/^__m\['([^']+)'\] = /gm)].map((m) => m[1]);
+  assert.equal(ids[0], 'backtest/sof-engine.mjs');
+  assert.equal(ids.at(-1), 'thndrx/sof-main.mjs');
+  assert.equal(new Set(ids).size, ids.length);
+});
+
+test('Session Order Flow bundle evaluates without throwing when no chart iframe exists', () => {
+  execFileSync(process.execPath, [BUILD]);
+  const js = fs.readFileSync(SOF_DIST, 'utf8');
+  const timers = [];
+  const document = { querySelector: () => null, getElementById: () => null };
+  const window = {
+    document, localStorage: { getItem: () => null, setItem: () => {} },
+    setInterval: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearInterval: () => {},
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: () => {},
+  };
+  new Function('window', 'document', js)(window, document);
+  assert.ok(timers.length >= 1);
+  for (const t of timers) t.fn();
 });

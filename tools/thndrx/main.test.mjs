@@ -37,7 +37,7 @@ function fakeChart(symbols, first, { resolution = '1D' } = {}) {
   const full = new Set(), live = new Map(), calls = [];
   let n = 0, reads = 0;
   const chart = {
-    sym: first, range: { ...USER_VIEW }, live, calls, empty: false, hang: false, grow: false, restores: 0,
+    sym: first, range: { ...USER_VIEW }, live, calls, empty: false, hang: false, grow: false, restores: 0, failReads: 0,
     symbol: () => 'UUID-' + chart.sym,
     symbolExt: () => ({ name: chart.sym, pricescale: 100, minmov: 1 }),
     resolution: () => resolution,
@@ -47,6 +47,7 @@ function fakeChart(symbols, first, { resolution = '1D' } = {}) {
       if (isUserView(r)) chart.restores++; else full.add(chart.sym);
     },
     exportData: ({ from } = {}) => {
+      if (chart.failReads > 0) { chart.failReads--; return Promise.reject(new Error('export failed')); }
       if (chart.hang && ++reads > 1) return new Promise(() => {});
       const all = chart.empty ? [] : symbols[chart.sym];
       const held = !full.has(chart.sym) ? all.slice(-300) : chart.grow ? all.slice(-Math.min(all.length, 300 + 10 * ++reads)) : all;
@@ -210,7 +211,7 @@ test('a hung history load shows Loading…, ends after the timeout with the view
   try {
     await until(() => panelEl(win), 2000, 'a panel');
     assert.deepEqual(panelRows(win), [['Loading…']]);
-    await until(() => panelRows(win)[0][0] === 'History load timed out', 5000, 'the timeout message');
+    await until(() => panelRows(win)[0][0].startsWith('History load timed out: retrying in'), 5000, 'the timeout message');
     assert.deepEqual(chart.range, USER_VIEW, 'view restored');
     assert.equal(chart.live.size, 0);
     chart.hang = false;
@@ -235,6 +236,21 @@ test('history that never settles is flagged in the panel Data row', async () => 
     const data = panelRows(win).find((r) => r[0] === 'Data');
     assert.ok(data && data[1].includes(INCOMPLETE_NOTE), JSON.stringify(data));
     assert.equal(INCOMPLETE_NOTE, 'History incomplete: the chart stopped loading');
+  } finally {
+    stop();
+    win.dispose();
+  }
+});
+
+test('a history load that fails is retried, not left on Loading… forever', async () => {
+  const chart = fakeChart({ COMI: makeBars(closes(100), { start: start0 }) }, 'COMI');
+  chart.failReads = 1; // the first exportData of the load rejects
+  const win = fakeWin(chart, 100);
+  const stop = start(win);
+  try {
+    await until(() => chart.live.size > 0, 8000, 'a paint after the failed load');
+    assert.equal(panelRows(win)[0][0], 'STRUCTURE');
+    assert.equal(win.errors.length, 1, 'the failure is logged once');
   } finally {
     stop();
     win.dispose();
