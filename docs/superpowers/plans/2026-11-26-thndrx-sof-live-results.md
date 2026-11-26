@@ -93,3 +93,24 @@ load that still fails shows `History load failed: retrying in N s` and is retrie
 After the fix: new SOF + old ICT started ICT-first both paint at 5 s; started SOF-first, the 0.1.0 ICT still sticks
 (its own code), so both scripts must be installed from the same build. Tests: `chart-port.test.mjs` (rejecting and
 throwing `setVisibleRange`), `main.test.mjs` (a failed load is retried).
+
+## Second code review (Fable model, PR #15) and what changed
+
+Verdict: merge with fixes; no critical issue; the two earlier fix commits were judged sound.
+
+| Finding | Change |
+|---|---|
+| Important: the drawings (closed bars) counted the forming bar's intrabars into the last closed bar, so during market hours the drawn POC / VA (and sweep-model drawings) used volume Pine puts in the next bar | `buildChart({ ltfEnd })` bounds the last bar's intrabars; the loop passes the forming bar's open for the closed-bar run (tests at engine and loop level; regression snapshot still identical) |
+| Important: the IndexedDB open had no `blocked` handler, so another tab on the old database version could leave the overlay on `Loading…` | blocked or slow (5 s) opens reject and the loader runs without persistence; a failed open is tried again later; our connection closes on `versionchange` (test with a blocked fake) |
+| A timed-out history load was not retried | same backoff as a failed load (`History load timed out: retrying in N s`) |
+| A failed intrabar load was retried only on a bar close (once a day on daily charts) | retried at most every 5 minutes from the live poll too, without the loading progress over the dashboard |
+| The bar-close paint ran the full engine twice | the forming-bar panel uses the panel-only build |
+| Two quick saves of `Lower Timeframe` could keep the older intrabars | only the load for the setting still in force is kept |
+| The retry backoff carried over a symbol change | reset on symbol / interval change |
+| A session string without `:days` lost its alignment | days optional (all seven by default); Sunday weeks only when Sunday trades and Friday does not |
+
+Left: the memory cache holds base rows as arrays (about 40-60 MB for 5 years of 1-minute bars, at most four series);
+storing them flat is a follow-up.
+
+Live re-check after the fixes: both scripts started together (SOF first), both drawn at 7 s, no errors, no writes;
+3 of the user's own saved COMI drawings were on the chart and untouched.

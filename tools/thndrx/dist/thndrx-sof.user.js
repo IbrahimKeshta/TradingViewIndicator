@@ -238,9 +238,12 @@ function buildLtf(ltfBars) {
 // Chart bars + optional intrabars -> the engine's chart object. Bars are [time, open, high, low, close, volume]
 // rows (seconds); an intrabar belongs to the chart bar whose [time, next time) holds it, as request.security_lower_tf.
 // Intrabars come as rows (ltfBars) or prebuilt by buildLtf (ltf); only the per-bar [start, end) index is made here.
+// ltfEnd (seconds, optional): where the last bar's intrabars stop. Without it the last bar takes every later intrabar;
+// a chart cut at its last CLOSED bar (the overlay's drawings) passes the forming bar's open, so the forming bar's
+// intrabars are not counted into the closed one.
 // sessionStartMin (optional): minutes after local midnight the exchange session opens; intraday higher timeframes
 // (timeframe.change("240") etc.) are then aligned to it like TradingView's session-aligned bars.
-function buildChart({ symbol, bars, ltfBars = null, ltf: prebuilt = null, tfSecs, symType, exTz, weekStart, mintick, from = null, to = null, sessionStartMin = null }) {
+function buildChart({ symbol, bars, ltfBars = null, ltf: prebuilt = null, ltfEnd = Infinity, tfSecs, symType, exTz, weekStart, mintick, from = null, to = null, sessionStartMin = null }) {
   let b = bars;
   if (from != null) b = b.filter((r) => r[0] >= from);
   if (to != null) b = b.filter((r) => r[0] < to);
@@ -256,7 +259,7 @@ function buildChart({ symbol, bars, ltfBars = null, ltf: prebuilt = null, tfSecs
     const L = base.time.length, n = chart.time.length, start = new Int32Array(n), end = new Int32Array(n);
     let k = 0;
     for (let i = 0; i < n; i++) {
-      const t0 = chart.time[i], t1 = i + 1 < n ? chart.time[i + 1] : Infinity;
+      const t0 = chart.time[i], t1 = i + 1 < n ? chart.time[i + 1] : ltfEnd;
       while (k < L && base.time[k] < t0) k++;
       start[i] = k;
       let e = k;
@@ -1439,16 +1442,18 @@ const tfSecsOf = (res) => RESOLUTION_SECS[String(res).toUpperCase()] ?? Number(r
 
 // Symbol facts the engine needs, from the datafeed's symbol info (session '1;1000-1430:12345': opens 10:00, trades
 // Sunday = day 1 to Thursday). Without symbol info: EGX (the caller names that guess in the Data row). With symbol info
-// whose session does not read as HHMM-HHMM:days (24x7 and the like): no session alignment (the UTC grid, as Pine's
-// timeframe.change sees a 24-hour market) and Monday weeks.
+// whose session does not read as HHMM-HHMM (24x7 and the like): no session alignment (the UTC grid, as Pine's
+// timeframe.change sees a 24-hour market). A session without ':days' trades all seven days (TradingView's default).
+// Weeks start on Sunday only for a Sunday-to-Thursday style market (Sunday trades, Friday does not, as on EGX).
 function symbolMeta(si) {
   if (!si) return { symType: 'stock', exTz: 'Africa/Cairo', sessionStartMin: 600, weekStart: 0 };
-  const m = /(\d{2})(\d{2})-\d{4}:(\d+)/.exec(String(si.session || ''));
+  const m = /(\d{2})(\d{2})-\d{4}(?::(\d+))?/.exec(String(si.session || ''));
+  const days = m ? m[3] || '1234567' : '';
   return {
     symType: si.type || 'stock',
     exTz: si.timezone || 'Africa/Cairo',
     sessionStartMin: m ? +m[1] * 60 + +m[2] : null,
-    weekStart: m && m[3].includes('1') ? 0 : 1,
+    weekStart: days.includes('1') && !days.includes('6') ? 0 : 1,
   };
 }
 
@@ -1506,7 +1511,8 @@ function toItems(drawings, bars, values, info, mintick) {
   return plan;
 }
 
-// ctx: chartInfo (symbol, mintick, resolution) + lastBarOpen, historyNote, volumeMissing, extra (from sof-main's
+// ctx: chartInfo (symbol, mintick, resolution) + lastBarOpen, historyNote, volumeMissing, ltfEnd (the forming bar's
+// open when `bars` stop at the last closed bar), extra (from sof-main's
 // prepare: { meta, ltf (prebuilt intrabars), note }).
 // opts.drawings = false: the dashboard only (the live panel refresh), skipping the Pine drawing registry.
 function buildSofPlan(bars, values, ctx, { drawings = true } = {}) {
@@ -1525,7 +1531,7 @@ function buildSofPlan(bars, values, ctx, { drawings = true } = {}) {
     symbol: ctx.symbol, mintick: ctx.mintick, tfSecs: tfSecsOf(ctx.resolution), symType: meta.symType, exTz: meta.exTz,
     weekStart: meta.weekStart, sessionStartMin: meta.sessionStartMin,
     bars: bars.map((b) => [b.time, b.open, b.high, b.low, b.close, ctx.volumeMissing ? 0 : b.volume]),
-    ltf: extra.ltf || null,
+    ltf: extra.ltf || null, ltfEnd: ctx.ltfEnd ?? Infinity,
   });
   const res = runSof(chart, { ...sofEngineCfg(values), lastBarOpen: !!ctx.lastBarOpen, render: drawings });
   if (drawings) Object.assign(plan, toItems(res.drawings, bars, values, res.info, ctx.mintick));
@@ -1551,7 +1557,7 @@ const SPAN_DAYS = { 1: 28, 5: 120, 10: 300, 60: 1500 };          // the `from` w
 const REQUEST_TIMEOUT_MS = 20000;
 const PAUSE_MS = 60;                                             // between page requests, to be gentle with the feed
 const TAIL_DAYS = 3;                                             // a cached series is refreshed from this far back
-const IDB_NAME = 'thndrx-sof', IDB_STORE = 'ltf', IDB_META = 'ltf-meta', IDB_KEEP = 12, MEM_KEEP = 4;
+const IDB_NAME = 'thndrx-sof', IDB_STORE = 'ltf', IDB_META = 'ltf-meta', IDB_KEEP = 12, MEM_KEEP = 4, IDB_OPEN_TIMEOUT_MS = 5000;
 
 // Pine timeframe.in_seconds for the strings the chart and the inputs use.
 function tfSeconds(tf) {
@@ -1700,7 +1706,12 @@ const unflat = (a) => { const rows = []; for (let k = 0; k < a.length; k += 6) r
 function idbStore(idb) {
   if (!idb) return null;
   let dbp = null;
+  // The open never waits for ever: another tab still running an older script holds the older database version and
+  // blocks an upgrade ('blocked'), so blocked or slow opens reject (the caller then works without persistence) and the
+  // next call tries again. Our own connection steps aside when a newer version is opened elsewhere.
   const open = () => (dbp ??= new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('IndexedDB open timed out')), IDB_OPEN_TIMEOUT_MS);
+    const done = (fn, v) => { clearTimeout(timer); fn(v); };
     const req = idb.open(IDB_NAME, 2);
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -1708,9 +1719,14 @@ function idbStore(idb) {
       db.createObjectStore(IDB_STORE, { keyPath: 'key' });
       db.createObjectStore(IDB_META, { keyPath: 'key' });
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  }));
+    req.onblocked = () => done(reject, new Error('IndexedDB blocked by another tab'));
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => { db.close(); dbp = null; };
+      done(resolve, db);
+    };
+    req.onerror = () => done(reject, req.error);
+  }).catch((e) => { dbp = null; throw e; }));
   const tx = async (mode, fn) => {
     const db = await open();
     return new Promise((resolve, reject) => {
@@ -2442,6 +2458,7 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
 
   // Every reload trigger after attach goes through here: symbol and interval events can arrive together.
   function scheduleReload(sess) {
+    sess.failures = 0;
     win.clearTimeout(sess.reloadTimer);
     sess.reloadTimer = win.setTimeout(() => reload(sess), RELOAD_DEBOUNCE_MS);
   }
@@ -2487,6 +2504,16 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
     if (sess.loading === run) sess.loading = null;
   }
 
+  // Never stay on 'Loading…' or a timeout message: say so and try again, 5 s, 10 s, ... at most a minute apart (a symbol
+  // or interval change replaces the pending retry with its own reload).
+  function retryLater(sess, text) {
+    sess.failures = (sess.failures || 0) + 1;
+    const wait = Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** (sess.failures - 1));
+    ui.renderPanel(sess.doc, app.messagePanel(values, `${text}: retrying in ${Math.round(wait / 1000)} s`));
+    win.clearTimeout(sess.reloadTimer);
+    sess.reloadTimer = win.setTimeout(() => reload(sess), wait);
+  }
+
   // Drop our drawings, show 'Loading…' (never the old symbol's rows), pull the history, then paint from scratch.
   async function load(sess, gen) {
     const current = () => gen === sess.gen && s === sess;
@@ -2506,7 +2533,7 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
       if (!current()) return;
       if (res.timedOut) {
         log('warn', 'history load timed out');
-        ui.renderPanel(sess.doc, app.messagePanel(values, TIMEOUT_TEXT));
+        retryLater(sess, TIMEOUT_TEXT);
         return;
       }
       const cur = chartInfo(sess.chart);
@@ -2527,15 +2554,8 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
       await paint(sess);
       sess.failures = 0;
     } catch (err) {
-      // Never stay on 'Loading…': say so and try again, 5 s, 10 s, ... at most a minute apart (a symbol or interval
-      // change replaces the pending retry with its own reload).
       log('error', 'reload failed', err);
-      if (!current()) return;
-      sess.failures = (sess.failures || 0) + 1;
-      const wait = Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** (sess.failures - 1));
-      ui.renderPanel(sess.doc, app.messagePanel(values, `History load failed: retrying in ${Math.round(wait / 1000)} s`));
-      win.clearTimeout(sess.reloadTimer);
-      sess.reloadTimer = win.setTimeout(() => reload(sess), wait);
+      if (current()) retryLater(sess, 'History load failed');
     }
   }
 
@@ -2564,9 +2584,12 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
     sess.paintWanted = false;
     sess.lastPaint = now();
     sess.paintedTime = lastClosedTime(sess.bars, sess.info.resolution, nowSec);
-    const { bars, note, plan: shown } = panelPlan(sess, nowSec);
-    const closed = closedBars(bars, sess.info.resolution, nowSec);
-    const drawn = closed === bars ? shown : app.buildPlan(closed, values, planCtx(sess, closed, nowSec, note));
+    const win0 = planWindow(sess.bars, nowSec, sess.start);
+    const closed = closedBars(win0.bars, sess.info.resolution, nowSec);
+    const formingOpen = closed !== win0.bars;
+    const { bars, note, plan: shown } = panelPlan(sess, nowSec, formingOpen ? (app.buildPanel || app.buildPlan) : app.buildPlan);
+    // The closed-bar run must not count the forming bar's intrabars into the last closed bar: ltfEnd = its open.
+    const drawn = !formingOpen ? shown : app.buildPlan(closed, values, { ...planCtx(sess, closed, nowSec, note), ltfEnd: bars[closed.length].time });
     if (gen !== sess.gen || s !== sess) return;
     ui.renderPanel(sess.doc, shown.panel);
     const capped = app.finishPlan ? app.finishPlan(drawn) : drawn;
@@ -2707,9 +2730,11 @@ async function prepareLtf(sess, h, cache) {
 
 async function refreshLtf(sess, h, reason, cache) {
   const x = sess.extra;
-  if (x && x.failedAt !== undefined) { // the load failed: try it again on a bar close, at most every RETRY_SEC
-    if (reason !== 'paint' || h.now() - x.failedAt < RETRY_SEC) return;
-    const extra = await prepareLtf(sess, h, cache);
+  if (x && x.failedAt !== undefined) {
+    // The load failed: try it again at most every RETRY_SEC, on a bar close or a live poll (a daily chart closes a bar
+    // once a day). Quietly: the dashboard stays up instead of showing the loading progress.
+    if (h.now() - x.failedAt < RETRY_SEC) return;
+    const extra = await prepareLtf(sess, { ...h, status: () => {} }, cache);
     if (extra && !h.cancelled() && sess.extra === x) sess.extra = extra;
     return;
   }
@@ -2738,10 +2763,11 @@ function makeSofApp(cache) {
     prepare: (sess, h) => prepareLtf(sess, h, cache),
     refresh: (sess, h, reason) => refreshLtf(sess, h, reason, cache),
     // A different lower timeframe needs other intrabars; everything else is a repaint on what is loaded.
+    // Two quick saves: only the intrabars for the setting still in force are kept (an older load finishing last is dropped).
     onSaved: async (sess, h, prev, next) => {
       if (prev.deltaTfInput === next.deltaTfInput) return;
       const extra = await prepareLtf(sess, h, cache);
-      if (extra && !h.cancelled()) sess.extra = extra;
+      if (extra && !h.cancelled() && h.values().deltaTfInput === next.deltaTfInput) sess.extra = extra;
     },
   });
 }

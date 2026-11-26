@@ -3064,6 +3064,7 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
 
   // Every reload trigger after attach goes through here: symbol and interval events can arrive together.
   function scheduleReload(sess) {
+    sess.failures = 0;
     win.clearTimeout(sess.reloadTimer);
     sess.reloadTimer = win.setTimeout(() => reload(sess), RELOAD_DEBOUNCE_MS);
   }
@@ -3109,6 +3110,16 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
     if (sess.loading === run) sess.loading = null;
   }
 
+  // Never stay on 'Loading…' or a timeout message: say so and try again, 5 s, 10 s, ... at most a minute apart (a symbol
+  // or interval change replaces the pending retry with its own reload).
+  function retryLater(sess, text) {
+    sess.failures = (sess.failures || 0) + 1;
+    const wait = Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** (sess.failures - 1));
+    ui.renderPanel(sess.doc, app.messagePanel(values, `${text}: retrying in ${Math.round(wait / 1000)} s`));
+    win.clearTimeout(sess.reloadTimer);
+    sess.reloadTimer = win.setTimeout(() => reload(sess), wait);
+  }
+
   // Drop our drawings, show 'Loading…' (never the old symbol's rows), pull the history, then paint from scratch.
   async function load(sess, gen) {
     const current = () => gen === sess.gen && s === sess;
@@ -3128,7 +3139,7 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
       if (!current()) return;
       if (res.timedOut) {
         log('warn', 'history load timed out');
-        ui.renderPanel(sess.doc, app.messagePanel(values, TIMEOUT_TEXT));
+        retryLater(sess, TIMEOUT_TEXT);
         return;
       }
       const cur = chartInfo(sess.chart);
@@ -3149,15 +3160,8 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
       await paint(sess);
       sess.failures = 0;
     } catch (err) {
-      // Never stay on 'Loading…': say so and try again, 5 s, 10 s, ... at most a minute apart (a symbol or interval
-      // change replaces the pending retry with its own reload).
       log('error', 'reload failed', err);
-      if (!current()) return;
-      sess.failures = (sess.failures || 0) + 1;
-      const wait = Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** (sess.failures - 1));
-      ui.renderPanel(sess.doc, app.messagePanel(values, `History load failed: retrying in ${Math.round(wait / 1000)} s`));
-      win.clearTimeout(sess.reloadTimer);
-      sess.reloadTimer = win.setTimeout(() => reload(sess), wait);
+      if (current()) retryLater(sess, 'History load failed');
     }
   }
 
@@ -3186,9 +3190,12 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
     sess.paintWanted = false;
     sess.lastPaint = now();
     sess.paintedTime = lastClosedTime(sess.bars, sess.info.resolution, nowSec);
-    const { bars, note, plan: shown } = panelPlan(sess, nowSec);
-    const closed = closedBars(bars, sess.info.resolution, nowSec);
-    const drawn = closed === bars ? shown : app.buildPlan(closed, values, planCtx(sess, closed, nowSec, note));
+    const win0 = planWindow(sess.bars, nowSec, sess.start);
+    const closed = closedBars(win0.bars, sess.info.resolution, nowSec);
+    const formingOpen = closed !== win0.bars;
+    const { bars, note, plan: shown } = panelPlan(sess, nowSec, formingOpen ? (app.buildPanel || app.buildPlan) : app.buildPlan);
+    // The closed-bar run must not count the forming bar's intrabars into the last closed bar: ltfEnd = its open.
+    const drawn = !formingOpen ? shown : app.buildPlan(closed, values, { ...planCtx(sess, closed, nowSec, note), ltfEnd: bars[closed.length].time });
     if (gen !== sess.gen || s !== sess) return;
     ui.renderPanel(sess.doc, shown.panel);
     const capped = app.finishPlan ? app.finishPlan(drawn) : drawn;

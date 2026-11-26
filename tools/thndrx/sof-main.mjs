@@ -58,9 +58,11 @@ export async function prepareLtf(sess, h, cache) {
 
 export async function refreshLtf(sess, h, reason, cache) {
   const x = sess.extra;
-  if (x && x.failedAt !== undefined) { // the load failed: try it again on a bar close, at most every RETRY_SEC
-    if (reason !== 'paint' || h.now() - x.failedAt < RETRY_SEC) return;
-    const extra = await prepareLtf(sess, h, cache);
+  if (x && x.failedAt !== undefined) {
+    // The load failed: try it again at most every RETRY_SEC, on a bar close or a live poll (a daily chart closes a bar
+    // once a day). Quietly: the dashboard stays up instead of showing the loading progress.
+    if (h.now() - x.failedAt < RETRY_SEC) return;
+    const extra = await prepareLtf(sess, { ...h, status: () => {} }, cache);
     if (extra && !h.cancelled() && sess.extra === x) sess.extra = extra;
     return;
   }
@@ -89,10 +91,11 @@ export function makeSofApp(cache) {
     prepare: (sess, h) => prepareLtf(sess, h, cache),
     refresh: (sess, h, reason) => refreshLtf(sess, h, reason, cache),
     // A different lower timeframe needs other intrabars; everything else is a repaint on what is loaded.
+    // Two quick saves: only the intrabars for the setting still in force are kept (an older load finishing last is dropped).
     onSaved: async (sess, h, prev, next) => {
       if (prev.deltaTfInput === next.deltaTfInput) return;
       const extra = await prepareLtf(sess, h, cache);
-      if (extra && !h.cancelled()) sess.extra = extra;
+      if (extra && !h.cancelled() && h.values().deltaTfInput === next.deltaTfInput) sess.extra = extra;
     },
   });
 }

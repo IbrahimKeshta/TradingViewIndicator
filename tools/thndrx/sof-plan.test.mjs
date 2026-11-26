@@ -140,3 +140,9 @@ test('the panel-only build (live refresh) gives the same dashboard as the full p
   assert.deepEqual(panelOnly.panel, full.panel);
   assert.equal(panelOnly.boxes.length + panelOnly.lines.length + panelOnly.labels.length, 0);
 });
+
+test('symbolMeta: a session without days trades all week (Monday weeks); EGX keeps Sunday weeks', () => {
+  assert.deepEqual(symbolMeta({ type: 'stock', timezone: 'America/New_York', session: '0930-1600' }), { symType: 'stock', exTz: 'America/New_York', sessionStartMin: 570, weekStart: 1 });
+  assert.equal(symbolMeta({ type: 'stock', timezone: 'Africa/Cairo', session: '1;1000-1430:12345' }).weekStart, 0);
+  assert.equal(symbolMeta({ type: 'crypto', timezone: 'Etc/UTC', session: '0000-0000:1234567' }).weekStart, 1);
+});

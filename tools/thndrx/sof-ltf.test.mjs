@@ -185,3 +185,13 @@ test('requests carry whole-second timestamps even when the clock has a fraction'
   await pageBars(df, {}, 10, { fromSec: rows[0][0] + 0.25, toSec: rows[rows.length - 1][0] + 60.656, sleep: noSleep });
   assert.ok(df.calls.every((c) => Number.isInteger(c.from) && Number.isInteger(c.to)), JSON.stringify(df.calls[0]));
 });
+
+test('a blocked IndexedDB (another tab on the old version) never hangs the load: it runs without persistence', async () => {
+  const blockedIdb = { open: () => { const req = {}; setTimeout(() => req.onblocked && req.onblocked(), 5); return req; } };
+  const cache = createLtfCache({ idb: blockedIdb });
+  const rows = egxBars('2025-01-05T00:00:00Z', 20, 10);
+  const got = await loadBase({ df: fakeDatafeed(rows), si: {}, base: 10, key: 'B|10', fromSec: rows[0][0], nowSec: rows[rows.length - 1][0] + 60, cache, sleep: noSleep });
+  assert.equal(got.rows.length, rows.length);
+  const again = await loadBase({ df: fakeDatafeed(rows), si: {}, base: 10, key: 'B|10', fromSec: rows[0][0], nowSec: rows[rows.length - 1][0] + 60, cache, sleep: noSleep });
+  assert.equal(again.rows.length, rows.length, 'the memory cache still serves it');
+});

@@ -404,3 +404,13 @@ for (const [how, fail] of [['rejects', () => Promise.reject(new Error('Rejected 
     assert.deepEqual(chart.ranges[chart.ranges.length - 1], { from: 111, to: 222 }, 'user view restored');
   });
 }
+
+test('loadAllBars with every zoom request failing ends incomplete within maxRounds, without throwing, view restored', async () => {
+  const chart = historyChart([300, 900, 1213]);
+  const ok = chart.setVisibleRange;
+  chart.setVisibleRange = (r) => (r.from !== 111 ? Promise.reject(new Error('Rejected by timeout')) : ok(r));
+  const { bars, complete } = await loadAllBars(chart, { sleep: async () => {}, maxRounds: 5 });
+  assert.equal(complete, false);
+  assert.equal(bars.length, 300);
+  assert.deepEqual(chart.ranges[chart.ranges.length - 1], { from: 111, to: 222 });
+});

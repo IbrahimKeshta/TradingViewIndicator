@@ -179,3 +179,24 @@ test('ICT and Session Order Flow on one chart: both paint, both panels show, the
     assert.deepEqual(win.errors, []);
   } finally { stops.forEach((s) => s()); win.dispose(); }
 });
+
+test('with a bar forming, the drawings are computed on the closed bars with the forming bar\'s intrabars left out', async () => {
+  const { startOverlay } = await import('./overlay.mjs');
+  const { makeSofApp } = await import('./sof-main.mjs');
+  const symbols = { COMI: symbolSet(100, 600) };
+  const bars = symbols.COMI.bars, last = bars[bars.length - 1];
+  const chart = fakeChart(symbols, 'COMI'), df = fakeDatafeed(symbols);
+  const win = fakeWin(chart, df, 50);
+  const seen = [];
+  const app = makeSofApp(createLtfCache());
+  const spy = { ...app, buildPlan: (b, v, c) => { seen.push({ n: b.length, ltfEnd: c.ltfEnd }); return app.buildPlan(b, v, c); } };
+  const stop = startOverlay(spy, win, { now: () => (last.time + 9 * 3600) * 1000, cache: createLtfCache() }); // 11:00 Cairo on the last bar's day
+  try {
+    await until(() => chart.live.size > 0, 8000, 'the paint');
+    const drawnCall = seen.find((x) => x.n === bars.length - 1);
+    assert.ok(drawnCall, JSON.stringify(seen));
+    assert.equal(drawnCall.ltfEnd, last.time);
+    assert.ok(!seen.some((x) => x.n === bars.length && x.ltfEnd !== undefined), 'the full-bar run keeps every intrabar');
+    assert.deepEqual(win.errors, []);
+  } finally { stop(); win.dispose(); }
+});

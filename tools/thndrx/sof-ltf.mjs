@@ -12,7 +12,7 @@ const SPAN_DAYS = { 1: 28, 5: 120, 10: 300, 60: 1500 };          // the `from` w
 const REQUEST_TIMEOUT_MS = 20000;
 const PAUSE_MS = 60;                                             // between page requests, to be gentle with the feed
 const TAIL_DAYS = 3;                                             // a cached series is refreshed from this far back
-const IDB_NAME = 'thndrx-sof', IDB_STORE = 'ltf', IDB_META = 'ltf-meta', IDB_KEEP = 12, MEM_KEEP = 4;
+const IDB_NAME = 'thndrx-sof', IDB_STORE = 'ltf', IDB_META = 'ltf-meta', IDB_KEEP = 12, MEM_KEEP = 4, IDB_OPEN_TIMEOUT_MS = 5000;
 
 // Pine timeframe.in_seconds for the strings the chart and the inputs use.
 export function tfSeconds(tf) {
@@ -161,7 +161,12 @@ const unflat = (a) => { const rows = []; for (let k = 0; k < a.length; k += 6) r
 function idbStore(idb) {
   if (!idb) return null;
   let dbp = null;
+  // The open never waits for ever: another tab still running an older script holds the older database version and
+  // blocks an upgrade ('blocked'), so blocked or slow opens reject (the caller then works without persistence) and the
+  // next call tries again. Our own connection steps aside when a newer version is opened elsewhere.
   const open = () => (dbp ??= new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('IndexedDB open timed out')), IDB_OPEN_TIMEOUT_MS);
+    const done = (fn, v) => { clearTimeout(timer); fn(v); };
     const req = idb.open(IDB_NAME, 2);
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -169,9 +174,14 @@ function idbStore(idb) {
       db.createObjectStore(IDB_STORE, { keyPath: 'key' });
       db.createObjectStore(IDB_META, { keyPath: 'key' });
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  }));
+    req.onblocked = () => done(reject, new Error('IndexedDB blocked by another tab'));
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => { db.close(); dbp = null; };
+      done(resolve, db);
+    };
+    req.onerror = () => done(reject, req.error);
+  }).catch((e) => { dbp = null; throw e; }));
   const tx = async (mode, fn) => {
     const db = await open();
     return new Promise((resolve, reject) => {

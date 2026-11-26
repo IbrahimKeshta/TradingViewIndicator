@@ -121,3 +121,14 @@ test('liquidity run matches TradingView trade by trade: BTC 4H', { skip: !has('t
   assert.equal(port.length, tv.length);
   port.forEach((p, k) => { assert.equal(p.open, tv[k].open); assert.equal(p.close, tv[k].close); assert.equal(p.dir, tv[k].dir); assert.ok(Math.abs(p.r - tv[k].r) < 1e-3, `${p.open} ${p.r} vs ${tv[k].r}`); });
 });
+
+test('buildChart: ltfEnd keeps the forming bar\'s intrabars out of the last closed bar', () => {
+  const H = 3600, t0 = Date.UTC(2026, 0, 4, 8) / 1000;
+  const bars = [[t0, 1, 2, 0.5, 1.5, 100], [t0 + H, 1.5, 2, 1, 1.8, 100]];
+  const m1 = Array.from({ length: 150 }, (_, k) => [t0 + k * 60, 1, 1.1, 0.9, 1, 1]); // 2.5 hours of 1m bars
+  const open = buildChart({ symbol: 'X', bars, ltfBars: m1, tfSecs: H, symType: 'stock', exTz: 'Africa/Cairo', weekStart: 0, mintick: 0.01 });
+  assert.equal(open.ltf.end[1] - open.ltf.start[1], 90, 'without ltfEnd the last bar takes every later intrabar');
+  const closed = buildChart({ symbol: 'X', bars, ltfBars: m1, ltfEnd: t0 + 2 * H, tfSecs: H, symType: 'stock', exTz: 'Africa/Cairo', weekStart: 0, mintick: 0.01 });
+  assert.equal(closed.ltf.end[1] - closed.ltf.start[1], 60);
+  assert.equal(closed.ltf.end[0] - closed.ltf.start[0], 60);
+});

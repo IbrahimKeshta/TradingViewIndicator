@@ -211,7 +211,7 @@ test('a hung history load shows Loading…, ends after the timeout with the view
   try {
     await until(() => panelEl(win), 2000, 'a panel');
     assert.deepEqual(panelRows(win), [['Loading…']]);
-    await until(() => panelRows(win)[0][0] === 'History load timed out', 5000, 'the timeout message');
+    await until(() => panelRows(win)[0][0].startsWith('History load timed out: retrying in'), 5000, 'the timeout message');
     assert.deepEqual(chart.range, USER_VIEW, 'view restored');
     assert.equal(chart.live.size, 0);
     chart.hang = false;

@@ -224,9 +224,12 @@ export function buildLtf(ltfBars) {
 // Chart bars + optional intrabars -> the engine's chart object. Bars are [time, open, high, low, close, volume]
 // rows (seconds); an intrabar belongs to the chart bar whose [time, next time) holds it, as request.security_lower_tf.
 // Intrabars come as rows (ltfBars) or prebuilt by buildLtf (ltf); only the per-bar [start, end) index is made here.
+// ltfEnd (seconds, optional): where the last bar's intrabars stop. Without it the last bar takes every later intrabar;
+// a chart cut at its last CLOSED bar (the overlay's drawings) passes the forming bar's open, so the forming bar's
+// intrabars are not counted into the closed one.
 // sessionStartMin (optional): minutes after local midnight the exchange session opens; intraday higher timeframes
 // (timeframe.change("240") etc.) are then aligned to it like TradingView's session-aligned bars.
-export function buildChart({ symbol, bars, ltfBars = null, ltf: prebuilt = null, tfSecs, symType, exTz, weekStart, mintick, from = null, to = null, sessionStartMin = null }) {
+export function buildChart({ symbol, bars, ltfBars = null, ltf: prebuilt = null, ltfEnd = Infinity, tfSecs, symType, exTz, weekStart, mintick, from = null, to = null, sessionStartMin = null }) {
   let b = bars;
   if (from != null) b = b.filter((r) => r[0] >= from);
   if (to != null) b = b.filter((r) => r[0] < to);
@@ -242,7 +245,7 @@ export function buildChart({ symbol, bars, ltfBars = null, ltf: prebuilt = null,
     const L = base.time.length, n = chart.time.length, start = new Int32Array(n), end = new Int32Array(n);
     let k = 0;
     for (let i = 0; i < n; i++) {
-      const t0 = chart.time[i], t1 = i + 1 < n ? chart.time[i + 1] : Infinity;
+      const t0 = chart.time[i], t1 = i + 1 < n ? chart.time[i + 1] : ltfEnd;
       while (k < L && base.time[k] < t0) k++;
       start[i] = k;
       let e = k;
