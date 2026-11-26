@@ -20,12 +20,25 @@ const opts = (shape, overrides, extra = {}) => ({ shape, overrides, ...extra, ..
 // `meta` is plan.meta: bands need its price range (fixed per load by the caller; see desiredItems). Returns { multi, points, options }.
 export function toShapeCalls(item, kind, meta) {
   switch (kind) {
-    case 'box':
+    case 'box': {
+      // Optional Pine box text (Session Order Flow's session and pool boxes): rectangles take `text` plus label
+      // overrides on the v31 library (checked live 2026-11-26). Boxes without text keep the plain call.
+      const overrides = { color: item.border, backgroundColor: item.bg, fillBackground: true, linewidth: 1 };
+      if (item.dashed) overrides.linestyle = LINE_STYLE.dashed;
+      const extra = {};
+      if (item.text) {
+        Object.assign(overrides, {
+          showLabel: true, textColor: item.textColor, fontSize: FONT_SIZE[item.textSize] ?? FONT_SIZE.tiny,
+          horzLabelsAlign: item.hAlign ?? 'center', vertLabelsAlign: item.vAlign ?? 'middle',
+        });
+        extra.text = item.text;
+      }
       return {
         multi: true,
         points: [{ time: item.t1, price: item.top }, { time: item.t2, price: item.bottom }],
-        options: opts('rectangle', { color: item.border, backgroundColor: item.bg, fillBackground: true, linewidth: 1 }),
+        options: opts('rectangle', overrides, extra),
       };
+    }
     case 'line':
       return {
         multi: true,

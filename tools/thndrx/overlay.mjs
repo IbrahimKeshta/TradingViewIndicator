@@ -47,6 +47,7 @@ export function startOverlay(app, win = window, { now = () => Date.now(), onPain
     cancelled: () => !current(),
     status: (text) => { if (current()) ui.renderPanel(sess.doc, app.messagePanel(values, text)); },
     now: () => now() / 1000,
+    values: () => values,
     win, log,
   });
 

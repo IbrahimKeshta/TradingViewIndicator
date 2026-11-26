@@ -1161,7 +1161,18 @@ function colorNew(c, transp) {
   const a = Math.round((1 - transp / 100) * 1e4) / 1e4;
   return `rgba(${r}, ${g}, ${b}, ${a})`;
 }
-return { PINE_COLORS, colorNew };
+
+// Pine color.new(c, transp) for any colour string a user can hold: '#RGB', '#RRGGBB', '#RRGGBBAA' or 'rgb(a)(...)'.
+// color.new replaces the transparency, it does not compose with an existing one.
+function withTransp(c, transp) {
+  if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c)) return colorNew(c, transp);
+  const hex8 = /^#([0-9a-f]{6})[0-9a-f]{2}$/i.exec(c);
+  if (hex8) return colorNew('#' + hex8[1], transp);
+  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*[\d.]+\s*)?\)$/i.exec(c);
+  if (rgb) return colorNew('#' + [1, 2, 3].map((k) => Number(rgb[k]).toString(16).padStart(2, '0')).join(''), transp);
+  throw new Error(`unsupported colour ${c}`);
+}
+return { PINE_COLORS, colorNew, withTransp };
 })();
 __m['thndrx/format.mjs'] = (function () {
 'use strict';
@@ -1174,7 +1185,7 @@ function fmtPrice(x, mintick) {
   return x.toFixed(decimals);
 }
 
-// Pine str.tostring(x, pattern) for the four patterns the indicator uses.
+// Pine str.tostring(x, pattern) for the patterns the two indicators use.
 function fmtNum(x, pattern) {
   if (!Number.isFinite(x)) return 'NaN';
   switch (pattern) {
@@ -1182,10 +1193,20 @@ function fmtNum(x, pattern) {
     case '0.0': return x.toFixed(1);
     case '0.00': return x.toFixed(2);
     case '#.##': return String(Number(x.toFixed(2))); // drops trailing zeros; "-0" prints as "0"
+    case '#': return String(Number(x.toFixed(0)));
+    case '#.#': case '0.#': return String(Number(x.toFixed(1)));
     default: throw new Error(`unsupported number pattern ${pattern}`);
   }
 }
-return { fmtPrice, fmtNum };
+
+// Pine format.volume: K / M / B with at most two decimals, trailing zeros dropped (1847582 -> "1.85M", 500000 -> "500K").
+function fmtVolume(x) {
+  if (!Number.isFinite(x)) return 'NaN';
+  const a = Math.abs(x), sign = x < 0 ? '-' : '';
+  const [div, unit] = a >= 1e9 ? [1e9, 'B'] : a >= 1e6 ? [1e6, 'M'] : a >= 1e3 ? [1e3, 'K'] : [1, ''];
+  return sign + String(Number((a / div).toFixed(2))) + unit;
+}
+return { fmtPrice, fmtNum, fmtVolume };
 })();
 __m['thndrx/inputs.mjs'] = (function () {
 'use strict';
@@ -1967,7 +1988,7 @@ __m['thndrx/render-plan.mjs'] = (function () {
 const { runEngine, inSession } = __m['backtest/ict-engine.mjs'];
 const { htfBiasSeries } = __m['thndrx/htf.mjs'];
 const { resolveConfig } = __m['thndrx/inputs.mjs'];
-const { PINE_COLORS, colorNew } = __m['thndrx/colors.mjs'];
+const { PINE_COLORS, colorNew, withTransp: colorWithTransp } = __m['thndrx/colors.mjs'];
 const { fmtNum, fmtPrice } = __m['thndrx/format.mjs'];
 const { buildPanel } = __m['thndrx/panel.mjs'];
 const { priceRange: barPriceRange } = __m['thndrx/chart-port.mjs'];
@@ -1995,16 +2016,7 @@ const PHASE = Object.freeze({
   RESULT_TR: 1907,
 });
 
-// Pine color.new(c, transp) for any colour string a user can hold: '#RGB', '#RRGGBB', '#RRGGBBAA' or 'rgb(a)(...)'.
-// color.new replaces the transparency, it does not compose with an existing one.
-function withTransp(c, transp) {
-  if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c)) return colorNew(c, transp);
-  const hex8 = /^#([0-9a-f]{6})[0-9a-f]{2}$/i.exec(c);
-  if (hex8) return colorNew('#' + hex8[1], transp);
-  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*[\d.]+\s*)?\)$/i.exec(c);
-  if (rgb) return colorNew('#' + [1, 2, 3].map((k) => Number(rgb[k]).toString(16).padStart(2, '0')).join(''), transp);
-  throw new Error(`unsupported colour ${c}`);
-}
+const withTransp = colorWithTransp; // moved to colors.mjs; kept here for existing callers
 
 const emptyPlan = () => ({ meta: null, boxes: [], lines: [], labels: [], series: [], fills: [], markers: [], bands: [], panel: null });
 
@@ -2432,12 +2444,25 @@ const opts = (shape, overrides, extra = {}) => ({ shape, overrides, ...extra, ..
 // `meta` is plan.meta: bands need its price range (fixed per load by the caller; see desiredItems). Returns { multi, points, options }.
 function toShapeCalls(item, kind, meta) {
   switch (kind) {
-    case 'box':
+    case 'box': {
+      // Optional Pine box text (Session Order Flow's session and pool boxes): rectangles take `text` plus label
+      // overrides on the v31 library (checked live 2026-11-26). Boxes without text keep the plain call.
+      const overrides = { color: item.border, backgroundColor: item.bg, fillBackground: true, linewidth: 1 };
+      if (item.dashed) overrides.linestyle = LINE_STYLE.dashed;
+      const extra = {};
+      if (item.text) {
+        Object.assign(overrides, {
+          showLabel: true, textColor: item.textColor, fontSize: FONT_SIZE[item.textSize] ?? FONT_SIZE.tiny,
+          horzLabelsAlign: item.hAlign ?? 'center', vertLabelsAlign: item.vAlign ?? 'middle',
+        });
+        extra.text = item.text;
+      }
       return {
         multi: true,
         points: [{ time: item.t1, price: item.top }, { time: item.t2, price: item.bottom }],
-        options: opts('rectangle', { color: item.border, backgroundColor: item.bg, fillBackground: true, linewidth: 1 }),
+        options: opts('rectangle', overrides, extra),
       };
+    }
     case 'line':
       return {
         multi: true,
@@ -3014,6 +3039,7 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
     cancelled: () => !current(),
     status: (text) => { if (current()) ui.renderPanel(sess.doc, app.messagePanel(values, text)); },
     now: () => now() / 1000,
+    values: () => values,
     win, log,
   });
 

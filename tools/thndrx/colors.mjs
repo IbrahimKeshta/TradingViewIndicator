@@ -29,3 +29,14 @@ export function colorNew(c, transp) {
   const a = Math.round((1 - transp / 100) * 1e4) / 1e4;
   return `rgba(${r}, ${g}, ${b}, ${a})`;
 }
+
+// Pine color.new(c, transp) for any colour string a user can hold: '#RGB', '#RRGGBB', '#RRGGBBAA' or 'rgb(a)(...)'.
+// color.new replaces the transparency, it does not compose with an existing one.
+export function withTransp(c, transp) {
+  if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c)) return colorNew(c, transp);
+  const hex8 = /^#([0-9a-f]{6})[0-9a-f]{2}$/i.exec(c);
+  if (hex8) return colorNew('#' + hex8[1], transp);
+  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*[\d.]+\s*)?\)$/i.exec(c);
+  if (rgb) return colorNew('#' + [1, 2, 3].map((k) => Number(rgb[k]).toString(16).padStart(2, '0')).join(''), transp);
+  throw new Error(`unsupported colour ${c}`);
+}
