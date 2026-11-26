@@ -144,3 +144,54 @@ Added for `docs/superpowers/plans/2026-11-20-six-stock-deep-dive.md`.
 | `variants.mjs` | runs V1-V6 (invalidation variants on base and rec) over the six stocks, the other dividend-adjusted names and all of `data/egx`: trades, win %, avg / total R, PF, pre-2023 vs 2023+, breadth. |
 
 With the default `invalidation: 'on'` the engine output is unchanged (`validate.mjs --data data/egx-div --cut 2026-11-04 --combos base,r4,conf,idx,both,r1,r2,r3` still matches every chart-config read).
+
+## Session Order Flow port
+
+A second, separate port: `src/session-orderflow.pine` (Session Order Flow) for any timeframe, with
+lower-timeframe intrabars. Results and the pass rule: `docs/superpowers/plans/2026-11-21-session-orderflow-backtest.md`.
+
+```
+export PATH="/c/Users/PC/AppData/Roaming/fnm/aliases/default:$PATH"
+node tools/backtest/fetch-binance.mjs BTCUSDT,ETHUSDT 2023-11 2026-10          # Binance 1m archive -> data/sof/binance/*.bin
+node --experimental-websocket tools/backtest/fetch-sof-egx.mjs                 # EGX100 1D / 30m / 60m -> data/sof/egx/
+node --experimental-websocket tools/backtest/tv-feed.mjs EGX:COMI 1 data/sof/COMI_1.csv 300000   # any symbol, any timeframe
+node tools/backtest/sof/check-dw.mjs                                           # port vs TradingView Data Window values
+node tools/backtest/sof/compare-log.mjs --log <pine-logs.csv> --egx COMI --res 60   # port vs a `Log Closed Trades` export
+node --max-old-space-size=8000 tools/backtest/sof/backtest.mjs --set crypto15|crypto60|egxD|egx60 [--cfg '{...}']
+node tools/backtest/sof/diagnose.mjs --set egxD        # sweep entries vs random entries
+node tools/backtest/sof/verdict-test.mjs --set egxD --heldout   # the dashboard verdict on its own
+```
+
+| File | What |
+|---|---|
+| `sof-engine.mjs` | `runSof(chart, cfg)`: Asia range, range used, reference range and sweeps, liquidity pools (chart + HTF), developing volume profile from intrabars, estimated delta (TradingView CVD tie rule), conditions verdict, trade module, plus backtest-only costs (`costPctPerSide`, `commissionPer`, `positionSize`) and `longOnly` / `shortOnly`. `SOF_DEFAULTS` equal the Pine defaults. `deltaTieRule: 'zero'` and `beSameBar: false` reproduce the script before the 2026-11-21 corrections. `keepSeries: true` returns per-bar POC / VAH / VAL / prior POC / delta / verdict / bias. |
+| `sof-data.mjs` | `buildChart` (chart bars + intrabars mapped per bar), `loadEgxChart(sym, '1D' / '60')`, `loadCryptoChart(sym, 15 / 60)` (chart bars aggregated from the 1m archive, the 1m bars as intrabars). |
+| `tv-feed.mjs` | TradingView websocket fetcher for any symbol / resolution. The unauthenticated feed caps intraday history at roughly 6–8k bars (EGX 30m from 2024-01, 1H from 2022-01, 1m about 3 weeks; BTC 15m about 80 days). |
+| `fetch-binance.mjs` | data.binance.vision monthly 1m zips (bsdtar at `C:\Windows\System32\tar.exe`), one binary file per symbol: Float64 rows `[time, o, h, l, c, v]`. |
+| `sof/backtest.mjs`, `sof/symbols.mjs` | all symbols x all four `Conditions Filter` settings, held-out tagging per the plan doc, pass-rule printout; trades to `out/sof/` (git-ignored). |
+
+**Validation:** 37/37 Data Window values and 340/340 logged trades identical to TradingView (BTC 15m, ETH 1H,
+COMI 1H, COMI 1D). To compare whole histories, set the script's `Lower Timeframe` to the chart timeframe
+(15 on 15m, 60 on 1H) and run the port without intrabars: TradingView's own intrabar history (plan-limited,
+but deeper than the free feed) is otherwise the only source of differences.
+
+## Model search (`research/`)
+
+Search for a model profitable on both EGX and crypto, under a discovery / validation / final-exam protocol
+fixed in advance: `docs/superpowers/plans/2026-11-21-profitable-model-search.md`.
+
+```
+node --max-old-space-size=12000 tools/backtest/research/discover.mjs --sets eD,e60,c1440,c240,c60,c15 [--only F7] [--stage validation --names "a|b"]
+node --max-old-space-size=12000 tools/backtest/research/final.mjs --name "F8 F4 pool ema200 trail8"     # run once, final-exam data only
+node tools/backtest/research/compare-run.mjs --log <pine-logs.csv> --chart data/sof/COMI_1D.csv --res 1D --type stock   # Pine liquidity run vs the simulator
+```
+
+| File | What |
+|---|---|
+| `features.mjs` | per-bar features (OHLCV, ATR, EMAs, prior-N highs/lows, RSI, Bollinger width, every Session Order Flow state incl. the sweep / run event bits) cached in `data/sof/feat/<set>/`. Sets `c15 c60 c240 c1440 eD e60`; an `F` suffix reads the final-exam folders `data/sof/binance-final`, `data/sof/egx-final`. |
+| `sim.mjs` | one position at a time; entry at the signal close; gap stops fill at the open; stop before target on the same bar; trail and breakeven updated at the close; costs per side plus EGX commission. |
+| `families.mjs` | F1 breakout, F2 pullback, F3 FAVOURABLE onset, F4 liquidity run, F5 squeeze, F6 RSI(2) mean reversion, F7 / F8 refinements (120 configs). |
+| `discover.mjs`, `final.mjs`, `compare-run.mjs` | discovery / validation tables, the one-shot final exam, and the Pine-vs-simulator diff. |
+
+The winner, F8 "F4 pool ema200 trail8", is the Session Order Flow trade module's default `Liquidity run`
+entry model; the Pine version reproduces the simulator trade for trade (COMI 1D 33/33, BTC 4H 46/46).
