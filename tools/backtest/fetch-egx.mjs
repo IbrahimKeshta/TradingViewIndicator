@@ -1,8 +1,8 @@
-// Download full daily OHLCV history (split-adjusted by default; ADJ=dividends or --adjust dividends for dividend-adjusted) for EGX stocks + indices
-// from TradingView's public websocket feed into CSV files.
+// Download full OHLCV history (daily by default; --interval for another timeframe) for EGX stocks + indices
+// from TradingView's public websocket feed into CSV files. Split-adjusted by default; ADJ=dividends or --adjust dividends for dividend-adjusted.
 //
 // Usage (Node 20 needs the experimental WebSocket flag):
-//   node --experimental-websocket tools/backtest/fetch-egx.mjs [outDir] [SYM1,SYM2,...]  [--adjust splits|dividends] [--tf 1W]
+//   node --experimental-websocket tools/backtest/fetch-egx.mjs [outDir] [SYM1,SYM2,...]  [--adjust splits|dividends] [--tf 1W | --interval 60]
 //   (or ADJ=dividends / TF=1W; the flags go LAST)
 //
 //   outDir   default: data/egx
@@ -33,10 +33,12 @@ const ai = process.argv.indexOf('--adjust');
 const ADJ = (ai > 0 ? process.argv[ai + 1] : process.env.ADJ) || 'splits';
 if (!['splits', 'dividends', 'none'].includes(ADJ)) throw new Error('bad adjustment ' + ADJ);
 if (ai > 0) process.argv.splice(ai, 2);
-// Bar timeframe: '1D' (default) or another TradingView resolution, e.g. '1W' for weekly (data/wk-div). --tf 1W or TF=1W.
-const ti = process.argv.indexOf('--tf');
-const TF = (ti > 0 ? process.argv[ti + 1] : process.env.TF) || '1D';
-if (ti > 0) process.argv.splice(ti, 2);
+// Bar timeframe sent to create_series: '1D' (default) or any TradingView resolution, e.g. '1W' (data/wk-div), '60' (minutes), '15'.
+// --tf 1W, --interval 60 (same flag, two names) or TF=1W. For intraday bars the CSV 'date' column stays the Cairo date of the bar's
+// open; 'time' carries the time of day.
+let TF = process.env.TF || '1D';
+for (const flag of ['--tf', '--interval']) { const k = process.argv.indexOf(flag); if (k > 0) { TF = process.argv[k + 1]; process.argv.splice(k, 2); } }
+if (!/^d*[DWM]$|^d+$/.test(TF)) throw new Error('bad timeframe ' + TF);
 
 const outDir = path.resolve(process.argv[2] || 'data/egx');
 const only = process.argv[3] ? process.argv[3].split(',').map(s => s.trim()).filter(Boolean) : null;
@@ -150,7 +152,7 @@ for (const t of targets) {
         first: cairoDate.format(new Date(r.bars[0][0] * 1000)), last: cairoDate.format(new Date(r.bars[r.bars.length - 1][0] * 1000)),
         mintick: m.minmov / m.pricescale, pricescale: m.pricescale, minmov: m.minmov,
         timezone: m.timezone, session: m.session, description: m.description, type: m.type,
-        rounds: r.rounds, adjustment: ADJ,
+        rounds: r.rounds, adjustment: ADJ, interval: TF,
       };
       if (flags.length) rec.flags = flags;
       allMeta[t.key] = rec;

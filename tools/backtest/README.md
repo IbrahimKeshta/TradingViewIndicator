@@ -27,7 +27,8 @@ ADJ=dividends TF=1W node --experimental-websocket tools/backtest/fetch-egx.mjs d
 | `weekly-tests.mjs` | The 2026-11-23 weekly search (`--stage 1` exits, `--stage 2 --base JSON` swing lookbacks, `--final JSON`) on `data/wk-div`, by the protocol in `docs/superpowers/plans/2026-11-23-egx-weekly-preset.md`. Result: no weekly preset; EGX Daily is the best tested on weekly. |
 | `exit-tests.mjs` | Backup-stop and time-stop grids against `egx-daily`, with the pass rules of `docs/superpowers/plans/2026-11-21-egx-daily-exit-tests.md`. |
 | `validate.mjs` | Acceptance test against `docs/superpowers/plans/2026-11-02-egx-trust-raw-results.tsv`. |
-| `compare-log.mjs` | Trade-by-trade diff against a Pine `Log Closed Trades` export. |
+| `compare-log.mjs` | Trade-by-trade diff against a Pine `Log Closed Trades` export (daily, keyed on the open date). |
+| `pine-log.mjs` | Shared by `compare-log.mjs` and `tools/thndrx/parity.mjs`: parses the Pine `TRADE,...` log lines, formats times as Pine does in Africa/Cairo, and diffs port against TradingView trades. Tests: `node --test tools/backtest/pine-log.test.mjs`. |
 | `data.mjs`, `debug-bar.mjs` | CSV loading, state dump. |
 | `fetch-egx.mjs` | Data download (separate tool; see the adjustment note below). |
 
@@ -44,10 +45,18 @@ Displacement, Apply Costs, and `recordResult` (scale-out in thirds, `blendedResu
 time against Test Start). Every record has the `logTrade()` fields plus `openIdx` / `closeIdx` (bar indices), `grossR`
 and `costR`.
 
-Not ported: Require HTF Bias on a timeframe above the chart (on 1D with the default Bias Timeframe 1D the Pine filter
-turns itself off, which is what the port does; any other Bias Timeframe throws), all drawing, panels and alerts, and the
-watch-zone ATR (display only). Only closed trades are returned, as the Pine panel counts them; `result.openTrades` holds a
-still-open one.
+Not ported here: the HTF bias computation itself (Require HTF Bias reads a per-bar `opts.htfBias` Int8Array of 1 / -1 / 0 plus
+`opts.htfActive`; without them the filter is off, which is what Pine does on 1D with the default Bias Timeframe; the ThndrX
+overlay computes the bias from the chart bars in `tools/thndrx/htf.mjs`), all drawing, panels and alerts, and the
+watch-zone ATR (display only). Only closed trades are returned, as the Pine panel
+counts them; `result.openTrades` holds a still-open one.
+
+Render state (for the ThndrX overlay, `tools/thndrx`; observation only, no effect on trades): the result also carries
+`series` (per-bar ma, rsi, structAtr, spanA/B, killzoneActive, trailLong/Short/Dir, avwapLow/High, longSetup/shortSetup),
+`events` (every BOS/CHoCH per tier), `opens` (every trade opened, PB or TR) and `final` (swings, structure state,
+zones with their `left` edge, live trades, and `final.gate`: the Pine gate row for the last bar, side, score/of, first
+unmet reason and the Mom/Part/Ichi marks). Trades carry `liq1..3`. The `killzoneAlwaysEarned` option (on in `egx-daily`,
+Pine `egxPreset`) counts the killzone point as earned on every bar. Tests: `node --test tools/backtest/ict-engine.test.mjs`.
 
 ## Two things the validation taught
 
@@ -140,6 +149,7 @@ Added for `docs/superpowers/plans/2026-11-20-six-stock-deep-dive.md`.
 | `invalidation` (engine option, default `'on'` = Pine behaviour) | what closes a trade on an internal CHoCH against it: `'on'` any internal CHoCH (booked at the close, "Invalidated"); `'off'` never; `'major'` only a Major-tier CHoCH; `'belowEntry'` an internal CHoCH only if the bar also closes beyond the entry (long: close < entry). Port-only; no Pine input. |
 | `finalStop` (trade record field) | the stop at exit, so a trailed stop can be told from the initial stop. Record-only. |
 | `fetch-egx.mjs ... --adjust dividends` (or `ADJ=dividends`) | price adjustment requested from TradingView; default `splits` (what `data/egx` holds), `dividends` is what the charts show with ADJ on (`data/egx-div`). The flag goes last; `_meta.json` is merged when a symbol list is given and records the adjustment. |
+| `fetch-egx.mjs ... --interval <tf>` | bar size requested from TradingView; default `1D`, `60` for hourly bars (also `15`, `1W`, ...). Same rule: the flag goes last, after `--adjust` or the positional arguments. For intraday the CSV `date` column stays the Cairo date and `time` carries the time of day; `_meta.json` records `interval`. |
 | `six-stock.mjs` | per-trade analysis after Stop / Invalidated exits (max high in R, bars to the next target, lowest low, hold-with-original-stop test) against a base-rate control from every bar of the same stock. `--symbols all --lists no --tag pooled-100 --data data/egx` pools it over a universe. Output goes to `data/six-stock-out/` (git-ignored). |
 | `variants.mjs` | runs V1-V6 (invalidation variants on base and rec) over the six stocks, the other dividend-adjusted names and all of `data/egx`: trades, win %, avg / total R, PF, pre-2023 vs 2023+, breadth. |
 
