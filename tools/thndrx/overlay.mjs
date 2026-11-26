@@ -28,6 +28,7 @@ const WATCH_MS = 2000;          // chart iframe watch (ThndrX workspaces can dro
 const MIN_PANEL_MS = 2000;      // live updates recompute the panel at most this often
 const REPAINT_MIN_MS = 60000;   // a closed bar repaints the drawings at most this often (R25)
 const RELOAD_DEBOUNCE_MS = 500; // symbol and interval events can arrive together
+const RETRY_FIRST_MS = 5000, RETRY_MAX_MS = 60000; // a failed load is retried after 5 s, 10 s, ... at most a minute apart
 const LOADING_TEXT = 'Loading…', TIMEOUT_TEXT = 'History load timed out';
 export const INCOMPLETE_NOTE = 'History incomplete: the chart stopped loading';
 
@@ -151,8 +152,17 @@ export function startOverlay(app, win = window, { now = () => Date.now(), onPain
       }
       sess.ready = true;
       await paint(sess);
+      sess.failures = 0;
     } catch (err) {
+      // Never stay on 'Loading…': say so and try again, 5 s, 10 s, ... at most a minute apart (a symbol or interval
+      // change replaces the pending retry with its own reload).
       log('error', 'reload failed', err);
+      if (!current()) return;
+      sess.failures = (sess.failures || 0) + 1;
+      const wait = Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** (sess.failures - 1));
+      ui.renderPanel(sess.doc, app.messagePanel(values, `History load failed: retrying in ${Math.round(wait / 1000)} s`));
+      win.clearTimeout(sess.reloadTimer);
+      sess.reloadTimer = win.setTimeout(() => reload(sess), wait);
     }
   }
 

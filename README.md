@@ -1579,6 +1579,7 @@ box (or the Asia / London / New York boxes in 24h mode), the reference high and 
 liquidity pools with the taken ones faded, the developing POC and value area with the prior period's set, the trade
 module (both entry models) and the dashboard, all from the Pine inputs (the `SOF` button). Install it the same way;
 it runs on its own or next to the confluence overlay (the buttons sit side by side, the panels keep to their corners).
+Install both from the same build: an ICT script older than 0.2.0 can stay on `Loading…` when both start together.
 
 - **Intrabars from Thndr.** The volume profile and the delta are built from lower-timeframe bars as in Pine (1 minute
   on intraday charts, 30 minutes on daily, 4 hours above). The script reads them through the chart's own data feed,

@@ -79,3 +79,17 @@ Left as they are (noted):
   instead of Pine's pointer labels offset above / below the bar.
 - Changing `Lower Timeframe` while a history load is running is applied at the next load.
 - Two spellings of a month in seconds (2628003 / 2592000); both only ever compared with 240 minutes.
+
+## Follow-up: ICT stuck on Loading… with both overlays (user report, 2026-11-26)
+
+Reproduced by starting both userscripts at the same moment on page load (as Tampermonkey does). With the ICT script
+from master (0.1.0, no shared lock) the two history loads overlap; TradingView's `setVisibleRange` then throws
+`Value is null` (or rejects `Rejected by timeout`), the error escaped `loadAllBars`, and the overlay that hit it stayed
+on `Loading…` for good: the second script to start, 3/3 runs in each order. With both scripts from this branch the lock
+keeps the loads apart (both paint in 5-7 s, either order).
+
+Fixed in 0.2.0: a failed zoom request costs a round of the history load (and that round never counts as settled); a
+load that still fails shows `History load failed: retrying in N s` and is retried after 5 s, 10 s, ... up to a minute.
+After the fix: new SOF + old ICT started ICT-first both paint at 5 s; started SOF-first, the 0.1.0 ICT still sticks
+(its own code), so both scripts must be installed from the same build. Tests: `chart-port.test.mjs` (rejecting and
+throwing `setVisibleRange`), `main.test.mjs` (a failed load is retried).

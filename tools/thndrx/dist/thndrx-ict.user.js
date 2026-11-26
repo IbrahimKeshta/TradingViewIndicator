@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         ThndrX ICT + RSI/MA Confluence
-// @version      0.1.0
+// @version      0.2.0
 // @description  The ICT + RSI/MA Confluence indicator drawn on the ThndrX chart (unsaved drawings, settings in localStorage).
 // @match        https://x.thndr.app/*
 // @grant        none
@@ -1873,7 +1873,10 @@ async function loadAllBars(chart, {
     await Promise.resolve().then(() => chart.setVisibleRange(saved)).catch(() => {});
   };
   const from = historyFrom(resolution, now());
-  const ask = () => chart.setVisibleRange({ from, to: Math.floor(now()) });
+  // A failed ask costs a round, not the load: with two overlays loading at once TradingView's setVisibleRange rejects
+  // ("Rejected by timeout") or throws ("Value is null") (seen live 2026-11-26); the next round asks again, and a round
+  // after a failed ask never counts as settled (nothing new was asked for, so an unchanged first bar proves nothing).
+  const ask = () => Promise.resolve().then(() => chart.setVisibleRange({ from, to: Math.floor(now()) })).then(() => true, () => false);
 
   const run = async () => {
     let read = await readBars(chart), complete = false;
@@ -1881,15 +1884,15 @@ async function loadAllBars(chart, {
     if (!saved) return out(false);
     try {
       if (stop()) return out(true);
-      await ask();
+      let asked = await ask();
       for (let round = 1; round < maxRounds; round++) {
         await sleep(POLL_MS);
         if (stop()) return out(true);
         const next = await readBars(chart);
-        const settled = next.bars.length > 0 && read.bars.length > 0 && next.bars[0].time === read.bars[0].time;
+        const settled = asked && next.bars.length > 0 && read.bars.length > 0 && next.bars[0].time === read.bars[0].time;
         read = next;
         if (settled) { complete = true; break; }
-        await ask(); // the feed may hand history over in chunks
+        asked = await ask(); // the feed may hand history over in chunks
       }
     } finally {
       await restore();
@@ -3020,6 +3023,7 @@ const WATCH_MS = 2000;          // chart iframe watch (ThndrX workspaces can dro
 const MIN_PANEL_MS = 2000;      // live updates recompute the panel at most this often
 const REPAINT_MIN_MS = 60000;   // a closed bar repaints the drawings at most this often (R25)
 const RELOAD_DEBOUNCE_MS = 500; // symbol and interval events can arrive together
+const RETRY_FIRST_MS = 5000, RETRY_MAX_MS = 60000; // a failed load is retried after 5 s, 10 s, ... at most a minute apart
 const LOADING_TEXT = 'Loading…', TIMEOUT_TEXT = 'History load timed out';
 const INCOMPLETE_NOTE = 'History incomplete: the chart stopped loading';
 
@@ -3143,8 +3147,17 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
       }
       sess.ready = true;
       await paint(sess);
+      sess.failures = 0;
     } catch (err) {
+      // Never stay on 'Loading…': say so and try again, 5 s, 10 s, ... at most a minute apart (a symbol or interval
+      // change replaces the pending retry with its own reload).
       log('error', 'reload failed', err);
+      if (!current()) return;
+      sess.failures = (sess.failures || 0) + 1;
+      const wait = Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** (sess.failures - 1));
+      ui.renderPanel(sess.doc, app.messagePanel(values, `History load failed: retrying in ${Math.round(wait / 1000)} s`));
+      win.clearTimeout(sess.reloadTimer);
+      sess.reloadTimer = win.setTimeout(() => reload(sess), wait);
     }
   }
 

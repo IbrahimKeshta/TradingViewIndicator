@@ -131,7 +131,12 @@ Live results and the bugs found there: `docs/superpowers/plans/2026-11-26-thndrx
 ## Both overlays on one chart
 
 The buttons sit side by side, panels in the same corner stack instead of overlapping, and the two history loads queue on
-a lock kept on the chart frame (a load zooms the chart out and back; two at once would restore each other's zoom). When
+a lock kept on the chart frame (a load zooms the chart out and back; two at once would restore each other's zoom).
+**Install both scripts from the same build (version 0.2.0 or later).** An older ICT script (0.1.0, before the lock)
+loads at the same moment as Session Order Flow; TradingView then rejects one of the two zoom requests (`Value is null`,
+`Rejected by timeout`) and the 0.1.0 script stays on `Loading…` (seen 2026-11-26). From 0.2.0 a rejected zoom request
+only costs a round, and a history load that still fails says so in the panel and is retried after 5 s, 10 s, ... up to
+a minute apart. When
 many drawings are created or removed at once, Thndr's own analytics library logs `[PostHog.js] This capture call is
 ignored due to client rate limiting` in the console; no analytics request was seen leaving the page.
 

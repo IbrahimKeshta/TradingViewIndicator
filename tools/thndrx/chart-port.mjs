@@ -185,7 +185,10 @@ export async function loadAllBars(chart, {
     await Promise.resolve().then(() => chart.setVisibleRange(saved)).catch(() => {});
   };
   const from = historyFrom(resolution, now());
-  const ask = () => chart.setVisibleRange({ from, to: Math.floor(now()) });
+  // A failed ask costs a round, not the load: with two overlays loading at once TradingView's setVisibleRange rejects
+  // ("Rejected by timeout") or throws ("Value is null") (seen live 2026-11-26); the next round asks again, and a round
+  // after a failed ask never counts as settled (nothing new was asked for, so an unchanged first bar proves nothing).
+  const ask = () => Promise.resolve().then(() => chart.setVisibleRange({ from, to: Math.floor(now()) })).then(() => true, () => false);
 
   const run = async () => {
     let read = await readBars(chart), complete = false;
@@ -193,15 +196,15 @@ export async function loadAllBars(chart, {
     if (!saved) return out(false);
     try {
       if (stop()) return out(true);
-      await ask();
+      let asked = await ask();
       for (let round = 1; round < maxRounds; round++) {
         await sleep(POLL_MS);
         if (stop()) return out(true);
         const next = await readBars(chart);
-        const settled = next.bars.length > 0 && read.bars.length > 0 && next.bars[0].time === read.bars[0].time;
+        const settled = asked && next.bars.length > 0 && read.bars.length > 0 && next.bars[0].time === read.bars[0].time;
         read = next;
         if (settled) { complete = true; break; }
-        await ask(); // the feed may hand history over in chunks
+        asked = await ask(); // the feed may hand history over in chunks
       }
     } finally {
       await restore();
