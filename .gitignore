@@ -14,3 +14,6 @@
 
 # Downloaded market data (tools/backtest/fetch-egx.mjs output)
 data/
+
+# Backtest output (tools/backtest --out, sof/backtest.mjs); regenerable from data/
+out/
