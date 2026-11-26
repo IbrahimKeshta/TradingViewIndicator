@@ -7,7 +7,9 @@
 //          prior period's final levels.
 // Stage 4: estimated volume delta from lower-timeframe bars (net delta, pressure, flow state).
 // Stage 5: conditions verdict (a fixed rule checklist) and the grouped dashboard.
-// Stage 6: an optional, experimental trade module (off by default). With it off, this script
+// Stage 6: an optional trade module (off by default). Its default entry model, the liquidity run
+//          (added 2026-11-21), is the rule set that passed an out-of-sample backtest; the original
+//          sweep-reversal model is kept as an option and lost in the same test. With it off, this script
 //          describes context only and draws no entries.
 //
 // Nothing here repaints: every classification that is drawn or alerted is decided on a confirmed
@@ -72,7 +74,10 @@ pressureLen  = input.int(20, "Pressure Window (bars)", minval = 2, maxval = 200,
 domPct       = input.float(55.0, "Dominance Threshold (% of volume)", minval = 51, maxval = 90, step = 1, group = "Volume Delta", tooltip = "Buying (or selling) share of volume over the pressure window needed to call one side dominant. If one side is dominant but price has not moved its way over the same window, the state reads Absorption instead.")
 
 // ---------------- Trade module (experimental) ----------------
-showTrades   = input.bool(false, "Enable Trade Module", group = "Trade Module (experimental)", tooltip = "Draws an entry, stop and two targets when a liquidity level is swept: traded through, then closed back inside on the same bar. Entry is that bar's close.\n\nThis is an unvalidated experiment. The record it reports ignores spread, commission and slippage, and assumes half the position is closed at TP1 and half at TP2.")
+showTrades   = input.bool(false, "Enable Trade Module", group = "Trade Module (experimental)", tooltip = "Draws entries, stops and exits for the chosen Entry Model and keeps a record of how those trades would have gone. The record ignores spread, commission and slippage.")
+entryModel   = input.string("Liquidity run (trend)", "Entry Model", options = ["Liquidity run (trend)", "Sweep reversal"], group = "Trade Module (experimental)", tooltip = "Liquidity run (trend): a liquidity pool is traded through and the bar CLOSES beyond it, in the direction of the trend EMA. Entry at that close; the stop starts the chosen ATR multiple away and trails that far behind the best close. No target: the trend is held until the trailing stop is hit. Backtested 2026-11-21 on unseen data: profitable on EGX daily and 1H and on crypto 4H, not on crypto 1H or 15m. Most of the profit came from long trades.\n\nSweep reversal: the original model (a level traded through, then closed back inside; fade it). It lost on every market in the same backtest. The Conditions Filter and the stop / target settings below apply only to this model.")
+runStopAtr   = input.float(8.0, "Liquidity Run: Stop And Trail (x ATR)", minval = 1.0, step = 0.5, group = "Trade Module (experimental)", tooltip = "Initial stop distance and trailing distance, in ATR(14). The trail follows the best close since entry and only ever tightens. 8 is the tested value.")
+runTrendLen  = input.int(200, "Liquidity Run: Trend EMA Length", minval = 10, group = "Trade Module (experimental)", tooltip = "Longs only above this EMA, shorts only below it. 200 is the tested value.")
 tradeGate    = input.string("Not against bias", "Conditions Filter", options = ["Favourable only", "Not against bias", "Any except Avoid", "No filter"], group = "Trade Module (experimental)", tooltip = "Which sweeps become trades.\n\nFavourable only: the verdict is FAVOURABLE for the trade's side.\nNot against bias: verdict is not AVOID and the bias is not opposite.\nAny except Avoid: verdict is not AVOID.\nNo filter: every sweep. Use this as the baseline to see whether the filter is adding anything.")
 trigPools    = input.bool(true, "Trigger On Liquidity Pool Sweeps", group = "Trade Module (experimental)")
 trigRef      = input.bool(true, "Trigger On Reference High / Low Sweeps", group = "Trade Module (experimental)")
@@ -85,6 +90,7 @@ tp2MaxR      = input.float(4.0, "TP2 Maximum (R)", minval = 1.0, step = 0.5, gro
 tp2FallbackR = input.float(2.0, "TP2 Fallback (R)", minval = 0.5, step = 0.25, group = "Trade Module (experimental)")
 beAfterTp1   = input.bool(true, "Move Stop To Entry After TP1", group = "Trade Module (experimental)")
 maxTradeBars = input.int(0, "Close Trade After N Bars (0 = never)", minval = 0, group = "Trade Module (experimental)")
+logTrades    = input.bool(false, "Log Closed Trades (Pine Logs)", group = "Trade Module (experimental)", tooltip = "Writes one line per closed trade to the Pine Logs panel (open and close time, side, entry, stop, targets, outcome, R). Use the panel's Download logs to export the whole history, for example to check the record against an offline backtest. Pine Logs only work on personal, unpublished scripts.")
 
 // ---------------- Conditions ----------------
 lowVolRatio = input.float(0.7, "Low-Volume Threshold (x normal)", minval = 0.1, maxval = 1.0, step = 0.05, group = "Conditions", tooltip = "Recent volume (over the pressure window) below this fraction of the longer-run average counts as low participation.")
@@ -520,7 +526,25 @@ if newAnchor or na(profStep)
 ltfTfAuto = timeframe.isintraday ? "1" : timeframe.isdaily ? "30" : "240"
 ltfTfWant = deltaTfInput == "Auto" ? ltfTfAuto : deltaTfInput
 ltfTf     = timeframe.in_seconds(ltfTfWant) < tfSeconds ? ltfTfWant : timeframe.period
-[ltfHi, ltfLo, ltfVol, ltfDeltas] = request.security_lower_tf(syminfo.tickerid, ltfTf, [high, low, volume, close > open ? volume : close < open ? -volume : 0.0])
+
+// Signed volume of one bar, the same rule as TradingView's own Volume Delta / CVD: up bar = buying,
+// down bar = selling, and a bar that closes where it opened takes its side from the previous close,
+// or keeps the last side if that is unchanged too. Treating unchanged bars as zero instead throws
+// away the closing prints on exchange-hours markets (most of the last hour's volume on EGX) and can
+// flip the sign of a whole bar's delta.
+signedVolume() =>
+    var bool isBuy = true
+    if close > open
+        isBuy := true
+    else if close < open
+        isBuy := false
+    else if close > nz(close[1], close)
+        isBuy := true
+    else if close < nz(close[1], close)
+        isBuy := false
+    isBuy ? nz(volume) : -nz(volume)
+
+[ltfHi, ltfLo, ltfVol, ltfDeltas] = request.security_lower_tf(syminfo.tickerid, ltfTf, [high, low, volume, signedVolume()])
 
 barVol = nz(volume)
 useLtf = ltfVol.size() > 0 and nz(ltfVol.sum()) > 0
@@ -664,7 +688,7 @@ valuePos = na(devPoc) ? 0 : close > devVah ? 1 : close < devVal ? -1 : 0
 // and signs each one's volume by its direction, which is the usual approximation. On forex and
 // CFD symbols the underlying figure is tick volume, so treat the result as activity, not size.
 
-barDeltaFallback = close > open ? barVol : close < open ? -barVol : 0.0
+barDeltaFallback = signedVolume()
 barDelta  = ltfDeltas.size() > 0 ? nz(ltfDeltas.sum()) : barDeltaFallback
 
 var float cumDelta = 0.0
@@ -734,6 +758,7 @@ type Trade
     float risk
     float tp1
     float tp2
+    int   openTime
     bool  tp1Hit  = false
     int   openBar = 0
     line  lnEntry = na
@@ -789,6 +814,12 @@ if not na(trade) and bar_index > trade.openBar
                 resultR := 0.5 * tp1R + 0.5 * tp2R
                 nTp2    += 1
                 evTp2   := true
+            else if beAfterTp1 and cameBack
+                // TP1 and a return to entry on one bar: the order is unknown, so it is scored as the
+                // worse case, TP1 then the breakeven stop, the same rule as a bar touching stop and target.
+                resultR   := 0.5 * tp1R
+                nTp1Only  += 1
+                evStopped := true
             else if beAfterTp1
                 t.stop := t.entry
                 t.lnStop.set_y1(t.stop)
@@ -823,11 +854,15 @@ if not na(trade) and bar_index > trade.openBar
     if not na(resultR)
         totalR  += resultR
         nTrades += 1
+        if logTrades
+            string outcome = evTp2 ? "tp2" : not evStopped ? "timeout" : t.tp1Hit ? "tp1only" : "stopped"
+            log.info("TRADE open={0} close={1} dir={2} entry={3} stop={4} tp1={5} tp2={6} outcome={7} r={8}", str.format_time(t.openTime, "yyyy-MM-dd'T'HH:mm", "UTC"), str.format_time(time, "yyyy-MM-dd'T'HH:mm", "UTC"), t.dir, str.tostring(t.entry, format.mintick), str.tostring(t.entry - t.dir * t.risk, format.mintick), str.tostring(t.tp1, format.mintick), str.tostring(t.tp2, format.mintick), outcome, str.tostring(resultR, "0.0000"))
         label.new(time, high, (resultR > 0 ? "+" : "") + str.tostring(resultR, "#.##") + "R", xloc = xloc.bar_time, yloc = yloc.abovebar, style = label.style_none, textcolor = resultR > 0 ? colBull : resultR < 0 ? colBear : color.gray, size = size.small)
         trade := na
 
 // ---- open a new trade ----
-if showTrades and na(trade) and barstate.isconfirmed
+isRunModel = entryModel == "Liquidity run (trend)"
+if showTrades and not isRunModel and na(trade) and barstate.isconfirmed
     bool lowSwept  = (trigPools and sslSwept) or (trigRef and loSweepEvent)
     bool highSwept = (trigPools and bslSwept) or (trigRef and hiSweepEvent)
     int  dir = lowSwept and not highSwept ? 1 : highSwept and not lowSwept ? -1 : 0
@@ -851,7 +886,7 @@ if showTrades and na(trade) and barstate.isconfirmed
             float tp2 = na(best) or math.abs(best - entry) > risk * tp2MaxR ? entry + dir * risk * tp2FallbackR : best
 
             color cDir = dir > 0 ? colBull : colBear
-            Trade t = Trade.new(dir, entry, stop, risk, tp1, tp2)
+            Trade t = Trade.new(dir, entry, stop, risk, tp1, tp2, time)
             t.openBar := bar_index
             t.lnEntry := line.new(time, entry, time_close, entry, xloc = xloc.bar_time, color = color.gray, style = line.style_dotted)
             t.lnStop  := line.new(time, stop, time_close, stop, xloc = xloc.bar_time, color = colBear, width = 2)
@@ -864,6 +899,87 @@ if showTrades and na(trade) and barstate.isconfirmed
             trade      := t
             longEntry  := dir > 0
             shortEntry := dir < 0
+
+// ============================================================
+// LIQUIDITY RUN MODEL  (the trade module's default entry model)
+// ============================================================
+// Entry   a chart- or higher-timeframe liquidity pool is traded through and the bar CLOSES beyond it
+//         (the "run" resolution above), in the direction of the trend EMA. BSL run -> long, SSL run -> short.
+//         Entry at that close. One trade at a time.
+// Stop    runStopAtr x ATR(14) from entry, then trailed the same distance behind the best close since
+//         entry, updated at each bar's close and applied from the next bar; it only ever tightens.
+// Exit    the trailing stop. A bar that opens beyond the stop exits at its open (gap), otherwise at the stop.
+// Record  single unit, R = (exit - entry) / initial risk, before costs. This is the rule set that passed the
+//         2026-11-21 backtest (docs/superpowers/plans/2026-11-21-profitable-model-search.md); keep it in step
+//         with tools/backtest/research (family F8, "F4 pool ema200 trail8").
+// State is held in plain var series rather than a UDT (see the UDT mutation note in the repo memory).
+
+emaTrend = ta.ema(close, runTrendLen)
+atrRaw   = ta.atr(14)
+
+var int   rDir      = 0
+var float rEntry    = na
+var float rStop     = na
+var float rRisk     = na
+var float rBest     = na
+var int   rOpenTime = na
+var int   rOpenBar  = na
+var line  rLnEntry  = na
+var line  rLnStop   = na
+var int   rN        = 0
+var int   rWins     = 0
+var float rTotal    = 0.0
+var float rBestR    = na
+var float rWorstR   = na
+
+if showTrades and isRunModel and rDir != 0 and bar_index > rOpenBar
+    float exitPx = na
+    string why   = ""
+    if rDir > 0 ? open <= rStop : open >= rStop
+        exitPx := open
+        why    := "gap"
+    else if rDir > 0 ? low <= rStop : high >= rStop
+        exitPx := rStop
+        why    := rStop == rEntry - rDir * rRisk ? "stop" : "trail"
+    if not na(exitPx)
+        float rr = (exitPx - rEntry) * rDir / rRisk
+        rTotal  += rr
+        rN      += 1
+        rWins   += rr > 0 ? 1 : 0
+        rBestR  := na(rBestR) ? rr : math.max(rBestR, rr)
+        rWorstR := na(rWorstR) ? rr : math.min(rWorstR, rr)
+        evStopped := true
+        rLnEntry.set_x2(time)
+        rLnStop.set_x2(time)
+        label.new(time, high, (rr > 0 ? "+" : "") + str.tostring(rr, "0.00") + "R", xloc = xloc.bar_time, yloc = yloc.abovebar, style = label.style_none, textcolor = rr > 0 ? colBull : rr < 0 ? colBear : color.gray, size = size.small)
+        if logTrades
+            log.info("RUN open={0} close={1} dir={2} entry={3} stop={4} exit={5} outcome={6} r={7}", str.format_time(rOpenTime, "yyyy-MM-dd'T'HH:mm", "UTC"), str.format_time(time, "yyyy-MM-dd'T'HH:mm", "UTC"), rDir, str.tostring(rEntry, format.mintick), str.tostring(rEntry - rDir * rRisk, format.mintick), str.tostring(exitPx, format.mintick), why, str.tostring(rr, "0.0000"))
+        rDir := 0
+    else
+        rBest := rDir > 0 ? math.max(rBest, close) : math.min(rBest, close)
+        float ts = rBest - rDir * runStopAtr * atrRaw
+        if rDir > 0 ? ts > rStop : ts < rStop
+            rStop := ts
+        rLnEntry.set_x2(time_close)
+        rLnStop.set_y1(rStop)
+        rLnStop.set_y2(rStop)
+        rLnStop.set_x2(time_close)
+
+if showTrades and isRunModel and rDir == 0 and barstate.isconfirmed and not na(atrRaw) and atrRaw > close * 1e-4
+    int d = bslRun and not sslRun ? 1 : sslRun and not bslRun ? -1 : 0
+    if d != 0 and (d > 0 ? close > emaTrend : close < emaTrend)
+        rDir      := d
+        rEntry    := close
+        rRisk     := runStopAtr * atrRaw
+        rStop     := close - d * rRisk
+        rBest     := close
+        rOpenTime := time
+        rOpenBar  := bar_index
+        rLnEntry  := line.new(time, close, time_close, close, xloc = xloc.bar_time, color = color.gray, style = line.style_dotted)
+        rLnStop   := line.new(time, rStop, time_close, rStop, xloc = xloc.bar_time, color = colBear, width = 2)
+        label.new(time, close, d > 0 ? "BUY" : "SELL", xloc = xloc.bar_time, yloc = d > 0 ? yloc.belowbar : yloc.abovebar, style = d > 0 ? label.style_label_up : label.style_label_down, color = d > 0 ? colBull : colBear, textcolor = color.white, size = size.small)
+        longEntry  := d > 0
+        shortEntry := d < 0
 
 // ============================================================
 // DASHBOARD
@@ -944,7 +1060,19 @@ if showDashboard and barstate.islast
         string modeText = is24hMode ? (sessionsOn ? "24h sessions" : "24h, no session boxes on this timeframe") : (openRangeOn ? "Single session" : "Single session, no opening-range box on this timeframe")
         dashRow(10, "Mode", modeText, color.gray)
 
-    if showTrades
+    if showTrades and isRunModel
+        string runText = "No open trade  ·  waiting for a liquidity run with the trend"
+        color  runCol  = color.gray
+        if rDir != 0
+            float openR = (close - rEntry) * rDir / rRisk
+            runText := (rDir > 0 ? "LONG" : "SHORT") + "  entry " + px(rEntry) + "  ·  trailing stop " + px(rStop) + "  ·  open " + (openR >= 0 ? "+" : "") + str.tostring(openR, "0.00") + "R"
+            runCol  := rDir > 0 ? colBull : colBear
+        dashRow(11, "Trade (run)", runText, runCol)
+        string runRec = "No closed trades yet"
+        if rN > 0
+            runRec := str.tostring(rN) + " trades  ·  avg " + (rTotal >= 0 ? "+" : "") + str.tostring(rTotal / rN, "0.00") + "R  ·  total " + (rTotal >= 0 ? "+" : "") + str.tostring(rTotal, "0.0") + "R\nwin " + str.tostring(rWins * 100.0 / rN, "0") + "%  ·  best " + str.tostring(rBestR, "0.0") + "R  ·  worst " + str.tostring(rWorstR, "0.0") + "R\nbefore costs, " + str.tostring(runStopAtr, "0.#") + " ATR trail, EMA " + str.tostring(runTrendLen)
+        dashRow(12, "Record (run)", runRec, rN == 0 ? color.gray : rTotal >= 0 ? colBull : colBear)
+    else if showTrades
         string tradeText = "No open trade"
         color  tradeCol  = color.gray
         if not na(trade)
@@ -973,8 +1101,8 @@ alertcondition(buyAbsorbed and not buyAbsorbed[1], title = "Buying Absorbed", me
 alertcondition(sellAbsorbed and not sellAbsorbed[1], title = "Selling Absorbed", message = "Selling is dominant but price has not fallen over the pressure window on {{ticker}} {{interval}}.")
 alertcondition(favourableLong and not favourableLong[1], title = "Conditions Favourable (long side)", message = "Conditions turned favourable for the long side on {{ticker}} {{interval}}. This is context, not an entry signal.")
 alertcondition(favourableShort and not favourableShort[1], title = "Conditions Favourable (short side)", message = "Conditions turned favourable for the short side on {{ticker}} {{interval}}. This is context, not an entry signal.")
-alertcondition(longEntry, title = "Trade Module: Long Entry", message = "Experimental long entry after a low was swept on {{ticker}} {{interval}}. Stop and targets are drawn on the chart.")
-alertcondition(shortEntry, title = "Trade Module: Short Entry", message = "Experimental short entry after a high was swept on {{ticker}} {{interval}}. Stop and targets are drawn on the chart.")
+alertcondition(longEntry, title = "Trade Module: Long Entry", message = "Trade module long entry on {{ticker}} {{interval}}. The stop is drawn on the chart.")
+alertcondition(shortEntry, title = "Trade Module: Short Entry", message = "Trade module short entry on {{ticker}} {{interval}}. The stop is drawn on the chart.")
 alertcondition(evTp1, title = "Trade Module: TP1 Reached", message = "TP1 reached on {{ticker}} {{interval}}.")
 alertcondition(evTp2, title = "Trade Module: TP2 Reached", message = "TP2 reached on {{ticker}} {{interval}}.")
-alertcondition(evStopped, title = "Trade Module: Stopped", message = "The open trade was stopped on {{ticker}} {{interval}}.")
+alertcondition(evStopped, title = "Trade Module: Stopped", message = "The open trade was stopped out (or its trailing stop was hit) on {{ticker}} {{interval}}.")

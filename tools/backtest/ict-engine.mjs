@@ -48,10 +48,11 @@ export const DEFAULTS = Object.freeze({
   showAsiaKZ: false,
   asiaSession: '2000-0000',
   // Pine `egxPreset` (lines 846 and 850): the killzone point is on and earned on every bar, whatever the session inputs say.
-  killzoneAlwaysEarned: false,
+  killzoneAlwaysEarned: false, // same switch as kzAlwaysEarned below (the ThndrX overlay and the weekly search each added one); either turns it on
   // Trade engine
   minScore: 5,
   scoreKillzone: true,
+  kzAlwaysEarned: false,   // Pine 'Preset: EGX ...' counts the killzone point as earned on every bar (kzEarned = egxPreset)
   scoreMa: true,
   scoreMajorAgree: true,
   scoreBreakStrength: true,
@@ -177,7 +178,7 @@ export const PRESETS = Object.freeze({
   'tv-base': { longOnly: true, applyCosts: true, minRiskTicks: 10 },
   'tv-r4': { longOnly: true, applyCosts: true, minRiskTicks: 10, runnerMode: true, trailTier: 'Major', trailFromEntry: true },
   // The Pine "Preset: EGX Daily" input: tv-r4 + Stop on Close Only (sweep row 13).
-  'egx-daily': { longOnly: true, applyCosts: true, minRiskTicks: 10, runnerMode: true, trailTier: 'Major', trailFromEntry: true, stopOnCloseOnly: true, killzoneAlwaysEarned: true },
+  'egx-daily': { longOnly: true, applyCosts: true, minRiskTicks: 10, runnerMode: true, trailTier: 'Major', trailFromEntry: true, stopOnCloseOnly: true, kzAlwaysEarned: true, killzoneAlwaysEarned: true },
   'pine-default': {},
 });
 
@@ -453,7 +454,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
       || (cfg.showAsiaKZ && inSession(t, cfg.asiaSession, cfg.sessionTimezone));
     killzoneActive[i] = a ? 1 : 0;
   }
-  const killzonePointOn = cfg.killzoneAlwaysEarned || (cfg.scoreKillzone && (cfg.showLondonKZ || cfg.showNewYorkKZ || cfg.showAsiaKZ));
+  const killzonePointOn = cfg.kzAlwaysEarned || cfg.killzoneAlwaysEarned || (cfg.scoreKillzone && (cfg.showLondonKZ || cfg.showNewYorkKZ || cfg.showAsiaKZ));
 
   // ---- index regime ----
   const indexName = cfg.indexMode !== 'Auto' ? cfg.indexMode
@@ -627,7 +628,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
     const ichiReady = !isNa(cTop) && !isNa(cBot);
     const ichiOk = ichiReady && (isLong ? C[i] > cTop : C[i] < cBot);
     const ichiOn = cfg.scoreIchimoku && ichiReady;
-    const kz = cfg.killzoneAlwaysEarned || killzoneActive[i] === 1;
+    const kz = cfg.kzAlwaysEarned || cfg.killzoneAlwaysEarned || killzoneActive[i] === 1;
     const maj = majorSt.trend === intSt.trend && majorSt.trend !== null;
     const brk = !isNa(intSt.lastStrength) && intSt.lastStrength >= cfg.strongBreakMult;
     return { momOk, maOk, partOn, partOk, ichiOn, ichiOk, kz, maj, brk };

@@ -2,7 +2,8 @@
 // from TradingView's public websocket feed into CSV files. Split-adjusted by default; ADJ=dividends or --adjust dividends for dividend-adjusted.
 //
 // Usage (Node 20 needs the experimental WebSocket flag):
-//   node --experimental-websocket tools/backtest/fetch-egx.mjs [outDir] [SYM1,SYM2,...]  [--adjust splits|dividends] [--interval 1D|60|15|...]   (or ADJ=dividends; the flags go LAST)
+//   node --experimental-websocket tools/backtest/fetch-egx.mjs [outDir] [SYM1,SYM2,...]  [--adjust splits|dividends] [--tf 1W | --interval 60]
+//   (or ADJ=dividends / TF=1W; the flags go LAST)
 //
 //   outDir   default: data/egx
 //   symbols  optional comma list of tickers (e.g. COMI,ABUK) or full TV ids
@@ -32,12 +33,12 @@ const ai = process.argv.indexOf('--adjust');
 const ADJ = (ai > 0 ? process.argv[ai + 1] : process.env.ADJ) || 'splits';
 if (!['splits', 'dividends', 'none'].includes(ADJ)) throw new Error('bad adjustment ' + ADJ);
 if (ai > 0) process.argv.splice(ai, 2);
-// Bar size sent to create_series: '1D' (default) or any TradingView resolution such as '60' (minutes), '15', '1W'. Same parsing rule.
-// For intraday bars the CSV 'date' column stays the Cairo date of the bar's open; 'time' carries the time of day.
-const ii = process.argv.indexOf('--interval');
-const INTERVAL = (ii > 0 ? process.argv[ii + 1] : null) || '1D';
-if (!/^\d*[DWM]$|^\d+$/.test(INTERVAL)) throw new Error('bad interval ' + INTERVAL);
-if (ii > 0) process.argv.splice(ii, 2);
+// Bar timeframe sent to create_series: '1D' (default) or any TradingView resolution, e.g. '1W' (data/wk-div), '60' (minutes), '15'.
+// --tf 1W, --interval 60 (same flag, two names) or TF=1W. For intraday bars the CSV 'date' column stays the Cairo date of the bar's
+// open; 'time' carries the time of day.
+let TF = process.env.TF || '1D';
+for (const flag of ['--tf', '--interval']) { const k = process.argv.indexOf(flag); if (k > 0) { TF = process.argv[k + 1]; process.argv.splice(k, 2); } }
+if (!/^d*[DWM]$|^d+$/.test(TF)) throw new Error('bad timeframe ' + TF);
 
 const outDir = path.resolve(process.argv[2] || 'data/egx');
 const only = process.argv[3] ? process.argv[3].split(',').map(s => s.trim()).filter(Boolean) : null;
@@ -63,7 +64,7 @@ function fetchSymbol(symbol, timeoutMs = 90000) {
       ws.send(enc('set_auth_token', ['unauthorized_user_token']));
       ws.send(enc('chart_create_session', [cs, '']));
       ws.send(enc('resolve_symbol', [cs, 'sds_sym_1', '=' + JSON.stringify({ symbol, adjustment: ADJ })]));
-      ws.send(enc('create_series', [cs, 'sds_1', 's1', 'sds_sym_1', INTERVAL, STEP, '']));
+      ws.send(enc('create_series', [cs, 'sds_1', 's1', 'sds_sym_1', TF, STEP, '']));
     };
     ws.onmessage = e => {
       for (const part of String(e.data).split(/~m~\d+~m~/).filter(Boolean)) {
@@ -151,7 +152,7 @@ for (const t of targets) {
         first: cairoDate.format(new Date(r.bars[0][0] * 1000)), last: cairoDate.format(new Date(r.bars[r.bars.length - 1][0] * 1000)),
         mintick: m.minmov / m.pricescale, pricescale: m.pricescale, minmov: m.minmov,
         timezone: m.timezone, session: m.session, description: m.description, type: m.type,
-        rounds: r.rounds, adjustment: ADJ, interval: INTERVAL,
+        rounds: r.rounds, adjustment: ADJ, interval: TF,
       };
       if (flags.length) rec.flags = flags;
       allMeta[t.key] = rec;

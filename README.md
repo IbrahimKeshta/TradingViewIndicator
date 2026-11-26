@@ -339,6 +339,22 @@ below entry after 5, 10 or 20 bars) lowered average R at every setting, because 
 winners spend their first weeks under water. The record is in
 `docs/superpowers/plans/2026-11-21-egx-daily-exit-tests.md`.
 
+**On weekly charts, use EGX Daily as is; there is no separate weekly preset.** On 2026-11-23 the settings were
+searched again on weekly bars of the same 101 stocks: 16 exit combinations, then the swing lookbacks. The choice was
+made on trades opened before 2020 and checked once on 2020 onward, by rules fixed in advance. The best on the earlier
+period, EGX Daily with Major Swing Lookback 10 (+0.78R per trade against +0.73R), did worse from 2020 on (+0.88R
+against +0.95R over about 250 trades), so it was not shipped. The script defaults were far behind in both periods
+(+0.26R and +0.56R).
+
+Expect one thing on weekly charts: after TP3 the stop of a pullback trade often never moves. With Trail From Entry and
+Trailing Tier Major, it follows only a major swing low (20 bars each side, about 40 weeks), and a strong weekly trend
+rarely forms one above the entry stop. The trade then ends on an internal CHoCH against it, not at the stop. That
+loose stop is part of why these settings tested best on weekly: every tighter trail tested scored lower. It also
+means a weekly runner can give back a large part of its open gain before it closes. The TR rows, whose stop follows
+price, are the alternative. Weekly bars come from the same price history as the daily research, and 2020–2026 (the
+pound's devaluations) favoured loose stops, so treat these numbers as weaker evidence than the daily ones. The record
+is in `docs/superpowers/plans/2026-11-23-egx-weekly-preset.md`.
+
 ## The second entry model
 
 The pullback engine above has a structural blind spot, and it is not a tuning problem. Order blocks
@@ -1327,7 +1343,8 @@ session ranges, the resting liquidity, where volume has actually traded, and whi
 then reduces that to a plain three-way verdict.
 
 By default it draws **no entry signals, no stops and no targets**, on purpose. It is context; an
-optional trade module is described further down. Use it beside the
+optional trade module, whose default entry model passed an out-of-sample backtest on EGX and crypto
+4H, is described further down. Use it beside the
 confluence indicator or on its own.
 
 ## Two market modes
@@ -1404,49 +1421,90 @@ no learning behind it.
 | Absorption — selling absorbed | Selling is dominant but price has not fallen |
 | Balanced | Neither side reaches the threshold |
 
-## The trade module (experimental)
+## The trade module
 
-Off by default. Turn on `Enable Trade Module` and the script draws an entry, a stop and two targets,
-and keeps a record of how those trades would have gone.
+Off by default. Turn on `Enable Trade Module`, pick an `Entry Model`, and the script draws entries,
+stops and exits and keeps a record of how those trades would have gone. All figures are **before
+spread, commission and slippage**.
+
+### Liquidity run (the default entry model)
 
 | Part | Rule |
 |---|---|
-| Entry | A **sweep** on a closed bar: a liquidity pool or the reference high / low is traded through and the same bar closes back inside. Low swept → long, high swept → short. Entry is that bar's close. One trade at a time |
-| Stop | Beyond the sweep bar's wick plus a small buffer, never closer than 0.5 ATR. A sweep needing a stop wider than 3 ATR is skipped |
-| TP1 | 1R — as far from entry as the stop is |
-| TP2 | The nearest opposing pool, reference level or POC between 1.5R and 4R away; if there is none, 2R |
-| After TP1 | The stop moves to entry |
+| Entry | A liquidity pool (chart or higher timeframe) is traded through and the bar **closes beyond it**, in the direction of the trend EMA (200 by default): a BSL run above the EMA → long, an SSL run below it → short. Entry is that bar's close. One trade at a time |
+| Stop | 8 × ATR(14) from entry (`Liquidity Run: Stop And Trail`) |
+| Trail | The stop follows the best close since entry at the same distance, updated at each close; it only ever tightens |
+| Exit | When the trailing stop is hit. A bar that opens beyond the stop exits at its open. There is no target: the trend is held until it turns |
 
-`Conditions Filter` decides which sweeps become trades: `Favourable only`, `Not against bias` (the
-default), `Any except Avoid`, or `No filter`. **Run `No filter` first.** It is the baseline: if a
-stricter filter does not beat it, the verdict is not adding anything on that market.
+The record is single-unit: R = (exit − entry) / initial risk. The dashboard shows the open trade with its
+trailing stop and open R, and the closed-trade count, average and total R, win rate, best and worst trade.
 
-### Reading the record
+**How it was found and tested (2026-11-21).** It came out of a search over eight families of entry ideas
+(breakouts, pullbacks, the conditions verdict, liquidity runs, volatility squeezes, mean reversion), tuned
+only on older data and judged once on data no idea had seen: 60 EGX stocks outside EGX100 and 10 crypto
+coins never used in the search, with costs, both sides.
 
-The `Record` row assumes half the position comes off at TP1 and half at TP2.
+| Market and timeframe | Trades | Average R after costs | Symbols positive |
+|---|---|---|---|
+| EGX daily | 1,566 | +1.00 (+0.46 with every trade capped at +10R) | 95% |
+| EGX 1H | 2,202 | +0.19 | 74% |
+| Crypto 4H | 425 | +0.17 (+0.08 without its two best coins) | 70% |
+| Crypto 1D | 74 | +0.02 | 50% |
+| Crypto 1H | 1,788 | +0.03 | 60% |
 
-| Outcome | Result with the defaults |
+Use it on **EGX daily and 1H and crypto 4H**. It does not clear costs on crypto 1H, and nothing tested did
+on 15m. What to expect from it:
+
+* It loses small and often: the win rate is 34–42% and the median trade is a small loss. The profit comes
+  from a minority of long trends, so it only works if you sit through the losing runs.
+* Almost all of the profit came from **long** trades. Shorts lost on EGX and were flat on crypto at every
+  stage of the test.
+* On EGX it earns in trending years and roughly breaks even in flat ones. On crypto 4H it is the weakest
+  link: it depends on a few strongly trending coins.
+
+The search, the pass rule (fixed before any result) and every number are in
+`docs/superpowers/plans/2026-11-21-profitable-model-search.md`. The Pine model reproduces the backtest
+engine trade for trade (COMI daily 33/33, BTC 4H 46/46).
+
+### Sweep reversal (the original model, kept as an option)
+
+| Part | Rule |
 |---|---|
-| Stopped before TP1 | −1R |
-| TP1, then stopped at entry | +0.5R |
-| TP1 and TP2 | +0.5R plus half of TP2's R |
+| Entry | A **sweep** on a closed bar: a liquidity pool or the reference high / low is traded through and the same bar closes back inside. Low swept → long, high swept → short. Entry is that bar's close |
+| Stop | Beyond the sweep bar's wick plus a small buffer, never closer than 0.5 ATR. A sweep needing a stop wider than 3 ATR is skipped |
+| TP1 / TP2 | 1R, then the nearest opposing pool, reference level or POC between 1.5R and 4R away (else 2R); the stop moves to entry after TP1 |
 
-It reports the average and total in R and the share of trades in each bucket, not a single "win
-rate". A high share of `TP1 only` with a small average R is a very different result from the same
-share with a large one, and one percentage would hide that.
+`Conditions Filter` (`Favourable only`, `Not against bias`, `Any except Avoid`, `No filter`) and the stop
+and target settings apply only to this model. Its record assumes half the position comes off at TP1 and
+half at TP2 (stopped −1R, TP1 then breakeven +0.5R, both targets +0.5R plus half of TP2's R). A bar that
+reaches both stop and a target is scored as the stop, and so is a bar that reaches TP1 and trades back to
+entry.
 
-Three things keep it honest. A bar that reaches both the stop and a target is scored as the stop. TP2
-on the same bar as TP1 only counts if the bar never traded back to entry. And the figures are
-**before spread, commission and slippage**, which matter most on small stops.
+**It loses.** Over 100 EGX stocks (daily and 1H) and 14 Binance coins (15m and 1H, three years), both
+sides, with costs, it lost on every market, timeframe and filter: about −0.3R per trade on EGX and −0.5
+to −0.8R on crypto, already −0.13 to −0.21R before costs. After a sweep, price did slightly worse than
+from a random bar in both directions; the liquidity run above is the opposite trade and is what worked.
+Details: `docs/superpowers/plans/2026-11-21-session-orderflow-backtest.md`.
 
-This module has not been validated on any market. Treat its record as a description of the past on
-the bars loaded, not as an expectation.
+The conditions verdict, tested on its own, carries no directional information on crypto. On EGX,
+`FAVOURABLE` leans the right way by a small amount (roughly half a percent over the next 20 days on
+daily): useful as context, not as an entry signal.
+
+### Logging
+
+`Log Closed Trades (Pine Logs)` (off by default) writes one line per closed trade to the Pine Logs panel
+(lines start `RUN` for the liquidity run and `TRADE` for the sweep model): times, side, entry, initial
+stop, exit or targets, outcome and R. The panel's **Download logs** exports the whole history as a CSV.
+Pine Logs only work on personal, unpublished scripts.
 
 ## What the volume figures are, and are not
 
 Pine has no bid/ask data. **Delta here is an estimate**: each chart bar is split into 1-minute bars
 (30-minute on a daily chart), and each small bar's whole volume is counted as buying if it closed up
-and selling if it closed down. That is the standard approximation and it is useful, but it is not
+and selling if it closed down. A small bar that closes exactly where it opened takes its side from the
+previous close (or keeps the last side), the same rule as TradingView's own Volume Delta and CVD. That
+matters on exchange-hours markets: on EGX the closing prints land in unchanged one-minute bars that can
+hold most of the last hour's volume. That is the standard approximation and it is useful, but it is not
 order flow in the sense a futures footprint chart shows it. On forex and CFD symbols the underlying
 number is tick volume, and the dashboard says so.
 
@@ -1462,7 +1520,8 @@ the profile is coarser — most visibly on older days, and on daily charts furth
 
 Session bull / bear breakout, reference high / low swept, range exhausted, BSL / SSL swept, BSL / SSL
 run, buying / selling absorbed, and conditions turning favourable on either side. With the trade
-module on: long entry, short entry, TP1 reached, TP2 reached and stopped.
+module on: long entry, short entry, stopped (for the liquidity run, the trailing stop being hit), and for the
+sweep model TP1 and TP2 reached.
 
 ## Settings worth knowing
 
