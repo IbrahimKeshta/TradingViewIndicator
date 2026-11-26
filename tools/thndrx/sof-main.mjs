@@ -10,6 +10,7 @@ import { sofMessagePanel } from './sof-panel.mjs';
 import { buildSofPlan, symbolMeta } from './sof-plan.mjs';
 import { ltfFor, baseFor, aggregate, findDatafeed, resolveSymbol, loadBase, refreshTail, createLtfCache } from './sof-ltf.mjs';
 
+const RETRY_SEC = 300;     // a failed intrabar load is tried again on a bar close at most this often
 const PANEL_TAIL_SEC = 60; // the live dashboard tops the intrabars up at most this often (seconds of the loop's clock)
 
 export const sofUi = createUi({
@@ -42,12 +43,18 @@ export async function prepareLtf(sess, h, cache) {
     return { meta, df, si, base, key, ltfMin, baseRows, ltfRows: aggregate(baseRows, ltfMin, meta), tailAt: h.now() };
   } catch (e) {
     h.log('warn', 'intrabar load failed', e);
-    return { meta, df, si, note: 'Intrabars unavailable (' + nearestText(e) + '): chart bars used' };
+    return { meta, df, si, note: 'Intrabars unavailable (' + nearestText(e) + '): chart bars used', failedAt: h.now() };
   }
 }
 
 export async function refreshLtf(sess, h, reason, cache) {
   const x = sess.extra;
+  if (x && x.failedAt !== undefined) { // the load failed: try it again on a bar close, at most every RETRY_SEC
+    if (reason !== 'paint' || h.now() - x.failedAt < RETRY_SEC) return;
+    const extra = await prepareLtf(sess, h, cache);
+    if (extra && !h.cancelled() && sess.extra === x) sess.extra = extra;
+    return;
+  }
   if (!x || !x.baseRows) return;
   if (reason !== 'paint' && h.now() - x.tailAt < PANEL_TAIL_SEC) return;
   x.tailAt = h.now();

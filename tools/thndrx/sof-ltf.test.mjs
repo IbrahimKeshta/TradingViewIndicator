@@ -22,16 +22,16 @@ function egxBars(fromIso, days, stepMin, { skipDays = [] } = {}) {
 }
 
 // A datafeed shaped like Thndr's: ignores most of `from`, returns at most `cap` bars ending before `to`, ms times.
-function fakeDatafeed(rows, { cap = 3000, failAt = -1 } = {}) {
+function fakeDatafeed(rows, { cap = 3000, failAt = -1, failFrom = Infinity, inclusiveTo = false } = {}) {
   const calls = [];
   return {
     calls,
     resolveSymbol: (name, ok) => ok({ name, ticker: name }),
     getBars(si, res, { from, to, countBack }, onResult, onError) {
       calls.push({ res, from, to });
-      if (calls.length === failAt) return onError('boom');
+      if (calls.length === failAt || calls.length >= failFrom) return onError('boom');
       if (!countBack) return onResult([], { noData: true });
-      const within = rows.filter((r) => r[0] < to && r[0] >= from - 5 * 86400);
+      const within = rows.filter((r) => (inclusiveTo ? r[0] <= to : r[0] < to) && r[0] >= from - 5 * 86400);
       const out = within.slice(-cap).map((r) => ({ time: r[0] * 1000, open: r[1], high: r[2], low: r[3], close: r[4], volume: r[5] }));
       onResult(out, { noData: out.length === 0 });
     },
@@ -106,11 +106,25 @@ test('paging steps over an empty chunk (a long holiday) and keeps going', async 
   assert.equal(got.length, rows.length);
 });
 
-test('pageBars stops when cancelled and rejects when the feed errors', async () => {
+test('pageBars stops when cancelled, retries a failed request, and rejects when the feed keeps failing', async () => {
   const rows = egxBars('2025-01-05T00:00:00Z', 100, 10);
+  const to = T('2026-01-01T00:00:00Z');
   let n = 0;
-  assert.equal(await pageBars(fakeDatafeed(rows, { cap: 200 }), {}, 10, { fromSec: rows[0][0], toSec: T('2026-01-01T00:00:00Z'), sleep: noSleep, cancelled: () => ++n > 2 }), null);
-  await assert.rejects(pageBars(fakeDatafeed(rows, { failAt: 2, cap: 200 }), {}, 10, { fromSec: rows[0][0], toSec: T('2026-01-01T00:00:00Z'), sleep: noSleep }), /boom/);
+  assert.equal(await pageBars(fakeDatafeed(rows, { cap: 200 }), {}, 10, { fromSec: rows[0][0], toSec: to, sleep: noSleep, cancelled: () => ++n > 2 }), null);
+  const pauses = [];
+  const once = await pageBars(fakeDatafeed(rows, { failAt: 2, cap: 200 }), {}, 10, { fromSec: rows[0][0], toSec: to, sleep: async (ms) => { pauses.push(ms); } });
+  assert.equal(once.length, rows.length, 'one failed request is retried');
+  assert.ok(pauses.includes(1500));
+  await assert.rejects(pageBars(fakeDatafeed(rows, { failFrom: 2, cap: 200 }), {}, 10, { fromSec: rows[0][0], toSec: to, sleep: noSleep }), /boom/);
+});
+
+test('an inclusive to that returns only the cursor bar ends the series (the first bar of the feed)', async () => {
+  const rows = egxBars('2025-01-05T00:00:00Z', 60, 10);
+  const df = fakeDatafeed(rows, { cap: 500, inclusiveTo: true });
+  const got = await pageBars(df, {}, 10, { fromSec: rows[0][0] - 30 * 86400, toSec: T('2026-01-01T00:00:00Z'), sleep: noSleep });
+  assert.equal(got.length, rows.length);
+  assert.deepEqual(got.map((r) => r[0]), rows.map((r) => r[0]));
+  assert.ok(df.calls.length <= Math.ceil(rows.length / 499) + 2, `${df.calls.length} requests`);
 });
 
 test('loadBase: first load reads everything, the second only the tail; a rescaled history forces a full read', async () => {
@@ -139,4 +153,11 @@ test('mergeRows and refreshTail: the newest read of a bar wins', async () => {
   const grown = rows.concat([[rows[rows.length - 1][0] + 86400 * 3, 5, 6, 4, 5, 1]]);
   const out = await refreshTail({ df: fakeDatafeed(grown), si: {}, base: 10, key: 'Y', rows, nowSec: grown[grown.length - 1][0] + 60, cache: createLtfCache(), sleep: noSleep });
   assert.equal(out.length, grown.length);
+});
+
+test('requests carry whole-second timestamps even when the clock has a fraction', async () => {
+  const rows = egxBars('2025-01-05T00:00:00Z', 30, 10);
+  const df = fakeDatafeed(rows, { cap: 5000 });
+  await pageBars(df, {}, 10, { fromSec: rows[0][0] + 0.25, toSec: rows[rows.length - 1][0] + 60.656, sleep: noSleep });
+  assert.ok(df.calls.every((c) => Number.isInteger(c.from) && Number.isInteger(c.to)), JSON.stringify(df.calls[0]));
 });

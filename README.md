@@ -18,7 +18,7 @@ trades through TradingView's Strategy Tester.
 They are independent. Run any one on its own, or several together. TradingView caps how many
 indicators one chart can hold on its lower plan tiers, so check yours before stacking all four.
 
-The confluence indicator also runs inside the ThndrX web app, as a userscript: see [ThndrX overlay](#thndrx-overlay).
+The confluence indicator and Session Order Flow also run inside the ThndrX web app, as userscripts: see [ThndrX overlay](#thndrx-overlay).
 
 ---
 
@@ -1572,6 +1572,25 @@ as the Pine indicator, including the EGX Daily preset); they are saved in that b
   drawings you edited meanwhile in another tab or the phone app can be overwritten by the older set, the same as when
   you edit a drawing in Thndr itself.
 
+## Session Order Flow on ThndrX
+
+`tools/thndrx/dist/thndrx-sof.user.js` does the same for [Session Order Flow](#session-order-flow): the opening-range
+box (or the Asia / London / New York boxes in 24h mode), the reference high and low, the chart and higher-timeframe
+liquidity pools with the taken ones faded, the developing POC and value area with the prior period's set, the trade
+module (both entry models) and the dashboard, all from the Pine inputs (the `SOF` button). Install it the same way;
+it runs on its own or next to the confluence overlay (the buttons sit side by side, the panels keep to their corners).
+
+- **Intrabars from Thndr.** The volume profile and the delta are built from lower-timeframe bars as in Pine (1 minute
+  on intraday charts, 30 minutes on daily, 4 hours above). The script reads them through the chart's own data feed,
+  so it never touches your login: the first daily load takes a few seconds, the first intraday load about 15 seconds
+  (5 years of 1-minute bars); later loads of the same stock come from a cache in the browser. Measured on 100 EGX
+  stocks, dropping the intrabars would keep the trade entries but change the verdict on most FAVOURABLE days, which is
+  why they are fetched. If the feed is not reachable the dashboard's Data row says so and the chart bars are used.
+- TradingView currently blocks sub-daily EGX data on the free plan, so TradingView's own copy of the indicator on EGX
+  runs without intrabars; the overlay is closer to the indicator as designed than that copy.
+- The same 5-year history, split-adjusted prices and drawing-sync behaviour as above. `Log Closed Trades` is shown
+  disabled (Pine Logs exist only on TradingView).
+
 ---
 
 ## Things worth knowing before you trade any of these
@@ -1658,7 +1677,7 @@ src/                    the Pine scripts, the order layer fragment (strategy-lay
                         and the generated strategy (ict-rsi-ma-strategy.pine — never edit)
 tools/                  build-strategy.ps1, which generates the strategy, and its tests
 tools/backtest/         offline Node port of the ICT trade engine, EGX data fetcher, analysis scripts
-tools/thndrx/           the ThndrX overlay: userscript that draws the ICT engine on the ThndrX chart (README inside)
+tools/thndrx/           the ThndrX overlays: userscripts that draw the ICT and Session Order Flow engines on the ThndrX chart (README inside)
 docs/img/               diagrams used by this README
 docs/backtests/         backtest reports in the standard % table, with their images
 docs/superpowers/

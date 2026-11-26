@@ -1626,29 +1626,45 @@ function withTimeout(p, ms, what) {
 function getChunk(df, si, base, from, to) {
   return withTimeout(new Promise((resolve, reject) => {
     try {
-      df.getBars(si, String(base), { from, to, countBack: 1, firstDataRequest: false },
+      // Whole seconds only: Thndr fails a request whose end_timestamp has a fraction (seen live: CHART_REQUEST_FAILED).
+      df.getBars(si, String(base), { from: Math.floor(from), to: Math.ceil(to), countBack: 1, firstDataRequest: false },
         (bars, meta) => resolve({ rows: (bars || []).map((b) => [Math.round(b.time / 1000), +b.open, +b.high, +b.low, +b.close, +b.volume || 0]), noData: !!(meta && meta.noData) }),
         (e) => reject(new Error(String(e))));
     } catch (e) { reject(e); }
   }), REQUEST_TIMEOUT_MS, 'getBars');
 }
 
+// A failed request is tried again twice, after 1.5 s and 4 s: the first request after the page sat idle can fail while
+// Thndr renews its login (seen live as CHART_REQUEST_FAILED, the same request succeeding a moment later).
+const RETRY_PAUSES_MS = [1500, 4000];
+async function getChunkRetry(df, si, base, from, to, sleep, cancelled) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await getChunk(df, si, base, from, to);
+    } catch (e) {
+      if (attempt >= RETRY_PAUSES_MS.length || cancelled()) throw e;
+      await sleep(RETRY_PAUSES_MS[attempt]);
+    }
+  }
+}
+
 // Base bars in [fromSec, toSec), paged backwards from toSec: each request returns a chunk ending at the cursor, the
-// cursor moves to the chunk's first bar. An empty chunk steps the cursor back one span (a holiday or a quiet stretch);
-// two empty answers flagged noData in a row end the series (before the feed's first bar). Returns null if cancelled.
+// cursor moves to the chunk's first bar. Returns null if cancelled.
 async function pageBars(df, si, base, { fromSec, toSec, cancelled = () => false, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onProgress = () => {} }) {
   const span = SPAN_DAYS[base] * 86400, chunks = [];
-  let cursor = toSec, emptyNoData = 0;
+  let cursor = toSec, empties = 0;
   while (cursor > fromSec) {
     if (cancelled()) return null;
-    const { rows, noData } = await getChunk(df, si, base, Math.max(fromSec, cursor - span), cursor);
+    const { rows } = await getChunkRetry(df, si, base, Math.max(fromSec, cursor - span), cursor, sleep, cancelled);
     const older = rows.filter((r) => r[0] < cursor);
+    if (rows.length && !older.length) break; // Thndr's `to` is inclusive: only the cursor bar itself came back, so it is the feed's first bar
     if (!older.length) {
-      emptyNoData = noData ? emptyNoData + 1 : 0;
-      if (emptyNoData >= 2) break;
+      // Nothing in this span: a quiet stretch, or before the feed (Thndr answers that with an empty chunk and a
+      // nextTime hint, not noData). Two empty spans in a row end the series.
+      if (++empties >= 2) break;
       cursor -= span;
     } else {
-      emptyNoData = 0;
+      empties = 0;
       chunks.push(older);
       cursor = older[0][0];
     }
@@ -2588,6 +2604,7 @@ const { sofMessagePanel } = __m['thndrx/sof-panel.mjs'];
 const { buildSofPlan, symbolMeta } = __m['thndrx/sof-plan.mjs'];
 const { ltfFor, baseFor, aggregate, findDatafeed, resolveSymbol, loadBase, refreshTail, createLtfCache } = __m['thndrx/sof-ltf.mjs'];
 
+const RETRY_SEC = 300;     // a failed intrabar load is tried again on a bar close at most this often
 const PANEL_TAIL_SEC = 60; // the live dashboard tops the intrabars up at most this often (seconds of the loop's clock)
 
 const sofUi = createUi({
@@ -2620,12 +2637,18 @@ async function prepareLtf(sess, h, cache) {
     return { meta, df, si, base, key, ltfMin, baseRows, ltfRows: aggregate(baseRows, ltfMin, meta), tailAt: h.now() };
   } catch (e) {
     h.log('warn', 'intrabar load failed', e);
-    return { meta, df, si, note: 'Intrabars unavailable (' + nearestText(e) + '): chart bars used' };
+    return { meta, df, si, note: 'Intrabars unavailable (' + nearestText(e) + '): chart bars used', failedAt: h.now() };
   }
 }
 
 async function refreshLtf(sess, h, reason, cache) {
   const x = sess.extra;
+  if (x && x.failedAt !== undefined) { // the load failed: try it again on a bar close, at most every RETRY_SEC
+    if (reason !== 'paint' || h.now() - x.failedAt < RETRY_SEC) return;
+    const extra = await prepareLtf(sess, h, cache);
+    if (extra && !h.cancelled() && sess.extra === x) sess.extra = extra;
+    return;
+  }
   if (!x || !x.baseRows) return;
   if (reason !== 'paint' && h.now() - x.tailAt < PANEL_TAIL_SEC) return;
   x.tailAt = h.now();
