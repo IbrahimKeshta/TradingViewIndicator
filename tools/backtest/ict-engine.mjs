@@ -49,6 +49,7 @@ export const DEFAULTS = Object.freeze({
   // Trade engine
   minScore: 5,
   scoreKillzone: true,
+  kzAlwaysEarned: false,   // Pine 'Preset: EGX ...' counts the killzone point as earned on every bar (kzEarned = egxPreset)
   scoreMa: true,
   scoreMajorAgree: true,
   scoreBreakStrength: true,
@@ -174,7 +175,7 @@ export const PRESETS = Object.freeze({
   'tv-base': { longOnly: true, applyCosts: true, minRiskTicks: 10 },
   'tv-r4': { longOnly: true, applyCosts: true, minRiskTicks: 10, runnerMode: true, trailTier: 'Major', trailFromEntry: true },
   // The Pine "Preset: EGX Daily" input: tv-r4 + Stop on Close Only (sweep row 13).
-  'egx-daily': { longOnly: true, applyCosts: true, minRiskTicks: 10, runnerMode: true, trailTier: 'Major', trailFromEntry: true, stopOnCloseOnly: true },
+  'egx-daily': { longOnly: true, applyCosts: true, minRiskTicks: 10, runnerMode: true, trailTier: 'Major', trailFromEntry: true, stopOnCloseOnly: true, kzAlwaysEarned: true },
   'pine-default': {},
 });
 
@@ -447,7 +448,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
       || (cfg.showAsiaKZ && inSession(t, cfg.asiaSession, cfg.sessionTimezone));
     killzoneActive[i] = a ? 1 : 0;
   }
-  const killzonePointOn = cfg.scoreKillzone && (cfg.showLondonKZ || cfg.showNewYorkKZ || cfg.showAsiaKZ);
+  const killzonePointOn = cfg.kzAlwaysEarned || (cfg.scoreKillzone && (cfg.showLondonKZ || cfg.showNewYorkKZ || cfg.showAsiaKZ));
 
   // ---- index regime ----
   const indexName = cfg.indexMode !== 'Auto' ? cfg.indexMode
@@ -607,7 +608,7 @@ export function runEngine(bars, userCfg = {}, opts = {}) {
     const ichiReady = !isNa(cTop) && !isNa(cBot);
     const ichiOk = ichiReady && (isLong ? C[i] > cTop : C[i] < cBot);
     const ichiOn = cfg.scoreIchimoku && ichiReady;
-    const kz = killzoneActive[i] === 1;
+    const kz = cfg.kzAlwaysEarned || killzoneActive[i] === 1;
     const maj = majorSt.trend === intSt.trend && majorSt.trend !== null;
     const brk = !isNa(intSt.lastStrength) && intSt.lastStrength >= cfg.strongBreakMult;
     return { momOk, maOk, partOn, partOk, ichiOn, ichiOk, kz, maj, brk };
