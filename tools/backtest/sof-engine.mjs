@@ -1,15 +1,17 @@
-// Offline, bar-by-bar port of the decision logic in src/session-orderflow.pine (Session Order Flow):
-// Asia session range (24h mode), range used, reference range and its sweep events, liquidity pools
-// (chart and higher timeframe), the developing volume profile from lower-timeframe bars, the
-// estimated delta, the conditions verdict, and the experimental trade module. Drawing, the dashboard,
-// alerts, London / New York boxes and the opening range are not ported: none of them feeds a trade.
+// Offline, bar-by-bar port of src/session-orderflow.pine (Session Order Flow): sessions (Asia / London /
+// New York in 24h mode, the opening range in single-session mode), range used, reference range and its
+// sweep events, liquidity pools (chart and higher timeframe), the developing volume profile from
+// lower-timeframe bars, the estimated delta, the conditions verdict, both trade-module entry models
+// (sweep reversal, liquidity run) and, with `render: true`, every Pine drawing and the dashboard's
+// last-bar values (the ThndrX overlay). Only alerts are not ported. No imports: the browser bundle uses it.
 //
 // Statement order follows the Pine global scope, because several blocks read state that an earlier
 // block on the same bar has just changed (e.g. the reference reset happens before the sweep test).
 //
 //   import { runSof, SOF_DEFAULTS } from './sof-engine.mjs';
-//   const res = runSof(chart, cfg);   // chart: see buildChart() in sof-data.mjs
-//   res.trades  -> closed trades, res.open -> a still-open trade or null, res.series -> per-bar debug values
+//   const res = runSof(chart, cfg);   // chart: see buildChart() below
+//   res.trades -> closed sweep trades, res.open -> a still-open one or null, res.runTrades / res.runOpen ->
+//   the liquidity-run model's, res.series -> per-bar debug values, res.drawings / res.final -> render mode
 //
 // Pine semantics reproduced here (each one matters for matching TradingView):
 //   ta.pivothigh/low   ties allowed on the left, strict on the right (validated in the ICT port)
