@@ -1631,6 +1631,17 @@ stocks), so the exits are not mistimed. EGX simply rises often in nominal terms.
 `Invalidated` exit did not help the recommended settings. Record:
 `docs/superpowers/plans/2026-11-20-six-stock-deep-dive.md`.
 
+**The standard % table (2026-11-26).** The same backtests in a 10-column layout (Total Trades, Win Rate,
+Profit Factor, Avg Return, Total Win, Total Loss, Net Profit, Losing Streak, Max Drawdown) taken from another
+EGX indicator project, with each trade counted as a full position in % of entry less 0.15% commission per
+side. EGX Daily over 101 EGX30/EGX70 stocks: 4,258 trades, 44.5% win rate, profit factor 1.78, +2.97% per
+trade. Session Order Flow's liquidity-run model, long only, on the same bars: 1,507 trades, profit factor
+5.06, +29.5% per trade, 1.09R per trade against ICT's 0.48R, but with a stop about 30% below entry and holds
+of about six months. Two things to know when reading these tables: the % view rewards wider stops, so read
+R next to it, and the free price history leaves some share restructurings unadjusted (ASPI moves x75 in one
+day in 2021), so trades held across one are left out. Reports and images: `docs/backtests/`; tools:
+`tools/backtest/standard-report.mjs` and `sof-vs-ict-report.mjs`.
+
 **These are decision-support tools, not a trading system.** None of these indicators sizes a position or
 places an order. The trade engine computes levels and records what would have happened. The strategy
 twin runs those same trades through TradingView's Strategy Tester with a position size, but a
@@ -1649,6 +1660,7 @@ tools/                  build-strategy.ps1, which generates the strategy, and it
 tools/backtest/         offline Node port of the ICT trade engine, EGX data fetcher, analysis scripts
 tools/thndrx/           the ThndrX overlay: userscript that draws the ICT engine on the ThndrX chart (README inside)
 docs/img/               diagrams used by this README
+docs/backtests/         backtest reports in the standard % table, with their images
 docs/superpowers/
   specs/                design documents — what each feature does and why
   plans/                implementation plans
