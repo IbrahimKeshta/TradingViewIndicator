@@ -128,3 +128,15 @@ test('plan: no bars, no volume and the intrabar note reach the Data row', () => 
   assert.match(data, /No volume/);
   assert.equal(p.panel.rows.find((r) => r.cells[0].text === 'Flow (est.)').cells[1].text, 'n/a (no volume on this symbol)');
 });
+
+test('symbolMeta: a session it cannot read means no session alignment and Monday weeks, not EGX', () => {
+  assert.deepEqual(symbolMeta({ type: 'crypto', timezone: 'Etc/UTC', session: '24x7' }), { symType: 'crypto', exTz: 'Etc/UTC', sessionStartMin: null, weekStart: 1 });
+});
+
+test('the panel-only build (live refresh) gives the same dashboard as the full plan, without drawings', () => {
+  const bars = makeBars(closes(700));
+  const values = { ...V, showTrades: true, runTrendLen: 50 };
+  const full = buildSofPlan(bars, values, planCtx()), panelOnly = buildSofPlan(bars, values, planCtx(), { drawings: false });
+  assert.deepEqual(panelOnly.panel, full.panel);
+  assert.equal(panelOnly.boxes.length + panelOnly.lines.length + panelOnly.labels.length, 0);
+});

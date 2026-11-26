@@ -114,9 +114,10 @@ the chart frame (`ChartApiInstance._studyEngine._externalDatafeed`), which signs
 handles the login token. Thndr's base resolutions are 1, 5, 10 and 60 minutes; 3, 15, 30 and 240 minutes are built from
 them, aligned to the 10:00 session open as TradingView aligns its bars. The history is paged backwards from now to the
 chart window's first bar (1-minute bars reach the full 5 years). Timings measured live: daily first load about 8 s,
-60-minute first load about 20 s (5 years of 1-minute bars); repeat loads of the same stock about 6 s (memory and
-IndexedDB cache, refetched in full when a split rescales the history). Intrabars are topped up when a bar closes and,
-for the live dashboard, at most once a minute. Without the datafeed, or if it keeps failing, the engine uses the chart
+60-minute first load about 20 s (5 years of 1-minute bars); repeat loads of the same stock about 5 to 6 s (memory and
+IndexedDB cache, written on loads and bar closes, refetched in full when a split rescales the history). Intrabars are
+topped up when a bar closes and, for the live dashboard, at most once a minute, after the panel has refreshed. The live
+panel refresh skips the drawings: about 100 ms at the worst case measured (20,000 15-minute bars, 300,000 intrabars). Without the datafeed, or if it keeps failing, the engine uses the chart
 bar's own direction (Pine's own fallback) and the dashboard's `Data` row says so; a failed load is retried on a bar close
 at most every 5 minutes.
 

@@ -224,11 +224,23 @@ function pineEma(src, len) {
   return out;
 }
 
+// Intrabar rows [time, open, high, low, close, volume] -> column arrays plus both signed-volume series. Building this
+// is the costly part of buildChart (hundreds of thousands of rows), so a caller that reuses the same intrabars for many
+// runs (the ThndrX overlay's live panel) builds it once and passes it as `ltf`.
+function buildLtf(ltfBars) {
+  const L = ltfBars, n = L.length;
+  const ltf = { time: new Float64Array(n), open: new Float64Array(n), high: new Float64Array(n), low: new Float64Array(n), close: new Float64Array(n), vol: new Float64Array(n) };
+  for (let k = 0; k < n; k++) { const r = L[k]; ltf.time[k] = r[0]; ltf.open[k] = r[1]; ltf.high[k] = r[2]; ltf.low[k] = r[3]; ltf.close[k] = r[4]; ltf.vol[k] = r[5]; }
+  ltf.signedFor = { tick: signedVolumeSeries(ltf.open, ltf.close, ltf.vol, 'tick'), zero: signedVolumeSeries(ltf.open, ltf.close, ltf.vol, 'zero') };
+  return ltf;
+}
+
 // Chart bars + optional intrabars -> the engine's chart object. Bars are [time, open, high, low, close, volume]
 // rows (seconds); an intrabar belongs to the chart bar whose [time, next time) holds it, as request.security_lower_tf.
+// Intrabars come as rows (ltfBars) or prebuilt by buildLtf (ltf); only the per-bar [start, end) index is made here.
 // sessionStartMin (optional): minutes after local midnight the exchange session opens; intraday higher timeframes
 // (timeframe.change("240") etc.) are then aligned to it like TradingView's session-aligned bars.
-function buildChart({ symbol, bars, ltfBars = null, tfSecs, symType, exTz, weekStart, mintick, from = null, to = null, sessionStartMin = null }) {
+function buildChart({ symbol, bars, ltfBars = null, ltf: prebuilt = null, tfSecs, symType, exTz, weekStart, mintick, from = null, to = null, sessionStartMin = null }) {
   let b = bars;
   if (from != null) b = b.filter((r) => r[0] >= from);
   if (to != null) b = b.filter((r) => r[0] < to);
@@ -239,22 +251,19 @@ function buildChart({ symbol, bars, ltfBars = null, tfSecs, symType, exTz, weekS
     time: col(b, 0), open: col(b, 1), high: col(b, 2), low: col(b, 3), close: col(b, 4), volume: col(b, 5),
     ltf: null,
   };
-  if (ltfBars && ltfBars.length) {
-    const L = ltfBars;
-    const ltf = { time: col(L, 0), open: col(L, 1), high: col(L, 2), low: col(L, 3), close: col(L, 4), vol: col(L, 5) };
-    const n = chart.time.length, start = new Int32Array(n), end = new Int32Array(n);
+  const base = prebuilt || (ltfBars && ltfBars.length ? buildLtf(ltfBars) : null);
+  if (base && base.time.length) {
+    const L = base.time.length, n = chart.time.length, start = new Int32Array(n), end = new Int32Array(n);
     let k = 0;
     for (let i = 0; i < n; i++) {
       const t0 = chart.time[i], t1 = i + 1 < n ? chart.time[i + 1] : Infinity;
-      while (k < L.length && ltf.time[k] < t0) k++;
+      while (k < L && base.time[k] < t0) k++;
       start[i] = k;
       let e = k;
-      while (e < L.length && ltf.time[e] < t1) e++;
+      while (e < L && base.time[e] < t1) e++;
       end[i] = e; k = e;
     }
-    ltf.start = start; ltf.end = end;
-    ltf.signedFor = { tick: signedVolumeSeries(ltf.open, ltf.close, ltf.vol, 'tick'), zero: signedVolumeSeries(ltf.open, ltf.close, ltf.vol, 'zero') };
-    chart.ltf = ltf;
+    chart.ltf = { ...base, start, end }; // the shared columns are never written to
   }
   return chart;
 }
@@ -763,7 +772,7 @@ function summarize(trades) {
   for (const t of trades) { tot += t.r; gross += t.grossR; if (t.r > 0) wins++; if (t.outcome === 'stopped') st++; else if (t.outcome === 'tp1only') t1++; else if (t.outcome === 'tp2') t2++; else to++; }
   return { n, avgR: tot / n, totalR: tot, grossAvg: gross / n, grossTotal: gross, win: wins / n, stoppedPct: st / n * 100, tp1onlyPct: t1 / n * 100, tp2Pct: t2 / n * 100, timeoutPct: to / n * 100 };
 }
-return { SOF_DEFAULTS, signedVolumeSeries, buildChart, PINE_DRAW_CAPS, makeRegistry, runSof, summarize };
+return { SOF_DEFAULTS, signedVolumeSeries, buildLtf, buildChart, PINE_DRAW_CAPS, makeRegistry, runSof, summarize };
 })();
 __m['thndrx/colors.mjs'] = (function () {
 'use strict';
@@ -924,7 +933,7 @@ function sofDefaults() {
 
 const HEX6 = /^#[0-9a-f]{6}$/i;
 const RGBA = /^rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d*\.?\d+)\s*\)$/i;
-const TIMEFRAMES = /^(\d+|\d*[DWM])$/i;
+const TIMEFRAMES = /^(\d+|1?[DWM])$/i; // what the engine reads: minutes, D / W / M or 1D / 1W / 1M
 function validColor(v) {
   if (typeof v !== 'string') return false;
   if (HEX6.test(v)) return true;
@@ -1426,14 +1435,17 @@ const RESOLUTION_SECS = { D: 86400, '1D': 86400, W: 604800, '1W': 604800, M: 259
 const tfSecsOf = (res) => RESOLUTION_SECS[String(res).toUpperCase()] ?? Number(res) * 60;
 
 // Symbol facts the engine needs, from the datafeed's symbol info (session '1;1000-1430:12345': opens 10:00, trades
-// Sunday = day 1 to Thursday) or EGX defaults when the datafeed is unavailable.
+// Sunday = day 1 to Thursday). Without symbol info: EGX (the caller names that guess in the Data row). With symbol info
+// whose session does not read as HHMM-HHMM:days (24x7 and the like): no session alignment (the UTC grid, as Pine's
+// timeframe.change sees a 24-hour market) and Monday weeks.
 function symbolMeta(si) {
-  const m = si && /(\d{2})(\d{2})-\d{4}:(\d+)/.exec(String(si.session || ''));
+  if (!si) return { symType: 'stock', exTz: 'Africa/Cairo', sessionStartMin: 600, weekStart: 0 };
+  const m = /(\d{2})(\d{2})-\d{4}:(\d+)/.exec(String(si.session || ''));
   return {
-    symType: (si && si.type) || 'stock',
-    exTz: (si && si.timezone) || 'Africa/Cairo',
-    sessionStartMin: m ? +m[1] * 60 + +m[2] : 600,
-    weekStart: m ? (m[3].includes('1') ? 0 : 1) : 0,
+    symType: si.type || 'stock',
+    exTz: si.timezone || 'Africa/Cairo',
+    sessionStartMin: m ? +m[1] * 60 + +m[2] : null,
+    weekStart: m && m[3].includes('1') ? 0 : 1,
   };
 }
 
@@ -1492,8 +1504,9 @@ function toItems(drawings, bars, values, info, mintick) {
 }
 
 // ctx: chartInfo (symbol, mintick, resolution) + lastBarOpen, historyNote, volumeMissing, extra (from sof-main's
-// prepare: { meta, ltfRows, note }).
-function buildSofPlan(bars, values, ctx) {
+// prepare: { meta, ltf (prebuilt intrabars), note }).
+// opts.drawings = false: the dashboard only (the live panel refresh), skipping the Pine drawing registry.
+function buildSofPlan(bars, values, ctx, { drawings = true } = {}) {
   const extra = ctx.extra || {};
   const meta = extra.meta || symbolMeta(null);
   const warnings = [];
@@ -1509,10 +1522,10 @@ function buildSofPlan(bars, values, ctx) {
     symbol: ctx.symbol, mintick: ctx.mintick, tfSecs: tfSecsOf(ctx.resolution), symType: meta.symType, exTz: meta.exTz,
     weekStart: meta.weekStart, sessionStartMin: meta.sessionStartMin,
     bars: bars.map((b) => [b.time, b.open, b.high, b.low, b.close, ctx.volumeMissing ? 0 : b.volume]),
-    ltfBars: extra.ltfRows || null,
+    ltf: extra.ltf || null,
   });
-  const res = runSof(chart, { ...sofEngineCfg(values), lastBarOpen: !!ctx.lastBarOpen });
-  Object.assign(plan, toItems(res.drawings, bars, values, res.info, ctx.mintick));
+  const res = runSof(chart, { ...sofEngineCfg(values), lastBarOpen: !!ctx.lastBarOpen, render: drawings });
+  if (drawings) Object.assign(plan, toItems(res.drawings, bars, values, res.info, ctx.mintick));
   plan.panel = sofPanel(res, values, { mintick: ctx.mintick, symType: meta.symType, warnings });
   plan.res = res;
   return plan;
@@ -1535,7 +1548,7 @@ const SPAN_DAYS = { 1: 28, 5: 120, 10: 300, 60: 1500 };          // the `from` w
 const REQUEST_TIMEOUT_MS = 20000;
 const PAUSE_MS = 60;                                             // between page requests, to be gentle with the feed
 const TAIL_DAYS = 3;                                             // a cached series is refreshed from this far back
-const IDB_NAME = 'thndrx-sof', IDB_STORE = 'ltf', IDB_KEEP = 12, MEM_KEEP = 4;
+const IDB_NAME = 'thndrx-sof', IDB_STORE = 'ltf', IDB_META = 'ltf-meta', IDB_KEEP = 12, MEM_KEEP = 4;
 
 // Pine timeframe.in_seconds for the strings the chart and the inputs use.
 function tfSeconds(tf) {
@@ -1685,33 +1698,44 @@ function idbStore(idb) {
   if (!idb) return null;
   let dbp = null;
   const open = () => (dbp ??= new Promise((resolve, reject) => {
-    const req = idb.open(IDB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE, { keyPath: 'key' });
+    const req = idb.open(IDB_NAME, 2);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      for (const name of [...db.objectStoreNames]) db.deleteObjectStore(name); // version 1 kept no meta: start clean
+      db.createObjectStore(IDB_STORE, { keyPath: 'key' });
+      db.createObjectStore(IDB_META, { keyPath: 'key' });
+    };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   }));
   const tx = async (mode, fn) => {
     const db = await open();
     return new Promise((resolve, reject) => {
-      const t = db.transaction(IDB_STORE, mode), st = t.objectStore(IDB_STORE);
+      const t = db.transaction([IDB_STORE, IDB_META], mode);
       let out;
-      fn(st, (v) => { out = v; });
+      fn(t.objectStore(IDB_STORE), t.objectStore(IDB_META), (v) => { out = v; });
       t.oncomplete = () => resolve(out);
       t.onerror = () => reject(t.error);
       t.onabort = () => reject(t.error);
     });
   };
   return {
-    get: (key) => tx('readonly', (st, set) => { const r = st.get(key); r.onsuccess = () => set(r.result || null); }),
-    put: (entry) => tx('readwrite', (st) => {
+    get: (key) => tx('readonly', (st, meta, set) => { const r = st.get(key); r.onsuccess = () => set(r.result || null); }),
+    // Keeps the IDB_KEEP most recently saved series; the trim reads only the small meta records.
+    put: (entry) => tx('readwrite', (st, meta) => {
       st.put(entry);
-      const all = st.getAll();
-      all.onsuccess = () => { const old = all.result.sort((a, b) => b.savedAt - a.savedAt).slice(IDB_KEEP); for (const o of old) st.delete(o.key); };
+      meta.put({ key: entry.key, savedAt: entry.savedAt });
+      const all = meta.getAll();
+      all.onsuccess = () => {
+        for (const o of all.result.sort((x, y) => y.savedAt - x.savedAt).slice(IDB_KEEP)) { st.delete(o.key); meta.delete(o.key); }
+      };
     }),
   };
 }
 
-// get(key) -> { from, rows } | null; put(key, { from, rows }). Storage failures only cost a refetch.
+// get(key) -> { from, rows } | null; put(key, { from, rows }, { persist }): memory always, IndexedDB unless persist is
+// false (the once-a-minute panel top-up stays in memory; bar closes and full loads are written). Storage failures only
+// cost a refetch.
 function createLtfCache({ idb = null, now = () => Date.now() } = {}) {
   const mem = new Map(), db = idbStore(idb);
   return {
@@ -1726,10 +1750,10 @@ function createLtfCache({ idb = null, now = () => Date.now() } = {}) {
         return entry;
       } catch { return null; }
     },
-    async put(key, entry) {
+    async put(key, entry, { persist = true } = {}) {
       mem.delete(key); mem.set(key, entry);
       while (mem.size > MEM_KEEP) mem.delete(mem.keys().next().value);
-      if (db) { try { await db.put({ key, from: entry.from, rows: flat(entry.rows), savedAt: now() }); } catch { /* quota or private mode */ } }
+      if (db && persist) { try { await db.put({ key, from: entry.from, rows: flat(entry.rows), savedAt: now() }); } catch { /* quota or private mode */ } }
     },
   };
 }
@@ -1751,35 +1775,43 @@ function overlapAgrees(older, newer) {
   return shared.every((r) => { const o = byTime.get(r[0]); return [1, 2, 3, 4].every((j) => Math.abs(o[j] - r[j]) <= 1e-9 * Math.max(1, Math.abs(r[j]))); });
 }
 
-// Base rows covering [fromSec, nowSec] for one asset and base: the cached series topped up from TAIL_DAYS back, or a
-// full read when the cache is missing, does not reach back to fromSec, or disagrees with the fresh tail.
+// Base rows covering [fromSec, nowSec] for one asset and base -> { rows, stale } (null when cancelled): the cached
+// series topped up from TAIL_DAYS back, or a full read when the cache is missing, does not reach back to fromSec, or
+// disagrees with the fresh tail. When the tail read fails but a cached series exists, that series is returned with
+// stale = true rather than nothing (the caller says so and tops it up later).
 async function loadBase({ df, si, base, key, fromSec, nowSec, cache, cancelled = () => false, onProgress, sleep }) {
   const cached = await cache.get(key);
   if (cached && cached.from <= fromSec && cached.rows.length) {
     const last = cached.rows[cached.rows.length - 1][0];
-    const tail = await pageBars(df, si, base, { fromSec: last - TAIL_DAYS * 86400, toSec: nowSec + 60, cancelled, sleep });
+    let tail;
+    try {
+      tail = await pageBars(df, si, base, { fromSec: last - TAIL_DAYS * 86400, toSec: nowSec + 60, cancelled, sleep });
+    } catch {
+      return { rows: cached.rows.filter((r) => r[0] >= fromSec), stale: true };
+    }
     if (tail === null) return null;
     if (overlapAgrees(cached.rows, tail)) {
       const rows = mergeRows(cached.rows, tail);
       await cache.put(key, { from: cached.from, rows });
-      return rows.filter((r) => r[0] >= fromSec);
+      return { rows: rows.filter((r) => r[0] >= fromSec), stale: false };
     }
   }
   const rows = await pageBars(df, si, base, { fromSec, toSec: nowSec + 60, cancelled, onProgress, sleep });
   if (rows === null) return null;
   await cache.put(key, { from: fromSec, rows });
-  return rows;
+  return { rows, stale: false };
 }
 
-// The newest bars only, folded into `rows` (the live refresh on a bar close and for the panel).
-async function refreshTail({ df, si, base, key, rows, nowSec, cache, sleep }) {
+// The newest bars only, folded into `rows` (the live refresh on a bar close and for the panel). persist: also write
+// the series to IndexedDB (bar closes only; the panel's once-a-minute top-up stays in memory).
+async function refreshTail({ df, si, base, key, rows, nowSec, cache, sleep, persist = true }) {
   if (!rows.length) return rows;
   const last = rows[rows.length - 1][0];
   const tail = await pageBars(df, si, base, { fromSec: last - 86400, toSec: nowSec + 60, sleep });
   if (!tail || !tail.length) return rows;
   const merged = mergeRows(rows, tail);
   const cached = await cache.get(key);
-  if (cached) await cache.put(key, { from: cached.from, rows: mergeRows(cached.rows, tail) });
+  if (cached) await cache.put(key, { from: cached.from, rows: mergeRows(cached.rows, tail) }, { persist });
   return merged;
 }
 return { tfSeconds, ltfFor, baseFor, aggregate, findDatafeed, resolveSymbol, pageBars, createLtfCache, mergeRows, overlapAgrees, loadBase, refreshTail };
@@ -2352,6 +2384,7 @@ __m['thndrx/overlay.mjs'] = (function () {
 //   ui: createUi(...)                        renderPanel / mountButton / hasButton / openSettings / placeUi / unmountUi
 //   loadValues(storage), saveValues(storage, values), messagePanel(values, text)
 //   buildPlan(bars, values, ctx) -> plan     ctx: chartInfo + lastBarOpen, historyNote, volumeMissing, extra
+//   buildPanel?(bars, values, ctx) -> plan   the live panel refresh only needs plan.panel (SOF: skips the drawings)
 //   finishPlan?(plan) -> plan                caps applied to the drawn plan (ICT: applyPineCaps)
 //   prepare?(sess, h) -> Promise<extra>      after the bars load, before the first paint (SOF: the intrabars);
 //                                            h = { cancelled(), status(text), now(), win, log }
@@ -2504,11 +2537,11 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
   }
 
   // The panel plan: on every bar of the window, the forming one included.
-  function panelPlan(sess, nowSec) {
+  function panelPlan(sess, nowSec, build = app.buildPlan) {
     const { bars, note } = planWindow(sess.bars, nowSec, sess.start);
     sess.lastPanel = now();
     sess.panelDirty = false;
-    return { bars, note, plan: app.buildPlan(bars, values, planCtx(sess, bars, nowSec, note)) };
+    return { bars, note, plan: build(bars, values, planCtx(sess, bars, nowSec, note)) };
   }
 
   // Drawings from the closed bars, with the band span fixed at load; the panel with the forming bar.
@@ -2533,7 +2566,7 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
 
   async function refreshPanel(sess) {
     const gen = sess.gen;
-    const { plan } = panelPlan(sess, now() / 1000);
+    const { plan } = panelPlan(sess, now() / 1000, app.buildPanel || app.buildPlan);
     if (gen === sess.gen && s === sess && sess.ready) ui.renderPanel(sess.doc, plan.panel);
   }
 
@@ -2562,8 +2595,17 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
         if (app.refresh) await app.refresh(sess, helpers(sess, current), 'paint');
         if (current()) await paint(sess);
       } else if ((sess.panelDirty || sess.paintWanted) && t - sess.lastPanel >= MIN_PANEL_MS) {
-        if (app.refresh) await app.refresh(sess, helpers(sess, current), 'panel');
-        if (current()) await refreshPanel(sess);
+        await refreshPanel(sess);
+        // The app's top-up (network) runs after the panel and outside the poll, so a slow feed never holds the panel up;
+        // what it brings in shows on the next panel refresh.
+        if (app.refresh && !sess.refreshing && current()) {
+          sess.refreshing = true;
+          const before = sess.extra;
+          app.refresh(sess, helpers(sess, current), 'panel')
+            .then(() => { if (current() && sess.extra !== before) sess.panelDirty = true; })
+            .catch((err) => log('warn', 'top-up failed', err))
+            .finally(() => { sess.refreshing = false; });
+        }
       }
     } catch (err) {
       log('error', 'live update failed', err);
@@ -2603,6 +2645,7 @@ const { SOF_INPUTS, sofDefaults, sofIsValid, loadSofValues, saveSofValues } = __
 const { sofMessagePanel } = __m['thndrx/sof-panel.mjs'];
 const { buildSofPlan, symbolMeta } = __m['thndrx/sof-plan.mjs'];
 const { ltfFor, baseFor, aggregate, findDatafeed, resolveSymbol, loadBase, refreshTail, createLtfCache } = __m['thndrx/sof-ltf.mjs'];
+const { buildLtf } = __m['backtest/sof-engine.mjs'];
 
 const RETRY_SEC = 300;     // a failed intrabar load is tried again on a bar close at most this often
 const PANEL_TAIL_SEC = 60; // the live dashboard tops the intrabars up at most this often (seconds of the loop's clock)
@@ -2613,15 +2656,21 @@ const sofUi = createUi({
 });
 
 const nearestText = (e) => (e && e.message ? e.message : String(e));
+const EGX_GUESS = 'EGX session assumed';
+const STALE_NOTE = 'Intrabars from the cache: the newest could not be loaded yet';
 
-// The intrabars for the session's chart window: { meta, ltfRows, base, ltfMin, baseRows, df, si, key, tailAt, note }.
+// Base rows -> the engine's prebuilt intrabars (built once here, not on every 2 s panel refresh). Aggregation is
+// skipped when the base resolution already is the wanted one.
+const ltfOf = (baseRows, ltfMin, base, meta) => buildLtf(ltfMin === base ? baseRows : aggregate(baseRows, ltfMin, meta));
+
+// The intrabars for the session's chart window: { meta, ltf, base, ltfMin, baseRows, df, si, key, tailAt, note?, failedAt? }.
 async function prepareLtf(sess, h, cache) {
   const values = h.values();
   const df = findDatafeed(sess.iframe.contentWindow);
-  if (!df) return { meta: symbolMeta(null), note: 'Intrabars unavailable on this ThndrX build: chart bars used' };
+  if (!df) return { meta: symbolMeta(null), note: 'Intrabars unavailable on this ThndrX build: chart bars used, ' + EGX_GUESS };
   let si;
   try { si = await resolveSymbol(df, sess.chart.symbol()); } catch (e) {
-    return { meta: symbolMeta(null), note: 'Intrabars unavailable (' + nearestText(e) + '): chart bars used' };
+    return { meta: symbolMeta(null), note: 'Intrabars unavailable (' + nearestText(e) + '): chart bars used, ' + EGX_GUESS, failedAt: h.now() };
   }
   const meta = symbolMeta(si);
   const ltfMin = ltfFor(sess.info.resolution, values.deltaTfInput);
@@ -2629,12 +2678,14 @@ async function prepareLtf(sess, h, cache) {
   const base = baseFor(ltfMin), key = (si.ticker || sess.chart.symbol()) + '|' + base;
   const fromSec = Number.isFinite(sess.start) ? sess.start : sess.bars[0].time;
   try {
-    const baseRows = await loadBase({
+    const got = await loadBase({
       df, si, base, key, fromSec, nowSec: h.now(), cache, cancelled: h.cancelled,
       onProgress: (p) => h.status(`Loading ${ltfMin}m intrabars… ${Math.round(p * 100)}%`),
     });
-    if (baseRows === null) return null; // cancelled: a newer load owns the session
-    return { meta, df, si, base, key, ltfMin, baseRows, ltfRows: aggregate(baseRows, ltfMin, meta), tailAt: h.now() };
+    if (got === null) return null; // cancelled: a newer load owns the session
+    const extra = { meta, df, si, base, key, ltfMin, baseRows: got.rows, ltf: ltfOf(got.rows, ltfMin, base, meta), tailAt: h.now() };
+    if (got.stale) { extra.note = STALE_NOTE; extra.tailAt = -Infinity; } // the next live poll tries the top-up again
+    return extra;
   } catch (e) {
     h.log('warn', 'intrabar load failed', e);
     return { meta, df, si, note: 'Intrabars unavailable (' + nearestText(e) + '): chart bars used', failedAt: h.now() };
@@ -2653,9 +2704,10 @@ async function refreshLtf(sess, h, reason, cache) {
   if (reason !== 'paint' && h.now() - x.tailAt < PANEL_TAIL_SEC) return;
   x.tailAt = h.now();
   try {
-    const baseRows = await refreshTail({ df: x.df, si: x.si, base: x.base, key: x.key, rows: x.baseRows, nowSec: h.now(), cache });
-    if (h.cancelled() || sess.extra !== x || baseRows === x.baseRows) return;
-    sess.extra = { ...x, baseRows, ltfRows: aggregate(baseRows, x.ltfMin, x.meta) };
+    const baseRows = await refreshTail({ df: x.df, si: x.si, base: x.base, key: x.key, rows: x.baseRows, nowSec: h.now(), cache, persist: reason === 'paint' });
+    if (h.cancelled() || sess.extra !== x) return;
+    if (baseRows === x.baseRows) { if (x.note === STALE_NOTE) sess.extra = { ...x, note: undefined }; return; }
+    sess.extra = { ...x, baseRows, ltf: ltfOf(baseRows, x.ltfMin, x.base, x.meta), note: x.note === STALE_NOTE ? undefined : x.note };
   } catch (e) {
     h.log('warn', 'intrabar refresh failed', e);
   }
@@ -2669,6 +2721,7 @@ function makeSofApp(cache) {
     saveValues: saveSofValues,
     messagePanel: sofMessagePanel,
     buildPlan: buildSofPlan,
+    buildPanel: (bars, values, ctx) => buildSofPlan(bars, values, ctx, { drawings: false }),
     prepare: (sess, h) => prepareLtf(sess, h, cache),
     refresh: (sess, h, reason) => refreshLtf(sess, h, reason, cache),
     // A different lower timeframe needs other intrabars; everything else is a repaint on what is loaded.

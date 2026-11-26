@@ -54,3 +54,28 @@ page for the whole session.
 Thndr's page calls its analytics library for chart drawing events; when the overlay creates or removes many drawings at
 once, the library's own client-side rate limit drops those calls and logs `[PostHog.js] This capture call is ignored
 due to client rate limiting`. No analytics request left the page during the test.
+
+## Code review (Fable model) and what changed
+
+Verdict: merge with fixes. No critical issue; the reviewer compared the engine's render mode, `sof-plan.mjs` and
+`sof-panel.mjs` with the Pine line by line and found no mismatch in texts, colours, caps or creation order.
+
+Fixed:
+
+| Finding | Change | Evidence |
+|---|---|---|
+| Important: each 2 s panel refresh rebuilt ~300k intrabar columns (~290 ms) | intrabars built once per load / top-up (`buildLtf`, prebuilt `ltf` for `buildChart`); no copy when the base resolution is the wanted one; the live panel runs the engine without the drawing registry (`buildPanel`) | 20,000 15m bars + 300,000 1m intrabars: panel refresh ~100 ms (was ~290); full plan on a bar close ~300 ms; regression snapshot still identical |
+| Important: IndexedDB rewrote the whole series every minute and read every entry to trim | persist on full loads and bar closes only; trim through a small meta store (`ltf-meta`, IndexedDB version 2) | unit test; live: second page load drew from the cache in 5.2 s |
+| A failing tail read discarded a good cache | cached series used, `Data` row says `Intrabars from the cache: the newest could not be loaded yet`, next poll tries again | unit test |
+| An unreadable session string was treated as EGX | no session alignment and Monday weeks; the EGX guess without symbol info is named in the `Data` row | unit test |
+| `htfInput` accepted `2D` / `12M`, which the engine cannot read | validation narrowed to minutes and D / W / M (1D / 1W / 1M) | — |
+| A slow feed held the live panel up to ~26 s | the panel refreshes first; the top-up runs outside the poll and marks the panel dirty only when it brought new bars | — |
+
+Left as they are (noted):
+
+- Box and line right edges on daily / weekly charts end at the next bar's open, where Pine uses the session close: up to
+  one bar wider. Visual only.
+- Labels are drawn as text shapes (the ICT overlay's painter): BUY / SELL and result labels sit on the bar's low / high
+  instead of Pine's pointer labels offset above / below the bar.
+- Changing `Lower Timeframe` while a history load is running is applied at the next load.
+- Two spellings of a month in seconds (2628003 / 2592000); both only ever compared with 240 minutes.

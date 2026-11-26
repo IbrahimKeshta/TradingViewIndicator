@@ -9,6 +9,7 @@ import { SOF_INPUTS, sofDefaults, sofIsValid, loadSofValues, saveSofValues } fro
 import { sofMessagePanel } from './sof-panel.mjs';
 import { buildSofPlan, symbolMeta } from './sof-plan.mjs';
 import { ltfFor, baseFor, aggregate, findDatafeed, resolveSymbol, loadBase, refreshTail, createLtfCache } from './sof-ltf.mjs';
+import { buildLtf } from '../backtest/sof-engine.mjs';
 
 const RETRY_SEC = 300;     // a failed intrabar load is tried again on a bar close at most this often
 const PANEL_TAIL_SEC = 60; // the live dashboard tops the intrabars up at most this often (seconds of the loop's clock)
@@ -19,15 +20,21 @@ export const sofUi = createUi({
 });
 
 const nearestText = (e) => (e && e.message ? e.message : String(e));
+const EGX_GUESS = 'EGX session assumed';
+const STALE_NOTE = 'Intrabars from the cache: the newest could not be loaded yet';
 
-// The intrabars for the session's chart window: { meta, ltfRows, base, ltfMin, baseRows, df, si, key, tailAt, note }.
+// Base rows -> the engine's prebuilt intrabars (built once here, not on every 2 s panel refresh). Aggregation is
+// skipped when the base resolution already is the wanted one.
+const ltfOf = (baseRows, ltfMin, base, meta) => buildLtf(ltfMin === base ? baseRows : aggregate(baseRows, ltfMin, meta));
+
+// The intrabars for the session's chart window: { meta, ltf, base, ltfMin, baseRows, df, si, key, tailAt, note?, failedAt? }.
 export async function prepareLtf(sess, h, cache) {
   const values = h.values();
   const df = findDatafeed(sess.iframe.contentWindow);
-  if (!df) return { meta: symbolMeta(null), note: 'Intrabars unavailable on this ThndrX build: chart bars used' };
+  if (!df) return { meta: symbolMeta(null), note: 'Intrabars unavailable on this ThndrX build: chart bars used, ' + EGX_GUESS };
   let si;
   try { si = await resolveSymbol(df, sess.chart.symbol()); } catch (e) {
-    return { meta: symbolMeta(null), note: 'Intrabars unavailable (' + nearestText(e) + '): chart bars used' };
+    return { meta: symbolMeta(null), note: 'Intrabars unavailable (' + nearestText(e) + '): chart bars used, ' + EGX_GUESS, failedAt: h.now() };
   }
   const meta = symbolMeta(si);
   const ltfMin = ltfFor(sess.info.resolution, values.deltaTfInput);
@@ -35,12 +42,14 @@ export async function prepareLtf(sess, h, cache) {
   const base = baseFor(ltfMin), key = (si.ticker || sess.chart.symbol()) + '|' + base;
   const fromSec = Number.isFinite(sess.start) ? sess.start : sess.bars[0].time;
   try {
-    const baseRows = await loadBase({
+    const got = await loadBase({
       df, si, base, key, fromSec, nowSec: h.now(), cache, cancelled: h.cancelled,
       onProgress: (p) => h.status(`Loading ${ltfMin}m intrabars… ${Math.round(p * 100)}%`),
     });
-    if (baseRows === null) return null; // cancelled: a newer load owns the session
-    return { meta, df, si, base, key, ltfMin, baseRows, ltfRows: aggregate(baseRows, ltfMin, meta), tailAt: h.now() };
+    if (got === null) return null; // cancelled: a newer load owns the session
+    const extra = { meta, df, si, base, key, ltfMin, baseRows: got.rows, ltf: ltfOf(got.rows, ltfMin, base, meta), tailAt: h.now() };
+    if (got.stale) { extra.note = STALE_NOTE; extra.tailAt = -Infinity; } // the next live poll tries the top-up again
+    return extra;
   } catch (e) {
     h.log('warn', 'intrabar load failed', e);
     return { meta, df, si, note: 'Intrabars unavailable (' + nearestText(e) + '): chart bars used', failedAt: h.now() };
@@ -59,9 +68,10 @@ export async function refreshLtf(sess, h, reason, cache) {
   if (reason !== 'paint' && h.now() - x.tailAt < PANEL_TAIL_SEC) return;
   x.tailAt = h.now();
   try {
-    const baseRows = await refreshTail({ df: x.df, si: x.si, base: x.base, key: x.key, rows: x.baseRows, nowSec: h.now(), cache });
-    if (h.cancelled() || sess.extra !== x || baseRows === x.baseRows) return;
-    sess.extra = { ...x, baseRows, ltfRows: aggregate(baseRows, x.ltfMin, x.meta) };
+    const baseRows = await refreshTail({ df: x.df, si: x.si, base: x.base, key: x.key, rows: x.baseRows, nowSec: h.now(), cache, persist: reason === 'paint' });
+    if (h.cancelled() || sess.extra !== x) return;
+    if (baseRows === x.baseRows) { if (x.note === STALE_NOTE) sess.extra = { ...x, note: undefined }; return; }
+    sess.extra = { ...x, baseRows, ltf: ltfOf(baseRows, x.ltfMin, x.base, x.meta), note: x.note === STALE_NOTE ? undefined : x.note };
   } catch (e) {
     h.log('warn', 'intrabar refresh failed', e);
   }
@@ -75,6 +85,7 @@ export function makeSofApp(cache) {
     saveValues: saveSofValues,
     messagePanel: sofMessagePanel,
     buildPlan: buildSofPlan,
+    buildPanel: (bars, values, ctx) => buildSofPlan(bars, values, ctx, { drawings: false }),
     prepare: (sess, h) => prepareLtf(sess, h, cache),
     refresh: (sess, h, reason) => refreshLtf(sess, h, reason, cache),
     // A different lower timeframe needs other intrabars; everything else is a repaint on what is loaded.

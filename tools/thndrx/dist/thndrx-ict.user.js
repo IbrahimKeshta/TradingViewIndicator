@@ -3006,6 +3006,7 @@ __m['thndrx/overlay.mjs'] = (function () {
 //   ui: createUi(...)                        renderPanel / mountButton / hasButton / openSettings / placeUi / unmountUi
 //   loadValues(storage), saveValues(storage, values), messagePanel(values, text)
 //   buildPlan(bars, values, ctx) -> plan     ctx: chartInfo + lastBarOpen, historyNote, volumeMissing, extra
+//   buildPanel?(bars, values, ctx) -> plan   the live panel refresh only needs plan.panel (SOF: skips the drawings)
 //   finishPlan?(plan) -> plan                caps applied to the drawn plan (ICT: applyPineCaps)
 //   prepare?(sess, h) -> Promise<extra>      after the bars load, before the first paint (SOF: the intrabars);
 //                                            h = { cancelled(), status(text), now(), win, log }
@@ -3158,11 +3159,11 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
   }
 
   // The panel plan: on every bar of the window, the forming one included.
-  function panelPlan(sess, nowSec) {
+  function panelPlan(sess, nowSec, build = app.buildPlan) {
     const { bars, note } = planWindow(sess.bars, nowSec, sess.start);
     sess.lastPanel = now();
     sess.panelDirty = false;
-    return { bars, note, plan: app.buildPlan(bars, values, planCtx(sess, bars, nowSec, note)) };
+    return { bars, note, plan: build(bars, values, planCtx(sess, bars, nowSec, note)) };
   }
 
   // Drawings from the closed bars, with the band span fixed at load; the panel with the forming bar.
@@ -3187,7 +3188,7 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
 
   async function refreshPanel(sess) {
     const gen = sess.gen;
-    const { plan } = panelPlan(sess, now() / 1000);
+    const { plan } = panelPlan(sess, now() / 1000, app.buildPanel || app.buildPlan);
     if (gen === sess.gen && s === sess && sess.ready) ui.renderPanel(sess.doc, plan.panel);
   }
 
@@ -3216,8 +3217,17 @@ function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () 
         if (app.refresh) await app.refresh(sess, helpers(sess, current), 'paint');
         if (current()) await paint(sess);
       } else if ((sess.panelDirty || sess.paintWanted) && t - sess.lastPanel >= MIN_PANEL_MS) {
-        if (app.refresh) await app.refresh(sess, helpers(sess, current), 'panel');
-        if (current()) await refreshPanel(sess);
+        await refreshPanel(sess);
+        // The app's top-up (network) runs after the panel and outside the poll, so a slow feed never holds the panel up;
+        // what it brings in shows on the next panel refresh.
+        if (app.refresh && !sess.refreshing && current()) {
+          sess.refreshing = true;
+          const before = sess.extra;
+          app.refresh(sess, helpers(sess, current), 'panel')
+            .then(() => { if (current() && sess.extra !== before) sess.panelDirty = true; })
+            .catch((err) => log('warn', 'top-up failed', err))
+            .finally(() => { sess.refreshing = false; });
+        }
       }
     } catch (err) {
       log('error', 'live update failed', err);

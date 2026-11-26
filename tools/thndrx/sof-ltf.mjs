@@ -12,7 +12,7 @@ const SPAN_DAYS = { 1: 28, 5: 120, 10: 300, 60: 1500 };          // the `from` w
 const REQUEST_TIMEOUT_MS = 20000;
 const PAUSE_MS = 60;                                             // between page requests, to be gentle with the feed
 const TAIL_DAYS = 3;                                             // a cached series is refreshed from this far back
-const IDB_NAME = 'thndrx-sof', IDB_STORE = 'ltf', IDB_KEEP = 12, MEM_KEEP = 4;
+const IDB_NAME = 'thndrx-sof', IDB_STORE = 'ltf', IDB_META = 'ltf-meta', IDB_KEEP = 12, MEM_KEEP = 4;
 
 // Pine timeframe.in_seconds for the strings the chart and the inputs use.
 export function tfSeconds(tf) {
@@ -162,33 +162,44 @@ function idbStore(idb) {
   if (!idb) return null;
   let dbp = null;
   const open = () => (dbp ??= new Promise((resolve, reject) => {
-    const req = idb.open(IDB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE, { keyPath: 'key' });
+    const req = idb.open(IDB_NAME, 2);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      for (const name of [...db.objectStoreNames]) db.deleteObjectStore(name); // version 1 kept no meta: start clean
+      db.createObjectStore(IDB_STORE, { keyPath: 'key' });
+      db.createObjectStore(IDB_META, { keyPath: 'key' });
+    };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   }));
   const tx = async (mode, fn) => {
     const db = await open();
     return new Promise((resolve, reject) => {
-      const t = db.transaction(IDB_STORE, mode), st = t.objectStore(IDB_STORE);
+      const t = db.transaction([IDB_STORE, IDB_META], mode);
       let out;
-      fn(st, (v) => { out = v; });
+      fn(t.objectStore(IDB_STORE), t.objectStore(IDB_META), (v) => { out = v; });
       t.oncomplete = () => resolve(out);
       t.onerror = () => reject(t.error);
       t.onabort = () => reject(t.error);
     });
   };
   return {
-    get: (key) => tx('readonly', (st, set) => { const r = st.get(key); r.onsuccess = () => set(r.result || null); }),
-    put: (entry) => tx('readwrite', (st) => {
+    get: (key) => tx('readonly', (st, meta, set) => { const r = st.get(key); r.onsuccess = () => set(r.result || null); }),
+    // Keeps the IDB_KEEP most recently saved series; the trim reads only the small meta records.
+    put: (entry) => tx('readwrite', (st, meta) => {
       st.put(entry);
-      const all = st.getAll();
-      all.onsuccess = () => { const old = all.result.sort((a, b) => b.savedAt - a.savedAt).slice(IDB_KEEP); for (const o of old) st.delete(o.key); };
+      meta.put({ key: entry.key, savedAt: entry.savedAt });
+      const all = meta.getAll();
+      all.onsuccess = () => {
+        for (const o of all.result.sort((x, y) => y.savedAt - x.savedAt).slice(IDB_KEEP)) { st.delete(o.key); meta.delete(o.key); }
+      };
     }),
   };
 }
 
-// get(key) -> { from, rows } | null; put(key, { from, rows }). Storage failures only cost a refetch.
+// get(key) -> { from, rows } | null; put(key, { from, rows }, { persist }): memory always, IndexedDB unless persist is
+// false (the once-a-minute panel top-up stays in memory; bar closes and full loads are written). Storage failures only
+// cost a refetch.
 export function createLtfCache({ idb = null, now = () => Date.now() } = {}) {
   const mem = new Map(), db = idbStore(idb);
   return {
@@ -203,10 +214,10 @@ export function createLtfCache({ idb = null, now = () => Date.now() } = {}) {
         return entry;
       } catch { return null; }
     },
-    async put(key, entry) {
+    async put(key, entry, { persist = true } = {}) {
       mem.delete(key); mem.set(key, entry);
       while (mem.size > MEM_KEEP) mem.delete(mem.keys().next().value);
-      if (db) { try { await db.put({ key, from: entry.from, rows: flat(entry.rows), savedAt: now() }); } catch { /* quota or private mode */ } }
+      if (db && persist) { try { await db.put({ key, from: entry.from, rows: flat(entry.rows), savedAt: now() }); } catch { /* quota or private mode */ } }
     },
   };
 }
@@ -228,34 +239,42 @@ export function overlapAgrees(older, newer) {
   return shared.every((r) => { const o = byTime.get(r[0]); return [1, 2, 3, 4].every((j) => Math.abs(o[j] - r[j]) <= 1e-9 * Math.max(1, Math.abs(r[j]))); });
 }
 
-// Base rows covering [fromSec, nowSec] for one asset and base: the cached series topped up from TAIL_DAYS back, or a
-// full read when the cache is missing, does not reach back to fromSec, or disagrees with the fresh tail.
+// Base rows covering [fromSec, nowSec] for one asset and base -> { rows, stale } (null when cancelled): the cached
+// series topped up from TAIL_DAYS back, or a full read when the cache is missing, does not reach back to fromSec, or
+// disagrees with the fresh tail. When the tail read fails but a cached series exists, that series is returned with
+// stale = true rather than nothing (the caller says so and tops it up later).
 export async function loadBase({ df, si, base, key, fromSec, nowSec, cache, cancelled = () => false, onProgress, sleep }) {
   const cached = await cache.get(key);
   if (cached && cached.from <= fromSec && cached.rows.length) {
     const last = cached.rows[cached.rows.length - 1][0];
-    const tail = await pageBars(df, si, base, { fromSec: last - TAIL_DAYS * 86400, toSec: nowSec + 60, cancelled, sleep });
+    let tail;
+    try {
+      tail = await pageBars(df, si, base, { fromSec: last - TAIL_DAYS * 86400, toSec: nowSec + 60, cancelled, sleep });
+    } catch {
+      return { rows: cached.rows.filter((r) => r[0] >= fromSec), stale: true };
+    }
     if (tail === null) return null;
     if (overlapAgrees(cached.rows, tail)) {
       const rows = mergeRows(cached.rows, tail);
       await cache.put(key, { from: cached.from, rows });
-      return rows.filter((r) => r[0] >= fromSec);
+      return { rows: rows.filter((r) => r[0] >= fromSec), stale: false };
     }
   }
   const rows = await pageBars(df, si, base, { fromSec, toSec: nowSec + 60, cancelled, onProgress, sleep });
   if (rows === null) return null;
   await cache.put(key, { from: fromSec, rows });
-  return rows;
+  return { rows, stale: false };
 }
 
-// The newest bars only, folded into `rows` (the live refresh on a bar close and for the panel).
-export async function refreshTail({ df, si, base, key, rows, nowSec, cache, sleep }) {
+// The newest bars only, folded into `rows` (the live refresh on a bar close and for the panel). persist: also write
+// the series to IndexedDB (bar closes only; the panel's once-a-minute top-up stays in memory).
+export async function refreshTail({ df, si, base, key, rows, nowSec, cache, sleep, persist = true }) {
   if (!rows.length) return rows;
   const last = rows[rows.length - 1][0];
   const tail = await pageBars(df, si, base, { fromSec: last - 86400, toSec: nowSec + 60, sleep });
   if (!tail || !tail.length) return rows;
   const merged = mergeRows(rows, tail);
   const cached = await cache.get(key);
-  if (cached) await cache.put(key, { from: cached.from, rows: mergeRows(cached.rows, tail) });
+  if (cached) await cache.put(key, { from: cached.from, rows: mergeRows(cached.rows, tail) }, { persist });
   return merged;
 }

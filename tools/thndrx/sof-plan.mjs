@@ -15,14 +15,17 @@ const RESOLUTION_SECS = { D: 86400, '1D': 86400, W: 604800, '1W': 604800, M: 259
 const tfSecsOf = (res) => RESOLUTION_SECS[String(res).toUpperCase()] ?? Number(res) * 60;
 
 // Symbol facts the engine needs, from the datafeed's symbol info (session '1;1000-1430:12345': opens 10:00, trades
-// Sunday = day 1 to Thursday) or EGX defaults when the datafeed is unavailable.
+// Sunday = day 1 to Thursday). Without symbol info: EGX (the caller names that guess in the Data row). With symbol info
+// whose session does not read as HHMM-HHMM:days (24x7 and the like): no session alignment (the UTC grid, as Pine's
+// timeframe.change sees a 24-hour market) and Monday weeks.
 export function symbolMeta(si) {
-  const m = si && /(\d{2})(\d{2})-\d{4}:(\d+)/.exec(String(si.session || ''));
+  if (!si) return { symType: 'stock', exTz: 'Africa/Cairo', sessionStartMin: 600, weekStart: 0 };
+  const m = /(\d{2})(\d{2})-\d{4}:(\d+)/.exec(String(si.session || ''));
   return {
-    symType: (si && si.type) || 'stock',
-    exTz: (si && si.timezone) || 'Africa/Cairo',
-    sessionStartMin: m ? +m[1] * 60 + +m[2] : 600,
-    weekStart: m ? (m[3].includes('1') ? 0 : 1) : 0,
+    symType: si.type || 'stock',
+    exTz: si.timezone || 'Africa/Cairo',
+    sessionStartMin: m ? +m[1] * 60 + +m[2] : null,
+    weekStart: m && m[3].includes('1') ? 0 : 1,
   };
 }
 
@@ -81,8 +84,9 @@ function toItems(drawings, bars, values, info, mintick) {
 }
 
 // ctx: chartInfo (symbol, mintick, resolution) + lastBarOpen, historyNote, volumeMissing, extra (from sof-main's
-// prepare: { meta, ltfRows, note }).
-export function buildSofPlan(bars, values, ctx) {
+// prepare: { meta, ltf (prebuilt intrabars), note }).
+// opts.drawings = false: the dashboard only (the live panel refresh), skipping the Pine drawing registry.
+export function buildSofPlan(bars, values, ctx, { drawings = true } = {}) {
   const extra = ctx.extra || {};
   const meta = extra.meta || symbolMeta(null);
   const warnings = [];
@@ -98,10 +102,10 @@ export function buildSofPlan(bars, values, ctx) {
     symbol: ctx.symbol, mintick: ctx.mintick, tfSecs: tfSecsOf(ctx.resolution), symType: meta.symType, exTz: meta.exTz,
     weekStart: meta.weekStart, sessionStartMin: meta.sessionStartMin,
     bars: bars.map((b) => [b.time, b.open, b.high, b.low, b.close, ctx.volumeMissing ? 0 : b.volume]),
-    ltfBars: extra.ltfRows || null,
+    ltf: extra.ltf || null,
   });
-  const res = runSof(chart, { ...sofEngineCfg(values), lastBarOpen: !!ctx.lastBarOpen });
-  Object.assign(plan, toItems(res.drawings, bars, values, res.info, ctx.mintick));
+  const res = runSof(chart, { ...sofEngineCfg(values), lastBarOpen: !!ctx.lastBarOpen, render: drawings });
+  if (drawings) Object.assign(plan, toItems(res.drawings, bars, values, res.info, ctx.mintick));
   plan.panel = sofPanel(res, values, { mintick: ctx.mintick, symType: meta.symType, warnings });
   plan.res = res;
   return plan;

@@ -75,7 +75,7 @@ export function sofDefaults() {
 
 const HEX6 = /^#[0-9a-f]{6}$/i;
 const RGBA = /^rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d*\.?\d+)\s*\)$/i;
-const TIMEFRAMES = /^(\d+|\d*[DWM])$/i;
+const TIMEFRAMES = /^(\d+|1?[DWM])$/i; // what the engine reads: minutes, D / W / M or 1D / 1W / 1M
 function validColor(v) {
   if (typeof v !== 'string') return false;
   if (HEX6.test(v)) return true;

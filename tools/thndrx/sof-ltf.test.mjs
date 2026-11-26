@@ -133,7 +133,8 @@ test('loadBase: first load reads everything, the second only the tail; a rescale
   const fromSec = rows[0][0], nowSec = rows[rows.length - 1][0] + 600;
   const df1 = fakeDatafeed(rows, { cap: 1000 });
   const a = await loadBase({ df: df1, si: {}, base: 10, key: 'X|10', fromSec, nowSec, cache, sleep: noSleep });
-  assert.equal(a.length, rows.length);
+  assert.equal(a.rows.length, rows.length);
+  assert.equal(a.stale, false);
   const df2 = fakeDatafeed(rows, { cap: 1000 });
   const b = await loadBase({ df: df2, si: {}, base: 10, key: 'X|10', fromSec, nowSec, cache, sleep: noSleep });
   assert.deepEqual(b, a);
@@ -141,8 +142,31 @@ test('loadBase: first load reads everything, the second only the tail; a rescale
   const split = rows.map((r) => [r[0], r[1] / 2, r[2] / 2, r[3] / 2, r[4] / 2, r[5] * 2]);
   const df3 = fakeDatafeed(split, { cap: 1000 });
   const c = await loadBase({ df: df3, si: {}, base: 10, key: 'X|10', fromSec, nowSec, cache, sleep: noSleep });
-  assert.deepEqual(c, split);
+  assert.deepEqual(c.rows, split);
   assert.ok(df3.calls.length > 2, 'full read after the split');
+});
+
+test('loadBase: a failing tail read keeps the cached series, flagged stale', async () => {
+  const rows = egxBars('2025-01-05T00:00:00Z', 60, 10);
+  const cache = createLtfCache();
+  const fromSec = rows[0][0], nowSec = rows[rows.length - 1][0] + 600;
+  await loadBase({ df: fakeDatafeed(rows, { cap: 5000 }), si: {}, base: 10, key: 'S|10', fromSec, nowSec, cache, sleep: noSleep });
+  const got = await loadBase({ df: fakeDatafeed(rows, { failFrom: 1 }), si: {}, base: 10, key: 'S|10', fromSec, nowSec, cache, sleep: noSleep });
+  assert.equal(got.stale, true);
+  assert.equal(got.rows.length, rows.length);
+});
+
+test('the cache writes to IndexedDB on full loads and bar closes only, never on the panel top-up', async () => {
+  const puts = [];
+  const cache = createLtfCache();
+  const realPut = cache.put;
+  cache.put = (key, entry, opts) => { puts.push(opts ? opts.persist : true); return realPut(key, entry, opts); };
+  const rows = egxBars('2025-01-05T00:00:00Z', 10, 10);
+  await cache.put('P', { from: rows[0][0], rows: rows.slice(0, -5) });
+  const grown = { df: fakeDatafeed(rows), si: {}, base: 10, key: 'P', rows: rows.slice(0, -5), nowSec: rows[rows.length - 1][0] + 60, cache, sleep: noSleep };
+  await refreshTail({ ...grown, persist: false });
+  await refreshTail(grown);
+  assert.deepEqual(puts, [true, false, true]);
 });
 
 test('mergeRows and refreshTail: the newest read of a bar wins', async () => {
