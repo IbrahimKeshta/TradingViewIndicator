@@ -38,7 +38,7 @@ if (ai > 0) process.argv.splice(ai, 2);
 // open; 'time' carries the time of day.
 let TF = process.env.TF || '1D';
 for (const flag of ['--tf', '--interval']) { const k = process.argv.indexOf(flag); if (k > 0) { TF = process.argv[k + 1]; process.argv.splice(k, 2); } }
-if (!/^d*[DWM]$|^d+$/.test(TF)) throw new Error('bad timeframe ' + TF);
+if (!/^\d*[DWM]$|^\d+$/.test(TF)) throw new Error('bad timeframe ' + TF);
 
 const outDir = path.resolve(process.argv[2] || 'data/egx');
 const only = process.argv[3] ? process.argv[3].split(',').map(s => s.trim()).filter(Boolean) : null;
