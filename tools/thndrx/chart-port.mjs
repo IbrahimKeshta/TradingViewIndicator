@@ -239,6 +239,24 @@ export function planWindow(bars, now, start = windowStart(bars)) {
   return { bars: lo > 0 ? bars.slice(lo) : bars, note: notes.filter(Boolean).join(' · ') || null };
 }
 
+// Min low / max high in one loop: spreading 150k+ bars into Math.min/max overflows the call stack.
+export function priceRange(bars) {
+  if (!bars.length) return { priceLow: null, priceHigh: null };
+  let priceLow = Infinity, priceHigh = -Infinity;
+  for (const b of bars) { if (b.low < priceLow) priceLow = b.low; if (b.high > priceHigh) priceHigh = b.high; }
+  return { priceLow, priceHigh };
+}
+
+// Two overlays (ICT and Session Order Flow) share one chart: a history load zooms the chart out and puts the user's
+// view back, so two loads at once would restore each other's zoom. Loads queue on a promise kept on the chart frame.
+export function withHistoryLock(frameWin, fn) {
+  const holder = frameWin || {};
+  const prev = holder.__thndrxHistoryLock || Promise.resolve();
+  const run = prev.then(fn, fn);
+  holder.__thndrxHistoryLock = run.then(() => {}, () => {});
+  return run;
+}
+
 // Bars from `fromTime` on (all bars when omitted): the cheap live read the tick poll uses.
 export const readTail = (chart, fromTime) => readBars(chart, fromTime);
 

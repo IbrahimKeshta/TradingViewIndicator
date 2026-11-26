@@ -13,6 +13,7 @@ import { resolveConfig } from './inputs.mjs';
 import { PINE_COLORS, colorNew } from './colors.mjs';
 import { fmtNum, fmtPrice } from './format.mjs';
 import { buildPanel } from './panel.mjs';
+import { priceRange as barPriceRange } from './chart-port.mjs';
 
 export const HIST_LIMIT = 5000;           // Pine line 1765
 export const ANCHOR_LIMIT = HIST_LIMIT - 1;
@@ -414,13 +415,7 @@ export function runPlanEngine(bars, values, ctx) {
   return { res, resolved, warnings };
 }
 
-// Min low / max high in one loop: spreading 150k+ bars into Math.min/max overflows the call stack.
-export function priceRange(bars) {
-  if (!bars.length) return { priceLow: null, priceHigh: null };
-  let priceLow = Infinity, priceHigh = -Infinity;
-  for (const b of bars) { if (b.low < priceLow) priceLow = b.low; if (b.high > priceHigh) priceHigh = b.high; }
-  return { priceLow, priceHigh };
-}
+export const priceRange = barPriceRange; // moved to chart-port.mjs; kept here for existing callers
 
 // ctx: { symbol, mintick, resolution, lastBarOpen, historyNote?: string|null, volumeMissing?: boolean }
 export function buildRenderPlan(bars, values, ctx) {

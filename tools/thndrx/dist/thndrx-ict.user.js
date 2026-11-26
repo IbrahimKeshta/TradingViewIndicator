@@ -1663,6 +1663,296 @@ function messagePanel(values, text) {
 }
 return { buildPanel, messagePanel };
 })();
+__m['thndrx/chart-port.mjs'] = (function () {
+'use strict';
+// ThndrX chart port: finds the TradingView chart inside ThndrX, reads its bars and history, watches it, and exposes
+// the drawing calls the painter needs. Every fact used here comes from the live recon
+// (docs/superpowers/plans/2026-11-24-thndrx-recon.md). The logic that does not need the real chart is exported as
+// pure functions and tested in chart-port.test.mjs.
+
+const IFRAME_SELECTOR = 'iframe[id^="tradingview_"]';
+const POLL_MS = 2000;                                     // tick poll and history settle wait (recon: no tick event)
+const HISTORY_FROM = Date.UTC(1990, 0, 1) / 1000;         // before any EGX series; the feed clamps to what it has
+const HISTORY_NOTE = 'History: 5 years (Thndr limit)';
+const FEED_YEARS = 5, NOTE_SLACK_SEC = 30 * 86400;
+const EXPORT_OPTS = { includeTime: true, includeSeries: true, includedStudies: 'all' };
+const EGX_CLOSE_MIN = 14 * 60 + 30;                       // EGX session 10:00-14:30 Africa/Cairo, Sunday to Thursday
+const EGX_SESSION_MIN = 270;                              // minutes in that session
+const CALENDAR_SLACK = 2, CALENDAR_PAD_DAYS = 10;         // calendar days per session (weekends are 7/5, plus holidays)
+const LOAD_TIMEOUT_MS = 90000;                     // a history load that has not finished by then is given up
+
+const cairoClock = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Africa/Cairo', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+});
+// Cairo calendar day (whole days since the epoch of the Cairo date), minutes since Cairo midnight, and the date parts.
+function cairoParts(timeSec) {
+  const p = {};
+  for (const { type, value } of cairoClock.formatToParts(new Date(timeSec * 1000))) p[type] = +value;
+  const day = Date.UTC(p.year, p.month - 1, p.day) / 86400000;
+  return { y: p.year, mo: p.month, d: p.day, day, minutes: p.hour * 60 + p.minute, dow: new Date(day * 86400000).getUTCDay() };
+}
+const pad = (n) => String(n).padStart(2, '0');
+// Both Cairo offsets (UTC+2 / +3) are whole hours and the clocks change on the hour, so the Cairo date is constant
+// within a UTC hour: one Intl call per hour, not per bar (330k one-minute rows took 2.3 s with a call per row).
+let memoHour = NaN, memoDate = '';
+const cairoDateOf = (timeSec) => {
+  const hour = Math.floor(timeSec / 3600);
+  if (hour !== memoHour) { const c = cairoParts(hour * 3600); memoHour = hour; memoDate = `${c.y}-${pad(c.mo)}-${pad(c.d)}`; }
+  return memoDate;
+};
+const isWeekend = (dow) => dow === 5 || dow === 6; // Friday and Saturday
+
+// ---- pure parts ----
+
+// exportData -> engine bars. Columns are found by schema: the series' open/high/low/close and the Volume study's
+// `Volume` plot (its sourceTitle is localised, the plotTitle is not). Times pass through unchanged (ruling R11);
+// rows without a finite close (future rows of offset studies) are not bars.
+function toBars({ schema, data }) {
+  const col = {};
+  schema.forEach((s, k) => {
+    if (s.type === 'time') col.time ??= k;
+    else if (s.sourceType === 'series' && ['open', 'high', 'low', 'close'].includes(s.plotTitle)) col[s.plotTitle] ??= k;
+    else if (s.sourceType === 'study' && (s.plotTitle === 'Volume' || s.plotId === 'vol')) col.volume ??= k;
+  });
+  for (const k of ['time', 'open', 'high', 'low', 'close']) if (col[k] === undefined) throw new Error(`exportData has no ${k} column`);
+  const volumeMissing = col.volume === undefined;
+  const out = [];
+  let ascending = true; // the export is normally in time order with one row per time: then no map and no sort
+  for (const row of data) {
+    const time = row[col.time], close = row[col.close];
+    if (!Number.isFinite(time) || !Number.isFinite(close)) continue;
+    if (out.length && time <= out[out.length - 1].time) ascending = false;
+    out.push({
+      time, date: cairoDateOf(time), open: row[col.open], high: row[col.high], low: row[col.low], close,
+      volume: volumeMissing ? NaN : row[col.volume],
+    });
+  }
+  if (ascending) return { bars: out, volumeMissing };
+  const byTime = new Map();
+  for (const b of out) byTime.set(b.time, b); // the last row for a time wins
+  return { bars: [...byTime.values()].sort((a, b) => a.time - b.time), volumeMissing };
+}
+
+const sameNum = (a, b) => a === b || (Number.isNaN(a) && Number.isNaN(b));
+const sameBar = (a, b) => ['open', 'high', 'low', 'close', 'volume'].every((k) => sameNum(a[k], b[k]));
+
+// Folds a tail read (bars from the last known bar on) into the bars: the last bar updated, newer bars appended.
+function mergeTail(bars, tail) {
+  if (!bars.length) return { bars: tail, changed: tail.length > 0 };
+  let out = null; // copied on the first change; the caller's array is never mutated
+  for (const b of tail) {
+    const cur = out ?? bars, last = cur[cur.length - 1];
+    if (b.time === last.time && !sameBar(b, last)) out = [...cur.slice(0, -1), b];
+    else if (b.time > last.time) (out ??= [...bars]).push(b);
+  }
+  return { bars: out ?? bars, changed: out !== null };
+}
+
+// Whether the last bar is still forming at `now` (unix seconds). Intraday: until its own end or the 14:30 close.
+// Daily / weekly / monthly: until 14:30 Cairo of the period's last trading day (Thursday; last Sunday-Thursday of the month).
+function isLastBarOpen(bars, resolution, now) {
+  if (!bars.length) return false;
+  const t = bars[bars.length - 1].time;
+  if (now < t) return true;
+  const r = String(resolution).toUpperCase();
+  const bar = cairoParts(t), cur = cairoParts(now);
+  const before = (day) => cur.day < day || (cur.day === day && cur.minutes < EGX_CLOSE_MIN);
+  if (/^\d+$/.test(r)) {
+    if (cur.day !== bar.day) return false;
+    return now < t + Number(r) * 60 && cur.minutes < EGX_CLOSE_MIN;
+  }
+  if (r === 'D' || r === '1D') return before(bar.day);
+  if (r === 'W' || r === '1W') {
+    const sunday = bar.day - bar.dow;
+    return cur.day >= sunday && before(sunday + 4);
+  }
+  if (r === 'M' || r === '1M') {
+    let last = Date.UTC(bar.y, bar.mo, 0) / 86400000; // last calendar day of the bar's month
+    while (isWeekend(new Date(last * 86400000).getUTCDay())) last--;
+    return cur.y === bar.y && cur.mo === bar.mo && before(last);
+  }
+  return false;
+}
+
+const closedBars = (bars, resolution, now) => (isLastBarOpen(bars, resolution, now) ? bars.slice(0, -1) : bars);
+
+// Where the history request starts. Daily and above: 1990, before any EGX series (the feed clamps to what it has).
+// Intraday: only back far enough for the MAX_PLAN_BARS bars the plan uses, so a 1m chart does not pull 5 years
+// (about 330k rows) to use 20000: sessions needed at ceil(270 / minutes) bars each, CALENDAR_SLACK calendar days per
+// session. When that reaches past the 5-year feed anyway (15m and up), ask from 1990.
+function historyFrom(resolution, now) {
+  const r = String(resolution);
+  if (!/^\d+$/.test(r) || Number(r) <= 0) return HISTORY_FROM;
+  const sessions = Math.ceil(MAX_PLAN_BARS / Math.ceil(EGX_SESSION_MIN / Number(r)));
+  const days = sessions * CALENDAR_SLACK + CALENDAR_PAD_DAYS;
+  return days > FEED_YEARS * 366 ? HISTORY_FROM : Math.floor(now - days * 86400);
+}
+
+// Ruling R12: the panel says the history is cut when the first bar sits on Thndr's 5-year feed limit (within 30 days).
+function historyNote(firstTime, now) {
+  if (!Number.isFinite(firstTime)) return null;
+  const d = new Date(now * 1000);
+  d.setUTCFullYear(d.getUTCFullYear() - FEED_YEARS);
+  return Math.abs(firstTime - d.getTime() / 1000) <= NOTE_SLACK_SEC ? HISTORY_NOTE : null;
+}
+
+// ---- the chart ----
+
+// The chart iframe and its API right now, or null. Same-origin, but any access can throw while the iframe is torn down.
+function probeChart(win) {
+  try {
+    const iframe = win.document.querySelector(IFRAME_SELECTOR);
+    const api = iframe && iframe.contentWindow && iframe.contentWindow.tradingViewApi;
+    const chart = api && api.activeChart();
+    return chart ? { api, chart, iframe } : null;
+  } catch {
+    return null;
+  }
+}
+
+function findChart(win, timeoutMs = 60000, pollMs = 500) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const poll = () => {
+      const found = probeChart(win);
+      if (found) return resolve(found);
+      if (Date.now() >= deadline) return reject(new Error(`no ThndrX chart after ${timeoutMs} ms`));
+      win.setTimeout(poll, pollMs);
+    };
+    poll();
+  });
+}
+
+function chartInfo(chart) {
+  const ext = chart.symbolExt();
+  const mintick = ext && ext.pricescale > 0 ? (ext.minmov || 1) / ext.pricescale : 0.01;
+  return { symbol: (ext && ext.name) || chart.symbol(), mintick, resolution: chart.resolution() };
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const readBars = async (chart, from) => toBars(await chart.exportData(from === undefined ? EXPORT_OPTS : { ...EXPORT_OPTS, from }));
+
+// History back to the series start (recon): ask for everything since historyFrom(resolution), re-read every 2 s
+// until the first bar stops moving (endOfData() is unreliable), then put the user's view back. complete = the first
+// bar settled. cancelled() is checked every round: a cancelled load stops asking and leaves through the same view
+// restore. Without a readable view there is nothing to restore, so the load never zooms out and uses what is loaded.
+// A load still running after timeoutMs ends as cancelled with timedOut = true and the view restored (a chart that
+// stops answering must not block later reloads).
+async function loadAllBars(chart, {
+  sleep = wait, maxRounds = 30, now = () => Date.now() / 1000, cancelled = () => false, resolution,
+  timeoutMs = LOAD_TIMEOUT_MS, timers = globalThis,
+} = {}) {
+  let saved = null;
+  try { saved = chart.getVisibleRange(); } catch { /* no range yet */ }
+  let timedOut = false, restored = false;
+  const stop = () => timedOut || cancelled();
+  const restore = async () => {
+    if (restored || !saved) return;
+    restored = true;
+    await Promise.resolve().then(() => chart.setVisibleRange(saved)).catch(() => {});
+  };
+  const from = historyFrom(resolution, now());
+  const ask = () => chart.setVisibleRange({ from, to: Math.floor(now()) });
+
+  const run = async () => {
+    let read = await readBars(chart), complete = false;
+    const out = (wasCancelled) => ({ bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: wasCancelled, timedOut });
+    if (!saved) return out(false);
+    try {
+      if (stop()) return out(true);
+      await ask();
+      for (let round = 1; round < maxRounds; round++) {
+        await sleep(POLL_MS);
+        if (stop()) return out(true);
+        const next = await readBars(chart);
+        const settled = next.bars.length > 0 && read.bars.length > 0 && next.bars[0].time === read.bars[0].time;
+        read = next;
+        if (settled) { complete = true; break; }
+        await ask(); // the feed may hand history over in chunks
+      }
+    } finally {
+      await restore();
+    }
+    return out(false);
+  };
+
+  let handle;
+  const deadline = new Promise((resolve) => { handle = timers.setTimeout(() => { timedOut = true; resolve(null); }, timeoutMs); });
+  try {
+    const res = await Promise.race([run(), deadline]);
+    if (res) return res;
+  } finally {
+    timers.clearTimeout(handle);
+  }
+  await restore(); // the hung run never got to its own restore; if it resumes, stop() sends it out without asking
+  return { bars: [], complete: false, volumeMissing: false, cancelled: true, timedOut: true };
+}
+
+// Ruling R20: the plan is computed on the newest MAX_PLAN_BARS bars, so a 1m/5m chart's 5-year feed cannot stall the
+// page. The note joins the 5-year feed note (judged on the full history) and the cap note.
+const MAX_PLAN_BARS = 20000;
+const CAP_NOTE = `Computed on the last ${MAX_PLAN_BARS} bars`;
+
+// The time the plan window starts at, fixed when the history loads (I1): render-plan keys carry bar indices, so a
+// window that slid by one bar on every new bar would give every drawing a new key and redraw them all.
+const windowStart = (bars, max = MAX_PLAN_BARS) => (bars.length > max ? bars[bars.length - max].time : -Infinity);
+
+// The bars from `start` on; new bars only lengthen the window until the next load pins a new start.
+function planWindow(bars, now, start = windowStart(bars)) {
+  const notes = [historyNote(bars.length ? bars[0].time : undefined, now)];
+  let lo = 0, hi = bars.length; // first bar at or after start (bars are sorted by time)
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (bars[mid].time < start) lo = mid + 1; else hi = mid; }
+  if (lo > 0) notes.push(CAP_NOTE);
+  return { bars: lo > 0 ? bars.slice(lo) : bars, note: notes.filter(Boolean).join(' · ') || null };
+}
+
+// Min low / max high in one loop: spreading 150k+ bars into Math.min/max overflows the call stack.
+function priceRange(bars) {
+  if (!bars.length) return { priceLow: null, priceHigh: null };
+  let priceLow = Infinity, priceHigh = -Infinity;
+  for (const b of bars) { if (b.low < priceLow) priceLow = b.low; if (b.high > priceHigh) priceHigh = b.high; }
+  return { priceLow, priceHigh };
+}
+
+// Two overlays (ICT and Session Order Flow) share one chart: a history load zooms the chart out and puts the user's
+// view back, so two loads at once would restore each other's zoom. Loads queue on a promise kept on the chart frame.
+function withHistoryLock(frameWin, fn) {
+  const holder = frameWin || {};
+  const prev = holder.__thndrxHistoryLock || Promise.resolve();
+  const run = prev.then(fn, fn);
+  holder.__thndrxHistoryLock = run.then(() => {}, () => {});
+  return run;
+}
+
+// Bars from `fromTime` on (all bars when omitted): the cheap live read the tick poll uses.
+const readTail = (chart, fromTime) => readBars(chart, fromTime);
+
+// Symbol and interval changes reload; there is no tick event, so the last bar is polled every 2 s.
+function subscribe(chart, { onReload, onTick }, timers = globalThis) {
+  const offs = [];
+  for (const name of ['onSymbolChanged', 'onIntervalChanged']) {
+    try {
+      const ev = chart[name]();
+      ev.subscribe(null, onReload);
+      offs.push(() => ev.unsubscribe(null, onReload));
+    } catch { /* event missing on this build: the tick poll still notices the change */ }
+  }
+  const handle = timers.setInterval(onTick, POLL_MS);
+  return () => {
+    timers.clearInterval(handle);
+    for (const off of offs) { try { off(); } catch { /* chart already gone */ } }
+  };
+}
+
+function makePort(chart) {
+  return {
+    createShape: (point, options) => chart.createShape(point, options),
+    createMultipointShape: (points, options) => chart.createMultipointShape(points, options),
+    removeEntity: (id, options) => chart.removeEntity(id, options),
+  };
+}
+return { HISTORY_NOTE, LOAD_TIMEOUT_MS, toBars, mergeTail, isLastBarOpen, closedBars, historyFrom, historyNote, probeChart, findChart, chartInfo, loadAllBars, MAX_PLAN_BARS, CAP_NOTE, windowStart, planWindow, priceRange, withHistoryLock, readTail, subscribe, makePort };
+})();
 __m['thndrx/render-plan.mjs'] = (function () {
 'use strict';
 // Render plan for the ThndrX overlay: runs the engine and turns its state into plain drawing items (boxes, lines,
@@ -1680,6 +1970,7 @@ const { resolveConfig } = __m['thndrx/inputs.mjs'];
 const { PINE_COLORS, colorNew } = __m['thndrx/colors.mjs'];
 const { fmtNum, fmtPrice } = __m['thndrx/format.mjs'];
 const { buildPanel } = __m['thndrx/panel.mjs'];
+const { priceRange: barPriceRange } = __m['thndrx/chart-port.mjs'];
 
 const HIST_LIMIT = 5000;           // Pine line 1765
 const ANCHOR_LIMIT = HIST_LIMIT - 1;
@@ -2081,13 +2372,7 @@ function runPlanEngine(bars, values, ctx) {
   return { res, resolved, warnings };
 }
 
-// Min low / max high in one loop: spreading 150k+ bars into Math.min/max overflows the call stack.
-function priceRange(bars) {
-  if (!bars.length) return { priceLow: null, priceHigh: null };
-  let priceLow = Infinity, priceHigh = -Infinity;
-  for (const b of bars) { if (b.low < priceLow) priceLow = b.low; if (b.high > priceHigh) priceHigh = b.high; }
-  return { priceLow, priceHigh };
-}
+const priceRange = barPriceRange; // moved to chart-port.mjs; kept here for existing callers
 
 // ctx: { symbol, mintick, resolution, lastBarOpen, historyNote?: string|null, volumeMissing?: boolean }
 function buildRenderPlan(bars, values, ctx) {
@@ -2316,286 +2601,13 @@ class Painter {
 }
 return { MAX_BANDS, toShapeCalls, itemHash, Painter };
 })();
-__m['thndrx/chart-port.mjs'] = (function () {
-'use strict';
-// ThndrX chart port: finds the TradingView chart inside ThndrX, reads its bars and history, watches it, and exposes
-// the drawing calls the painter needs. Every fact used here comes from the live recon
-// (docs/superpowers/plans/2026-11-24-thndrx-recon.md). The logic that does not need the real chart is exported as
-// pure functions and tested in chart-port.test.mjs.
-
-const IFRAME_SELECTOR = 'iframe[id^="tradingview_"]';
-const POLL_MS = 2000;                                     // tick poll and history settle wait (recon: no tick event)
-const HISTORY_FROM = Date.UTC(1990, 0, 1) / 1000;         // before any EGX series; the feed clamps to what it has
-const HISTORY_NOTE = 'History: 5 years (Thndr limit)';
-const FEED_YEARS = 5, NOTE_SLACK_SEC = 30 * 86400;
-const EXPORT_OPTS = { includeTime: true, includeSeries: true, includedStudies: 'all' };
-const EGX_CLOSE_MIN = 14 * 60 + 30;                       // EGX session 10:00-14:30 Africa/Cairo, Sunday to Thursday
-const EGX_SESSION_MIN = 270;                              // minutes in that session
-const CALENDAR_SLACK = 2, CALENDAR_PAD_DAYS = 10;         // calendar days per session (weekends are 7/5, plus holidays)
-const LOAD_TIMEOUT_MS = 90000;                     // a history load that has not finished by then is given up
-
-const cairoClock = new Intl.DateTimeFormat('en-US', {
-  timeZone: 'Africa/Cairo', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-});
-// Cairo calendar day (whole days since the epoch of the Cairo date), minutes since Cairo midnight, and the date parts.
-function cairoParts(timeSec) {
-  const p = {};
-  for (const { type, value } of cairoClock.formatToParts(new Date(timeSec * 1000))) p[type] = +value;
-  const day = Date.UTC(p.year, p.month - 1, p.day) / 86400000;
-  return { y: p.year, mo: p.month, d: p.day, day, minutes: p.hour * 60 + p.minute, dow: new Date(day * 86400000).getUTCDay() };
-}
-const pad = (n) => String(n).padStart(2, '0');
-// Both Cairo offsets (UTC+2 / +3) are whole hours and the clocks change on the hour, so the Cairo date is constant
-// within a UTC hour: one Intl call per hour, not per bar (330k one-minute rows took 2.3 s with a call per row).
-let memoHour = NaN, memoDate = '';
-const cairoDateOf = (timeSec) => {
-  const hour = Math.floor(timeSec / 3600);
-  if (hour !== memoHour) { const c = cairoParts(hour * 3600); memoHour = hour; memoDate = `${c.y}-${pad(c.mo)}-${pad(c.d)}`; }
-  return memoDate;
-};
-const isWeekend = (dow) => dow === 5 || dow === 6; // Friday and Saturday
-
-// ---- pure parts ----
-
-// exportData -> engine bars. Columns are found by schema: the series' open/high/low/close and the Volume study's
-// `Volume` plot (its sourceTitle is localised, the plotTitle is not). Times pass through unchanged (ruling R11);
-// rows without a finite close (future rows of offset studies) are not bars.
-function toBars({ schema, data }) {
-  const col = {};
-  schema.forEach((s, k) => {
-    if (s.type === 'time') col.time ??= k;
-    else if (s.sourceType === 'series' && ['open', 'high', 'low', 'close'].includes(s.plotTitle)) col[s.plotTitle] ??= k;
-    else if (s.sourceType === 'study' && (s.plotTitle === 'Volume' || s.plotId === 'vol')) col.volume ??= k;
-  });
-  for (const k of ['time', 'open', 'high', 'low', 'close']) if (col[k] === undefined) throw new Error(`exportData has no ${k} column`);
-  const volumeMissing = col.volume === undefined;
-  const out = [];
-  let ascending = true; // the export is normally in time order with one row per time: then no map and no sort
-  for (const row of data) {
-    const time = row[col.time], close = row[col.close];
-    if (!Number.isFinite(time) || !Number.isFinite(close)) continue;
-    if (out.length && time <= out[out.length - 1].time) ascending = false;
-    out.push({
-      time, date: cairoDateOf(time), open: row[col.open], high: row[col.high], low: row[col.low], close,
-      volume: volumeMissing ? NaN : row[col.volume],
-    });
-  }
-  if (ascending) return { bars: out, volumeMissing };
-  const byTime = new Map();
-  for (const b of out) byTime.set(b.time, b); // the last row for a time wins
-  return { bars: [...byTime.values()].sort((a, b) => a.time - b.time), volumeMissing };
-}
-
-const sameNum = (a, b) => a === b || (Number.isNaN(a) && Number.isNaN(b));
-const sameBar = (a, b) => ['open', 'high', 'low', 'close', 'volume'].every((k) => sameNum(a[k], b[k]));
-
-// Folds a tail read (bars from the last known bar on) into the bars: the last bar updated, newer bars appended.
-function mergeTail(bars, tail) {
-  if (!bars.length) return { bars: tail, changed: tail.length > 0 };
-  let out = null; // copied on the first change; the caller's array is never mutated
-  for (const b of tail) {
-    const cur = out ?? bars, last = cur[cur.length - 1];
-    if (b.time === last.time && !sameBar(b, last)) out = [...cur.slice(0, -1), b];
-    else if (b.time > last.time) (out ??= [...bars]).push(b);
-  }
-  return { bars: out ?? bars, changed: out !== null };
-}
-
-// Whether the last bar is still forming at `now` (unix seconds). Intraday: until its own end or the 14:30 close.
-// Daily / weekly / monthly: until 14:30 Cairo of the period's last trading day (Thursday; last Sunday-Thursday of the month).
-function isLastBarOpen(bars, resolution, now) {
-  if (!bars.length) return false;
-  const t = bars[bars.length - 1].time;
-  if (now < t) return true;
-  const r = String(resolution).toUpperCase();
-  const bar = cairoParts(t), cur = cairoParts(now);
-  const before = (day) => cur.day < day || (cur.day === day && cur.minutes < EGX_CLOSE_MIN);
-  if (/^\d+$/.test(r)) {
-    if (cur.day !== bar.day) return false;
-    return now < t + Number(r) * 60 && cur.minutes < EGX_CLOSE_MIN;
-  }
-  if (r === 'D' || r === '1D') return before(bar.day);
-  if (r === 'W' || r === '1W') {
-    const sunday = bar.day - bar.dow;
-    return cur.day >= sunday && before(sunday + 4);
-  }
-  if (r === 'M' || r === '1M') {
-    let last = Date.UTC(bar.y, bar.mo, 0) / 86400000; // last calendar day of the bar's month
-    while (isWeekend(new Date(last * 86400000).getUTCDay())) last--;
-    return cur.y === bar.y && cur.mo === bar.mo && before(last);
-  }
-  return false;
-}
-
-const closedBars = (bars, resolution, now) => (isLastBarOpen(bars, resolution, now) ? bars.slice(0, -1) : bars);
-
-// Where the history request starts. Daily and above: 1990, before any EGX series (the feed clamps to what it has).
-// Intraday: only back far enough for the MAX_PLAN_BARS bars the plan uses, so a 1m chart does not pull 5 years
-// (about 330k rows) to use 20000: sessions needed at ceil(270 / minutes) bars each, CALENDAR_SLACK calendar days per
-// session. When that reaches past the 5-year feed anyway (15m and up), ask from 1990.
-function historyFrom(resolution, now) {
-  const r = String(resolution);
-  if (!/^\d+$/.test(r) || Number(r) <= 0) return HISTORY_FROM;
-  const sessions = Math.ceil(MAX_PLAN_BARS / Math.ceil(EGX_SESSION_MIN / Number(r)));
-  const days = sessions * CALENDAR_SLACK + CALENDAR_PAD_DAYS;
-  return days > FEED_YEARS * 366 ? HISTORY_FROM : Math.floor(now - days * 86400);
-}
-
-// Ruling R12: the panel says the history is cut when the first bar sits on Thndr's 5-year feed limit (within 30 days).
-function historyNote(firstTime, now) {
-  if (!Number.isFinite(firstTime)) return null;
-  const d = new Date(now * 1000);
-  d.setUTCFullYear(d.getUTCFullYear() - FEED_YEARS);
-  return Math.abs(firstTime - d.getTime() / 1000) <= NOTE_SLACK_SEC ? HISTORY_NOTE : null;
-}
-
-// ---- the chart ----
-
-// The chart iframe and its API right now, or null. Same-origin, but any access can throw while the iframe is torn down.
-function probeChart(win) {
-  try {
-    const iframe = win.document.querySelector(IFRAME_SELECTOR);
-    const api = iframe && iframe.contentWindow && iframe.contentWindow.tradingViewApi;
-    const chart = api && api.activeChart();
-    return chart ? { api, chart, iframe } : null;
-  } catch {
-    return null;
-  }
-}
-
-function findChart(win, timeoutMs = 60000, pollMs = 500) {
-  const deadline = Date.now() + timeoutMs;
-  return new Promise((resolve, reject) => {
-    const poll = () => {
-      const found = probeChart(win);
-      if (found) return resolve(found);
-      if (Date.now() >= deadline) return reject(new Error(`no ThndrX chart after ${timeoutMs} ms`));
-      win.setTimeout(poll, pollMs);
-    };
-    poll();
-  });
-}
-
-function chartInfo(chart) {
-  const ext = chart.symbolExt();
-  const mintick = ext && ext.pricescale > 0 ? (ext.minmov || 1) / ext.pricescale : 0.01;
-  return { symbol: (ext && ext.name) || chart.symbol(), mintick, resolution: chart.resolution() };
-}
-
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const readBars = async (chart, from) => toBars(await chart.exportData(from === undefined ? EXPORT_OPTS : { ...EXPORT_OPTS, from }));
-
-// History back to the series start (recon): ask for everything since historyFrom(resolution), re-read every 2 s
-// until the first bar stops moving (endOfData() is unreliable), then put the user's view back. complete = the first
-// bar settled. cancelled() is checked every round: a cancelled load stops asking and leaves through the same view
-// restore. Without a readable view there is nothing to restore, so the load never zooms out and uses what is loaded.
-// A load still running after timeoutMs ends as cancelled with timedOut = true and the view restored (a chart that
-// stops answering must not block later reloads).
-async function loadAllBars(chart, {
-  sleep = wait, maxRounds = 30, now = () => Date.now() / 1000, cancelled = () => false, resolution,
-  timeoutMs = LOAD_TIMEOUT_MS, timers = globalThis,
-} = {}) {
-  let saved = null;
-  try { saved = chart.getVisibleRange(); } catch { /* no range yet */ }
-  let timedOut = false, restored = false;
-  const stop = () => timedOut || cancelled();
-  const restore = async () => {
-    if (restored || !saved) return;
-    restored = true;
-    await Promise.resolve().then(() => chart.setVisibleRange(saved)).catch(() => {});
-  };
-  const from = historyFrom(resolution, now());
-  const ask = () => chart.setVisibleRange({ from, to: Math.floor(now()) });
-
-  const run = async () => {
-    let read = await readBars(chart), complete = false;
-    const out = (wasCancelled) => ({ bars: read.bars, complete, volumeMissing: read.volumeMissing, cancelled: wasCancelled, timedOut });
-    if (!saved) return out(false);
-    try {
-      if (stop()) return out(true);
-      await ask();
-      for (let round = 1; round < maxRounds; round++) {
-        await sleep(POLL_MS);
-        if (stop()) return out(true);
-        const next = await readBars(chart);
-        const settled = next.bars.length > 0 && read.bars.length > 0 && next.bars[0].time === read.bars[0].time;
-        read = next;
-        if (settled) { complete = true; break; }
-        await ask(); // the feed may hand history over in chunks
-      }
-    } finally {
-      await restore();
-    }
-    return out(false);
-  };
-
-  let handle;
-  const deadline = new Promise((resolve) => { handle = timers.setTimeout(() => { timedOut = true; resolve(null); }, timeoutMs); });
-  try {
-    const res = await Promise.race([run(), deadline]);
-    if (res) return res;
-  } finally {
-    timers.clearTimeout(handle);
-  }
-  await restore(); // the hung run never got to its own restore; if it resumes, stop() sends it out without asking
-  return { bars: [], complete: false, volumeMissing: false, cancelled: true, timedOut: true };
-}
-
-// Ruling R20: the plan is computed on the newest MAX_PLAN_BARS bars, so a 1m/5m chart's 5-year feed cannot stall the
-// page. The note joins the 5-year feed note (judged on the full history) and the cap note.
-const MAX_PLAN_BARS = 20000;
-const CAP_NOTE = `Computed on the last ${MAX_PLAN_BARS} bars`;
-
-// The time the plan window starts at, fixed when the history loads (I1): render-plan keys carry bar indices, so a
-// window that slid by one bar on every new bar would give every drawing a new key and redraw them all.
-const windowStart = (bars, max = MAX_PLAN_BARS) => (bars.length > max ? bars[bars.length - max].time : -Infinity);
-
-// The bars from `start` on; new bars only lengthen the window until the next load pins a new start.
-function planWindow(bars, now, start = windowStart(bars)) {
-  const notes = [historyNote(bars.length ? bars[0].time : undefined, now)];
-  let lo = 0, hi = bars.length; // first bar at or after start (bars are sorted by time)
-  while (lo < hi) { const mid = (lo + hi) >> 1; if (bars[mid].time < start) lo = mid + 1; else hi = mid; }
-  if (lo > 0) notes.push(CAP_NOTE);
-  return { bars: lo > 0 ? bars.slice(lo) : bars, note: notes.filter(Boolean).join(' · ') || null };
-}
-
-// Bars from `fromTime` on (all bars when omitted): the cheap live read the tick poll uses.
-const readTail = (chart, fromTime) => readBars(chart, fromTime);
-
-// Symbol and interval changes reload; there is no tick event, so the last bar is polled every 2 s.
-function subscribe(chart, { onReload, onTick }, timers = globalThis) {
-  const offs = [];
-  for (const name of ['onSymbolChanged', 'onIntervalChanged']) {
-    try {
-      const ev = chart[name]();
-      ev.subscribe(null, onReload);
-      offs.push(() => ev.unsubscribe(null, onReload));
-    } catch { /* event missing on this build: the tick poll still notices the change */ }
-  }
-  const handle = timers.setInterval(onTick, POLL_MS);
-  return () => {
-    timers.clearInterval(handle);
-    for (const off of offs) { try { off(); } catch { /* chart already gone */ } }
-  };
-}
-
-function makePort(chart) {
-  return {
-    createShape: (point, options) => chart.createShape(point, options),
-    createMultipointShape: (points, options) => chart.createMultipointShape(points, options),
-    removeEntity: (id, options) => chart.removeEntity(id, options),
-  };
-}
-return { HISTORY_NOTE, LOAD_TIMEOUT_MS, toBars, mergeTail, isLastBarOpen, closedBars, historyFrom, historyNote, probeChart, findChart, chartInfo, loadAllBars, MAX_PLAN_BARS, CAP_NOTE, windowStart, planWindow, readTail, subscribe, makePort };
-})();
 __m['thndrx/ui.mjs'] = (function () {
 'use strict';
 // ThndrX overlay UI inside the chart iframe document (same origin): the info panel table, the settings button and
 // the settings dialog. Plain DOM, no framework. Text always goes in through textContent, never as HTML.
 // The conversions the DOM relies on are pure exports, tested in ui.test.mjs.
-const { INPUTS, defaultValues, isValidValue } = __m['thndrx/inputs.mjs'];
-
-const PANEL_ID = 'thndrx-ict-panel', BUTTON_ID = 'thndrx-ict-button', SETTINGS_ID = 'thndrx-ict-settings';
+const PANEL_CLASS = 'thndrx-overlay-panel';             // every overlay's panel, so panels in one corner stack
+const BUTTON_STEP = 36;                                 // the n-th overlay's button sits this far right of the first
 const FONT = '11px/1.3 -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif';
 const MARGIN = 4, BUTTON_SPACE = 24;                    // the top-left panel sits below the settings button
 const DEFAULT_INSET = { top: 0, left: 0, right: 56, bottom: 28 }; // price axis and time axis, measured on the live chart
@@ -2673,10 +2685,10 @@ function panelPlacement(position, area, pane) {
   };
 }
 
-// The settings button: top-left corner of the price pane.
-function buttonPlacement(area, pane) {
+// The settings button: top-left corner of the price pane, one step right per overlay slot.
+function buttonPlacement(area, pane, slot = 0) {
   const inset = paneInset(area, pane);
-  return { top: inset.top + MARGIN, left: inset.left + MARGIN };
+  return { top: inset.top + MARGIN, left: inset.left + MARGIN + slot * BUTTON_STEP };
 }
 
 // ---- DOM ----
@@ -2703,238 +2715,285 @@ function ltr(el) {
   return css(el, { direction: 'ltr', unicodeBidi: 'isolate' });
 }
 
-// Keeps the panel and the button in their corners after the chart is resized (called on the watch poll).
-function placeUi(doc) {
-  const panel = doc.getElementById(PANEL_ID), button = doc.getElementById(BUTTON_ID);
-  if (panel) place(doc, panel, (a, p) => panelPlacement(panel.dataset.position, a, p));
-  if (button) place(doc, button, buttonPlacement);
-}
-
-// One absolutely positioned table in the chart area; clicking its header row collapses it to that row.
-function renderPanel(doc, panel) {
-  let el = doc.getElementById(PANEL_ID);
-  if (!panel) { if (el) el.remove(); return; }
-  if (!el) {
-    el = ltr(css(doc.createElement('div'), {
-      position: 'absolute', zIndex: '1000', font: FONT, borderRadius: '2px', overflow: 'auto', maxHeight: 'calc(100% - 8px)', pointerEvents: 'auto',
-    }));
-    el.id = PANEL_ID;
-    el.dataset.collapsed = '0';
-  }
-  el.dataset.position = panel.position;
-  el.style.background = panel.bg;
-  const table = css(doc.createElement('table'), { borderCollapse: 'collapse' });
-  const collapsed = el.dataset.collapsed === '1';
-  panel.rows.forEach((row, k) => {
-    const tr = doc.createElement('tr');
-    if (k === 0) {
-      tr.style.cursor = 'pointer';
-      tr.title = collapsed ? 'Show the panel' : 'Collapse the panel';
-      tr.addEventListener('click', () => {
-        el.dataset.collapsed = el.dataset.collapsed === '1' ? '0' : '1';
-        renderPanel(doc, panel);
-      });
-    } else if (collapsed) {
-      tr.style.display = 'none';
-    }
-    for (const cell of row.cells) {
-      const td = css(doc.createElement('td'), { color: cell.color, padding: '1px 4px', whiteSpace: 'nowrap' });
-      if (cell.bg) td.style.background = cell.bg;
-      td.textContent = cell.text;
-      tr.appendChild(td);
-    }
-    table.appendChild(tr);
-  });
-  el.replaceChildren(table);
-  place(doc, el, (a, p) => panelPlacement(panel.position, a, p));
-}
-
-function mountButton(doc, onClick) {
-  const old = doc.getElementById(BUTTON_ID);
-  if (old) old.remove(); // a fresh element drops the previous click handler
-  const btn = ltr(css(doc.createElement('button'), {
-    position: 'absolute', zIndex: '1001', font: '600 10px/1.4 sans-serif', padding: '1px 6px', border: '0', borderRadius: '3px',
-    background: 'rgba(41, 98, 255, 0.85)', color: '#FFFFFF', cursor: 'pointer', pointerEvents: 'auto',
-  }));
-  btn.id = BUTTON_ID;
-  btn.type = 'button';
-  btn.textContent = 'ICT';
-  btn.title = 'ICT + RSI/MA Confluence settings';
-  btn.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
-  place(doc, btn, buttonPlacement);
-  return btn;
-}
-
-const hasButton = (doc) => !!doc.getElementById(BUTTON_ID);
-
-// Removes everything this UI added to the document.
-function unmountUi(doc) {
-  for (const id of [PANEL_ID, BUTTON_ID, SETTINGS_ID]) {
-    const el = doc.getElementById(id);
-    if (el) el.remove();
-  }
-}
-
-// One form control per input; read() gives the typed value, write(v) shows a value.
-function makeField(doc, input, value) {
-  const inputStyle = { font: FONT, background: '#2A2E39', color: '#D1D4DC', border: '1px solid #434651', borderRadius: '2px', padding: '1px 3px' };
-  const el = (tag, props = {}) => css(Object.assign(doc.createElement(tag), props), inputStyle);
-  let control, read, write;
-  if (input.type === 'bool') {
-    control = Object.assign(doc.createElement('input'), { type: 'checkbox' });
-    read = () => control.checked;
-    write = (v) => { control.checked = v; };
-  } else if (input.type === 'color') {
-    const color = el('input', { type: 'color' }), opacity = el('input', { type: 'number', min: 0, max: 100, step: 1, title: 'Opacity %' });
-    css(color, { width: '36px', height: '18px', padding: '0' });
-    css(opacity, { width: '46px' });
-    control = doc.createElement('span');
-    control.append(color, ' ', opacity, '%');
-    read = () => formatColor(color.value, parseOpacity(opacity.value));
-    write = (v) => { const c = parseColor(v); color.value = c.hex; opacity.value = String(Math.round(c.alpha * 100)); };
-    control.setDisabled = (d) => { color.disabled = d; opacity.disabled = d; };
-  } else if (input.options || input.type === 'timeframe') {
-    const options = input.options || (TIMEFRAMES.includes(value) ? TIMEFRAMES : [value, ...TIMEFRAMES]);
-    control = el('select');
-    for (const o of options) control.appendChild(Object.assign(doc.createElement('option'), { value: o, textContent: o }));
-    read = () => parseField(input, control.value);
-    write = (v) => { control.value = v; };
-  } else if (input.type === 'time') {
-    control = el('input', { type: 'date' });
-    read = () => parseField(input, control.value);
-    write = (v) => { control.value = cairoDate(v); };
-  } else if (input.type === 'int' || input.type === 'float') {
-    control = el('input', { type: 'number', step: input.type === 'int' ? '1' : 'any' });
-    if (input.min !== undefined) control.min = String(input.min);
-    if (input.max !== undefined) control.max = String(input.max);
-    css(control, { width: '80px' });
-    read = () => parseField(input, control.value);
-    write = (v) => { control.value = String(v); };
-  } else {
-    control = el('input', { type: 'text', placeholder: input.type === 'session' ? 'HHMM-HHMM' : '' });
-    css(control, { width: '130px' });
-    read = () => parseField(input, control.value);
-    write = (v) => { control.value = v; };
-  }
-  write(value);
-  return { control, read, write };
-}
-
-// Groups and fields from INPUTS, tooltips as title, unavailable inputs disabled with their note.
-// Save validates every field (inputs.mjs isValidValue), then calls onSave(values); Reset only refills the form.
-function openSettings(doc, values, onSave) {
-  const old = doc.getElementById(SETTINGS_ID);
-  if (old) old.remove();
-  const overlay = ltr(css(doc.createElement('div'), {
-    position: 'fixed', inset: '0', zIndex: '1002', background: 'rgba(0, 0, 0, 0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-  }));
-  overlay.id = SETTINGS_ID;
-  // Typing in the form must not reach TradingView's chart hotkeys.
-  for (const type of ['keydown', 'keyup', 'keypress', 'wheel']) overlay.addEventListener(type, (e) => e.stopPropagation());
-
-  const dialog = css(doc.createElement('div'), {
-    background: '#1E222D', color: '#D1D4DC', font: FONT, borderRadius: '4px', boxShadow: '0 2px 12px rgba(0, 0, 0, 0.5)',
-    width: 'min(440px, 96%)', maxHeight: '94%', display: 'flex', flexDirection: 'column',
-  });
-  const title = css(doc.createElement('div'), { padding: '6px 8px', fontWeight: '600', borderBottom: '1px solid #434651' });
-  title.textContent = 'ICT + RSI/MA Confluence · Settings';
-  const body = css(doc.createElement('div'), { overflow: 'auto', padding: '4px 8px', flex: '1 1 auto' });
-
-  const fields = new Map(), groups = new Map();
-  for (const input of INPUTS) {
-    let group = groups.get(input.group);
-    if (!group) {
-      group = css(doc.createElement('details'), { margin: '2px 0' });
-      const summary = css(doc.createElement('summary'), { cursor: 'pointer', fontWeight: '600', padding: '2px 0' });
-      summary.textContent = input.group;
-      group.appendChild(summary);
-      body.appendChild(group);
-      groups.set(input.group, group);
-    }
-    const row = css(doc.createElement('div'), { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '2px 0 2px 12px' });
-    const label = doc.createElement('label');
-    label.textContent = input.label;
-    if (input.tooltip) { row.title = input.tooltip; label.style.borderBottom = '1px dotted #787B86'; }
-    const field = makeField(doc, input, values[input.id]);
-    row.append(label, field.control);
-    group.appendChild(row);
-    if (input.unavailable) {
-      if (field.control.setDisabled) field.control.setDisabled(true); else field.control.disabled = true;
-      label.style.opacity = '0.5';
-      const note = css(doc.createElement('div'), { color: '#FF9800', padding: '0 0 2px 12px', fontSize: '10px' });
-      note.textContent = input.unavailable;
-      group.appendChild(note);
-    }
-    fields.set(input.id, { input, row, group, ...field });
-  }
-
-  const footer = css(doc.createElement('div'), { display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 8px', borderTop: '1px solid #434651' });
-  const message = css(doc.createElement('span'), { color: '#F23645', flex: '1 1 auto' });
-  const button = (text, primary) => {
-    const b = css(doc.createElement('button'), {
-      font: FONT, padding: '2px 10px', borderRadius: '3px', cursor: 'pointer', border: '1px solid #434651',
-      background: primary ? '#2962FF' : '#2A2E39', color: '#FFFFFF',
-    });
-    b.type = 'button';
-    b.textContent = text;
-    return b;
+// One overlay's UI. spec: { prefix (element ids), buttonText, buttonTitle, title, inputs, defaults() -> values,
+// isValid(input, value), slot (0 = first overlay: places its button, and orders its panel in a shared corner) }.
+function createUi({ prefix, buttonText, buttonTitle, title: dialogTitle, inputs, defaults, isValid, slot = 0 }) {
+  const PANEL_ID = prefix + '-panel', BUTTON_ID = prefix + '-button', SETTINGS_ID = prefix + '-settings';
+  const myButtonPlacement = (a, p) => buttonPlacement(a, p, slot);
+  // Another overlay's panel in the same corner with a lower slot sits closer to the corner: this one moves past it.
+  const stacked = (doc, position) => (a, p) => {
+    const at = panelPlacement(position, a, p), edge = position.split('_')[0];
+    const others = doc.querySelectorAll ? [...doc.querySelectorAll('.' + PANEL_CLASS)] : [];
+    for (const o of others) if (o.id !== PANEL_ID && o.dataset.position === position && Number(o.dataset.slot) < slot) at[edge] += (o.offsetHeight || 0) + MARGIN;
+    return at;
   };
-  const reset = button('Reset to defaults'), cancel = button('Cancel'), save = button('Save', true);
-  footer.append(message, reset, cancel, save);
 
-  const close = () => overlay.remove();
-  const clearMarks = () => { message.textContent = ''; for (const f of fields.values()) f.row.style.outline = ''; };
-  reset.addEventListener('click', () => {
-    const defs = defaultValues();
-    for (const [id, f] of fields) f.write(defs[id]);
-    clearMarks();
-  });
-  cancel.addEventListener('click', close);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-  save.addEventListener('click', () => {
-    clearMarks();
-    const next = {}, bad = [];
-    for (const [id, f] of fields) {
-      next[id] = f.input.unavailable ? values[id] : f.read();
-      if (!isValidValue(f.input, next[id])) bad.push(f);
-    }
-    if (bad.length) {
-      for (const f of bad) { f.row.style.outline = '1px solid #F23645'; f.group.open = true; }
-      message.textContent = `Check ${bad.length === 1 ? 'the highlighted field' : `the ${bad.length} highlighted fields`}`;
-      bad[0].row.scrollIntoView({ block: 'nearest' });
-      return;
-    }
-    close();
-    onSave(next);
-  });
+  // Keeps the panel and the button in their corners after the chart is resized (called on the watch poll).
+  function placeUi(doc) {
+    const panel = doc.getElementById(PANEL_ID), button = doc.getElementById(BUTTON_ID);
+    if (panel) place(doc, panel, stacked(doc, panel.dataset.position));
+    if (button) place(doc, button, myButtonPlacement);
+  }
 
-  dialog.append(title, body, footer);
-  overlay.appendChild(dialog);
-  doc.body.appendChild(overlay);
-  return overlay;
+  // One absolutely positioned table in the chart area; clicking its header row collapses it to that row.
+  function renderPanel(doc, panel) {
+    let el = doc.getElementById(PANEL_ID);
+    if (!panel) { if (el) el.remove(); return; }
+    if (!el) {
+      el = ltr(css(doc.createElement('div'), {
+        position: 'absolute', zIndex: '1000', font: FONT, borderRadius: '2px', overflow: 'auto', maxHeight: 'calc(100% - 8px)', pointerEvents: 'auto',
+      }));
+      el.id = PANEL_ID;
+      el.className = PANEL_CLASS;
+      el.dataset.slot = String(slot);
+      el.dataset.collapsed = '0';
+    }
+    el.dataset.position = panel.position;
+    el.style.background = panel.bg;
+    const table = css(doc.createElement('table'), { borderCollapse: 'collapse' });
+    const collapsed = el.dataset.collapsed === '1';
+    panel.rows.forEach((row, k) => {
+      const tr = doc.createElement('tr');
+      if (k === 0) {
+        tr.style.cursor = 'pointer';
+        tr.title = collapsed ? 'Show the panel' : 'Collapse the panel';
+        tr.addEventListener('click', () => {
+          el.dataset.collapsed = el.dataset.collapsed === '1' ? '0' : '1';
+          renderPanel(doc, panel);
+        });
+      } else if (collapsed) {
+        tr.style.display = 'none';
+      }
+      for (const cell of row.cells) {
+        // panel.pre keeps a cell's line breaks and runs of spaces (Pine table cells show both)
+        const td = css(doc.createElement('td'), { color: cell.color, padding: '1px 4px', whiteSpace: panel.pre ? 'pre' : 'nowrap' });
+        if (cell.bg) td.style.background = cell.bg;
+        if (panel.fontSize) td.style.fontSize = panel.fontSize + 'px';
+        if (panel.cellBorder) td.style.border = '1px solid ' + panel.cellBorder;
+        td.textContent = cell.text;
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    });
+    el.replaceChildren(table);
+    place(doc, el, stacked(doc, panel.position));
+  }
+
+  function mountButton(doc, onClick) {
+    const old = doc.getElementById(BUTTON_ID);
+    if (old) old.remove(); // a fresh element drops the previous click handler
+    const btn = ltr(css(doc.createElement('button'), {
+      position: 'absolute', zIndex: '1001', font: '600 10px/1.4 sans-serif', padding: '1px 6px', border: '0', borderRadius: '3px',
+      background: 'rgba(41, 98, 255, 0.85)', color: '#FFFFFF', cursor: 'pointer', pointerEvents: 'auto',
+    }));
+    btn.id = BUTTON_ID;
+    btn.type = 'button';
+    btn.textContent = buttonText;
+    btn.title = buttonTitle;
+    btn.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+    place(doc, btn, myButtonPlacement);
+    return btn;
+  }
+
+  const hasButton = (doc) => !!doc.getElementById(BUTTON_ID);
+
+  // Removes everything this UI added to the document.
+  function unmountUi(doc) {
+    for (const id of [PANEL_ID, BUTTON_ID, SETTINGS_ID]) {
+      const el = doc.getElementById(id);
+      if (el) el.remove();
+    }
+  }
+
+  // One form control per input; read() gives the typed value, write(v) shows a value.
+  function makeField(doc, input, value) {
+    const inputStyle = { font: FONT, background: '#2A2E39', color: '#D1D4DC', border: '1px solid #434651', borderRadius: '2px', padding: '1px 3px' };
+    const el = (tag, props = {}) => css(Object.assign(doc.createElement(tag), props), inputStyle);
+    let control, read, write;
+    if (input.type === 'bool') {
+      control = Object.assign(doc.createElement('input'), { type: 'checkbox' });
+      read = () => control.checked;
+      write = (v) => { control.checked = v; };
+    } else if (input.type === 'color') {
+      const color = el('input', { type: 'color' }), opacity = el('input', { type: 'number', min: 0, max: 100, step: 1, title: 'Opacity %' });
+      css(color, { width: '36px', height: '18px', padding: '0' });
+      css(opacity, { width: '46px' });
+      control = doc.createElement('span');
+      control.append(color, ' ', opacity, '%');
+      read = () => formatColor(color.value, parseOpacity(opacity.value));
+      write = (v) => { const c = parseColor(v); color.value = c.hex; opacity.value = String(Math.round(c.alpha * 100)); };
+      control.setDisabled = (d) => { color.disabled = d; opacity.disabled = d; };
+    } else if (input.options || input.type === 'timeframe') {
+      const options = input.options || (TIMEFRAMES.includes(value) ? TIMEFRAMES : [value, ...TIMEFRAMES]);
+      control = el('select');
+      for (const o of options) control.appendChild(Object.assign(doc.createElement('option'), { value: o, textContent: o }));
+      read = () => parseField(input, control.value);
+      write = (v) => { control.value = v; };
+    } else if (input.type === 'time') {
+      control = el('input', { type: 'date' });
+      read = () => parseField(input, control.value);
+      write = (v) => { control.value = cairoDate(v); };
+    } else if (input.type === 'int' || input.type === 'float') {
+      control = el('input', { type: 'number', step: input.type === 'int' ? '1' : 'any' });
+      if (input.min !== undefined) control.min = String(input.min);
+      if (input.max !== undefined) control.max = String(input.max);
+      css(control, { width: '80px' });
+      read = () => parseField(input, control.value);
+      write = (v) => { control.value = String(v); };
+    } else {
+      control = el('input', { type: 'text', placeholder: input.type === 'session' ? 'HHMM-HHMM' : '' });
+      css(control, { width: '130px' });
+      read = () => parseField(input, control.value);
+      write = (v) => { control.value = v; };
+    }
+    write(value);
+    return { control, read, write };
+  }
+
+  // Groups and fields from INPUTS, tooltips as title, unavailable inputs disabled with their note.
+  // Save validates every field (inputs.mjs isValidValue), then calls onSave(values); Reset only refills the form.
+  function openSettings(doc, values, onSave) {
+    const old = doc.getElementById(SETTINGS_ID);
+    if (old) old.remove();
+    const overlay = ltr(css(doc.createElement('div'), {
+      position: 'fixed', inset: '0', zIndex: '1002', background: 'rgba(0, 0, 0, 0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }));
+    overlay.id = SETTINGS_ID;
+    // Typing in the form must not reach TradingView's chart hotkeys.
+    for (const type of ['keydown', 'keyup', 'keypress', 'wheel']) overlay.addEventListener(type, (e) => e.stopPropagation());
+
+    const dialog = css(doc.createElement('div'), {
+      background: '#1E222D', color: '#D1D4DC', font: FONT, borderRadius: '4px', boxShadow: '0 2px 12px rgba(0, 0, 0, 0.5)',
+      width: 'min(440px, 96%)', maxHeight: '94%', display: 'flex', flexDirection: 'column',
+    });
+    const title = css(doc.createElement('div'), { padding: '6px 8px', fontWeight: '600', borderBottom: '1px solid #434651' });
+    title.textContent = dialogTitle;
+    const body = css(doc.createElement('div'), { overflow: 'auto', padding: '4px 8px', flex: '1 1 auto' });
+
+    const fields = new Map(), groups = new Map();
+    for (const input of inputs) {
+      let group = groups.get(input.group);
+      if (!group) {
+        group = css(doc.createElement('details'), { margin: '2px 0' });
+        const summary = css(doc.createElement('summary'), { cursor: 'pointer', fontWeight: '600', padding: '2px 0' });
+        summary.textContent = input.group;
+        group.appendChild(summary);
+        body.appendChild(group);
+        groups.set(input.group, group);
+      }
+      const row = css(doc.createElement('div'), { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '2px 0 2px 12px' });
+      const label = doc.createElement('label');
+      label.textContent = input.label;
+      if (input.tooltip) { row.title = input.tooltip; label.style.borderBottom = '1px dotted #787B86'; }
+      const field = makeField(doc, input, values[input.id]);
+      row.append(label, field.control);
+      group.appendChild(row);
+      if (input.unavailable) {
+        if (field.control.setDisabled) field.control.setDisabled(true); else field.control.disabled = true;
+        label.style.opacity = '0.5';
+        const note = css(doc.createElement('div'), { color: '#FF9800', padding: '0 0 2px 12px', fontSize: '10px' });
+        note.textContent = input.unavailable;
+        group.appendChild(note);
+      }
+      fields.set(input.id, { input, row, group, ...field });
+    }
+
+    const footer = css(doc.createElement('div'), { display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 8px', borderTop: '1px solid #434651' });
+    const message = css(doc.createElement('span'), { color: '#F23645', flex: '1 1 auto' });
+    const button = (text, primary) => {
+      const b = css(doc.createElement('button'), {
+        font: FONT, padding: '2px 10px', borderRadius: '3px', cursor: 'pointer', border: '1px solid #434651',
+        background: primary ? '#2962FF' : '#2A2E39', color: '#FFFFFF',
+      });
+      b.type = 'button';
+      b.textContent = text;
+      return b;
+    };
+    const reset = button('Reset to defaults'), cancel = button('Cancel'), save = button('Save', true);
+    footer.append(message, reset, cancel, save);
+
+    const close = () => overlay.remove();
+    const clearMarks = () => { message.textContent = ''; for (const f of fields.values()) f.row.style.outline = ''; };
+    reset.addEventListener('click', () => {
+      const defs = defaults();
+      for (const [id, f] of fields) f.write(defs[id]);
+      clearMarks();
+    });
+    cancel.addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    save.addEventListener('click', () => {
+      clearMarks();
+      const next = {}, bad = [];
+      for (const [id, f] of fields) {
+        next[id] = f.input.unavailable ? values[id] : f.read();
+        if (!isValid(f.input, next[id])) bad.push(f);
+      }
+      if (bad.length) {
+        for (const f of bad) { f.row.style.outline = '1px solid #F23645'; f.group.open = true; }
+        message.textContent = `Check ${bad.length === 1 ? 'the highlighted field' : `the ${bad.length} highlighted fields`}`;
+        bad[0].row.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      close();
+      onSave(next);
+    });
+
+    dialog.append(title, body, footer);
+    overlay.appendChild(dialog);
+    doc.body.appendChild(overlay);
+    return overlay;
+  }
+
+  return { renderPanel, mountButton, hasButton, openSettings, placeUi, unmountUi, ids: { panel: PANEL_ID, button: BUTTON_ID, settings: SETTINGS_ID } };
 }
-return { parseColor, formatColor, parseOpacity, cairoDate, cairoMidnight, parseField, panelPlacement, placeUi, renderPanel, mountButton, hasButton, unmountUi, openSettings };
+return { parseColor, formatColor, parseOpacity, cairoDate, cairoMidnight, parseField, panelPlacement, buttonPlacement, createUi };
 })();
-__m['thndrx/main.mjs'] = (function () {
+__m['thndrx/ict-ui.mjs'] = (function () {
 'use strict';
-// ThndrX overlay entry point: watches for the chart iframe, loads the bars, builds the render plan, paints it and shows
-// the panel; reloads on symbol / interval change and on a new chart iframe.
+// The ICT overlay's UI: ui.mjs's factory bound to the ICT inputs, ids and texts (slot 0: its button sits first).
+const { createUi } = __m['thndrx/ui.mjs'];
+const { INPUTS, defaultValues, isValidValue } = __m['thndrx/inputs.mjs'];
+
+const ictUi = createUi({
+  prefix: 'thndrx-ict', buttonText: 'ICT', buttonTitle: 'ICT + RSI/MA Confluence settings',
+  title: 'ICT + RSI/MA Confluence · Settings', inputs: INPUTS, defaults: defaultValues, isValid: isValidValue, slot: 0,
+});
+const renderPanel = ictUi.renderPanel;
+const mountButton = ictUi.mountButton;
+const hasButton = ictUi.hasButton;
+const openSettings = ictUi.openSettings;
+const placeUi = ictUi.placeUi;
+const unmountUi = ictUi.unmountUi;
+return { ictUi, renderPanel, mountButton, hasButton, openSettings, placeUi, unmountUi };
+})();
+__m['thndrx/overlay.mjs'] = (function () {
+'use strict';
+// The overlay loop both ThndrX userscripts run (ICT in main.mjs, Session Order Flow in sof-main.mjs): watches for the
+// chart iframe, loads the bars, builds the app's render plan, paints it and shows the panel; reloads on symbol /
+// interval change and on a new chart iframe.
 //
 // Ruling R25 (any change to an existing drawing makes Thndr re-save the user's own drawings): the chart drawings are
 // computed from CLOSED bars only and repainted only on load, on settings save and when a bar closes, at most once per
 // REPAINT_MIN_MS. Ticks only refresh the HTML panel, which is computed with the forming bar, as Pine shows it.
-const { buildRenderPlan, applyPineCaps, priceRange } = __m['thndrx/render-plan.mjs'];
+//
+// app = {
+//   tag: '[thndrx-ict]',                     console prefix
+//   ui: createUi(...)                        renderPanel / mountButton / hasButton / openSettings / placeUi / unmountUi
+//   loadValues(storage), saveValues(storage, values), messagePanel(values, text)
+//   buildPlan(bars, values, ctx) -> plan     ctx: chartInfo + lastBarOpen, historyNote, volumeMissing, extra
+//   finishPlan?(plan) -> plan                caps applied to the drawn plan (ICT: applyPineCaps)
+//   prepare?(sess, h) -> Promise<extra>      after the bars load, before the first paint (SOF: the intrabars);
+//                                            h = { cancelled(), status(text), now(), win, log }
+//   refresh?(sess, h, reason) -> Promise     before a repaint ('paint') or a panel refresh ('panel'): top up extra
+//   onSaved?(sess, h, prev, next) -> Promise after a settings save, before the repaint (SOF: re-prepare when needed)
+// }
 const { Painter } = __m['thndrx/painter.mjs'];
-const { loadValues, saveValues } = __m['thndrx/inputs.mjs'];
-const { probeChart, loadAllBars, readTail, mergeTail, chartInfo, isLastBarOpen, planWindow, windowStart, closedBars, subscribe, makePort } = __m['thndrx/chart-port.mjs'];
-const { messagePanel } = __m['thndrx/panel.mjs'];
-const { renderPanel, mountButton, hasButton, openSettings, placeUi, unmountUi } = __m['thndrx/ui.mjs'];
+const { probeChart, loadAllBars, readTail, mergeTail, chartInfo, isLastBarOpen, planWindow, windowStart, closedBars, subscribe, makePort, priceRange, withHistoryLock } = __m['thndrx/chart-port.mjs'];
 
 const WATCH_MS = 2000;          // chart iframe watch (ThndrX workspaces can drop and recreate the chart widget)
 const MIN_PANEL_MS = 2000;      // live updates recompute the panel at most this often
 const REPAINT_MIN_MS = 60000;   // a closed bar repaints the drawings at most this often (R25)
 const RELOAD_DEBOUNCE_MS = 500; // symbol and interval events can arrive together
-const TAG = '[thndrx-ict]';
 const LOADING_TEXT = 'Loading…', TIMEOUT_TEXT = 'History load timed out';
 const INCOMPLETE_NOTE = 'History incomplete: the chart stopped loading';
 
@@ -2945,17 +3004,25 @@ function lastClosedTime(bars, resolution, nowSec) {
 }
 
 // opts.now: the wall clock in ms (tests set it); opts.onPaint(result): called after every finished paint.
-function start(win = window, { now = () => Date.now(), onPaint = () => {} } = {}) {
-  const log = (level, ...args) => { try { win.console[level](TAG, ...args); } catch { /* no console */ } };
-  let values = loadValues(win.localStorage);
+function startOverlay(app, win = window, { now = () => Date.now(), onPaint = () => {} } = {}) {
+  const log = (level, ...args) => { try { win.console[level](app.tag, ...args); } catch { /* no console */ } };
+  const { ui } = app;
+  let values = app.loadValues(win.localStorage);
   let s = null; // the attached chart session
+
+  const helpers = (sess, current) => ({
+    cancelled: () => !current(),
+    status: (text) => { if (current()) ui.renderPanel(sess.doc, app.messagePanel(values, text)); },
+    now: () => now() / 1000,
+    win, log,
+  });
 
   function attach(found) {
     const port = makePort(found.chart);
     const sess = {
       ...found, doc: found.iframe.contentDocument, painter: new Painter(port),
       gen: 0, bars: [], volumeMissing: false, info: null, ready: false, busy: false, reloadTimer: null, loading: null,
-      start: -Infinity, bandSpan: null, loadNote: null, // fixed per load: plan window start (I1), band price span, history note
+      start: -Infinity, bandSpan: null, loadNote: null, extra: null, // fixed per load: plan window start (I1), band price span, history note
       paintedTime: undefined, lastPaint: -Infinity, paintWanted: false, lastPanel: -Infinity, panelDirty: false,
     };
     s = sess;
@@ -2970,12 +3037,20 @@ function start(win = window, { now = () => Date.now(), onPaint = () => {} } = {}
     sess.reloadTimer = win.setTimeout(() => reload(sess), RELOAD_DEBOUNCE_MS);
   }
 
-  // Settings save = store, re-read (so the values are the validated ones) and repaint on the bars already loaded.
+  // Settings save = store, re-read (so the values are the validated ones), let the app react, repaint on the bars
+  // already loaded.
   function mountSettings(sess) {
-    mountButton(sess.doc, () => openSettings(sess.doc, values, (next) => {
-      saveValues(win.localStorage, next);
-      values = loadValues(win.localStorage);
-      paint(sess).catch((err) => log('error', 'repaint after save failed', err));
+    ui.mountButton(sess.doc, () => ui.openSettings(sess.doc, values, async (next) => {
+      const prev = values;
+      app.saveValues(win.localStorage, next);
+      values = app.loadValues(win.localStorage);
+      try {
+        const gen = sess.gen;
+        if (app.onSaved && sess.ready) await app.onSaved(sess, helpers(sess, () => gen === sess.gen && s === sess), prev, values);
+        await paint(sess);
+      } catch (err) {
+        log('error', 'repaint after save failed', err);
+      }
     }));
   }
 
@@ -2986,7 +3061,7 @@ function start(win = window, { now = () => Date.now(), onPaint = () => {} } = {}
     win.clearTimeout(sess.reloadTimer);
     try { sess.off(); } catch { /* chart gone */ }
     sess.painter.clear().catch(() => {});
-    try { unmountUi(sess.doc); } catch { /* document gone */ }
+    try { ui.unmountUi(sess.doc); } catch { /* document gone */ }
   }
 
   // Full reload, one history load per session at a time: the new generation cancels the running load, which leaves
@@ -3008,19 +3083,21 @@ function start(win = window, { now = () => Date.now(), onPaint = () => {} } = {}
     const current = () => gen === sess.gen && s === sess;
     try {
       await sess.painter.clear();
-      renderPanel(sess.doc, messagePanel(values, LOADING_TEXT));
+      ui.renderPanel(sess.doc, app.messagePanel(values, LOADING_TEXT));
       const info = chartInfo(sess.chart);
-      const res = await loadAllBars(sess.chart, {
-        sleep: (ms) => new Promise((resolve) => win.setTimeout(resolve, ms)),
-        cancelled: () => !current(),
-        now: () => now() / 1000,
-        resolution: info.resolution,
-        timers: win,
-      });
+      const res = await withHistoryLock(sess.iframe.contentWindow, () => (current()
+        ? loadAllBars(sess.chart, {
+          sleep: (ms) => new Promise((resolve) => win.setTimeout(resolve, ms)),
+          cancelled: () => !current(),
+          now: () => now() / 1000,
+          resolution: info.resolution,
+          timers: win,
+        })
+        : { bars: [], complete: false, volumeMissing: false, cancelled: true, timedOut: false }));
       if (!current()) return;
       if (res.timedOut) {
         log('warn', 'history load timed out');
-        renderPanel(sess.doc, messagePanel(values, TIMEOUT_TEXT));
+        ui.renderPanel(sess.doc, app.messagePanel(values, TIMEOUT_TEXT));
         return;
       }
       const cur = chartInfo(sess.chart);
@@ -3028,10 +3105,16 @@ function start(win = window, { now = () => Date.now(), onPaint = () => {} } = {}
       if (!res.complete) log('warn', `history did not settle; running on ${res.bars.length} bars`);
       const startTime = windowStart(res.bars);
       Object.assign(sess, {
-        bars: res.bars, volumeMissing: res.volumeMissing, info: cur, ready: true,
+        bars: res.bars, volumeMissing: res.volumeMissing, info: cur,
         start: startTime, bandSpan: priceRange(planWindow(res.bars, now() / 1000, startTime).bars),
-        loadNote: res.complete ? null : INCOMPLETE_NOTE,
+        loadNote: res.complete ? null : INCOMPLETE_NOTE, extra: null,
       });
+      if (app.prepare) {
+        const extra = await app.prepare(sess, helpers(sess, current));
+        if (!current()) return;
+        sess.extra = extra;
+      }
+      sess.ready = true;
       await paint(sess);
     } catch (err) {
       log('error', 'reload failed', err);
@@ -3044,6 +3127,7 @@ function start(win = window, { now = () => Date.now(), onPaint = () => {} } = {}
       lastBarOpen: isLastBarOpen(bars, sess.info.resolution, nowSec),
       historyNote: [windowNote, sess.loadNote].filter(Boolean).join(' · ') || null,
       volumeMissing: sess.volumeMissing,
+      extra: sess.extra,
     };
   }
 
@@ -3052,7 +3136,7 @@ function start(win = window, { now = () => Date.now(), onPaint = () => {} } = {}
     const { bars, note } = planWindow(sess.bars, nowSec, sess.start);
     sess.lastPanel = now();
     sess.panelDirty = false;
-    return { bars, note, plan: buildRenderPlan(bars, values, planCtx(sess, bars, nowSec, note)) };
+    return { bars, note, plan: app.buildPlan(bars, values, planCtx(sess, bars, nowSec, note)) };
   }
 
   // Drawings from the closed bars, with the band span fixed at load; the panel with the forming bar.
@@ -3064,10 +3148,11 @@ function start(win = window, { now = () => Date.now(), onPaint = () => {} } = {}
     sess.paintedTime = lastClosedTime(sess.bars, sess.info.resolution, nowSec);
     const { bars, note, plan: shown } = panelPlan(sess, nowSec);
     const closed = closedBars(bars, sess.info.resolution, nowSec);
-    const drawn = closed === bars ? shown : buildRenderPlan(closed, values, planCtx(sess, closed, nowSec, note));
+    const drawn = closed === bars ? shown : app.buildPlan(closed, values, planCtx(sess, closed, nowSec, note));
     if (gen !== sess.gen || s !== sess) return;
-    renderPanel(sess.doc, shown.panel);
-    const plan = applyPineCaps({ ...drawn, meta: { ...drawn.meta, ...sess.bandSpan } });
+    ui.renderPanel(sess.doc, shown.panel);
+    const capped = app.finishPlan ? app.finishPlan(drawn) : drawn;
+    const plan = { ...capped, meta: { ...capped.meta, ...sess.bandSpan } };
     const result = await sess.painter.apply(plan, sess.painter.begin());
     if (result === 'stale') return;
     if (result.failed) log('warn', `${result.failed} drawings failed`);
@@ -3077,7 +3162,7 @@ function start(win = window, { now = () => Date.now(), onPaint = () => {} } = {}
   async function refreshPanel(sess) {
     const gen = sess.gen;
     const { plan } = panelPlan(sess, now() / 1000);
-    if (gen === sess.gen && s === sess && sess.ready) renderPanel(sess.doc, plan.panel);
+    if (gen === sess.gen && s === sess && sess.ready) ui.renderPanel(sess.doc, plan.panel);
   }
 
   // Live poll (every 2 s): read the bars from the last known one on. A newly closed bar repaints the drawings, at
@@ -3094,14 +3179,20 @@ function start(win = window, { now = () => Date.now(), onPaint = () => {} } = {}
         return;
       }
       const gen = sess.gen;
+      const current = () => gen === sess.gen && s === sess && sess.ready;
       const { bars: tail } = await readTail(sess.chart, sess.bars[sess.bars.length - 1].time);
-      if (gen !== sess.gen || !sess.ready) return;
+      if (!current()) return;
       const merged = mergeTail(sess.bars, tail);
       if (merged.changed) { sess.bars = merged.bars; sess.panelDirty = true; }
       const t = now();
       if (lastClosedTime(sess.bars, sess.info.resolution, t / 1000) !== sess.paintedTime) sess.paintWanted = true;
-      if (sess.paintWanted && t - sess.lastPaint >= REPAINT_MIN_MS) await paint(sess);
-      else if ((sess.panelDirty || sess.paintWanted) && t - sess.lastPanel >= MIN_PANEL_MS) await refreshPanel(sess);
+      if (sess.paintWanted && t - sess.lastPaint >= REPAINT_MIN_MS) {
+        if (app.refresh) await app.refresh(sess, helpers(sess, current), 'paint');
+        if (current()) await paint(sess);
+      } else if ((sess.panelDirty || sess.paintWanted) && t - sess.lastPanel >= MIN_PANEL_MS) {
+        if (app.refresh) await app.refresh(sess, helpers(sess, current), 'panel');
+        if (current()) await refreshPanel(sess);
+      }
     } catch (err) {
       log('error', 'live update failed', err);
     } finally {
@@ -3114,8 +3205,8 @@ function start(win = window, { now = () => Date.now(), onPaint = () => {} } = {}
       const found = probeChart(win);
       if (s && (!found || found.iframe !== s.iframe || found.api !== s.api || !s.iframe.isConnected)) detach();
       if (!s && found) attach(found);
-      if (s && !hasButton(s.doc)) mountSettings(s); // the chart rebuilt its layout and dropped the button
-      if (s) placeUi(s.doc);
+      if (s && !ui.hasButton(s.doc)) mountSettings(s); // the chart rebuilt its layout and dropped the button
+      if (s) ui.placeUi(s.doc);
     } catch (err) {
       log('error', 'watch failed', err);
     }
@@ -3125,7 +3216,35 @@ function start(win = window, { now = () => Date.now(), onPaint = () => {} } = {}
   const timer = win.setInterval(watch, WATCH_MS);
   return () => { win.clearInterval(timer); if (s) detach(); };
 }
-return { INCOMPLETE_NOTE, start };
+return { INCOMPLETE_NOTE, startOverlay };
+})();
+__m['thndrx/main.mjs'] = (function () {
+'use strict';
+// ThndrX ICT overlay entry point: the ICT app (render plan, inputs, panel, UI) run by the shared overlay loop
+// (overlay.mjs, which holds the chart watch, history load, closed-bar repaint rules and live panel refresh).
+const { startOverlay, INCOMPLETE_NOTE: NOTE } = __m['thndrx/overlay.mjs'];
+const { buildRenderPlan, applyPineCaps } = __m['thndrx/render-plan.mjs'];
+const { loadValues, saveValues } = __m['thndrx/inputs.mjs'];
+const { messagePanel } = __m['thndrx/panel.mjs'];
+const { ictUi } = __m['thndrx/ict-ui.mjs'];
+
+const INCOMPLETE_NOTE = NOTE;
+
+const ICT_APP = Object.freeze({
+  tag: '[thndrx-ict]',
+  ui: ictUi,
+  loadValues,
+  saveValues,
+  messagePanel,
+  buildPlan: buildRenderPlan,
+  finishPlan: applyPineCaps,
+});
+
+// opts.now: the wall clock in ms (tests set it); opts.onPaint(result): called after every finished paint.
+function start(win = window, opts = {}) {
+  return startOverlay(ICT_APP, win, opts);
+}
+return { INCOMPLETE_NOTE, ICT_APP, start };
 })();
 const { start } = __m['thndrx/main.mjs'];
 start();

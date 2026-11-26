@@ -15,7 +15,8 @@ const VERSION_FILE = fileURLToPath(new URL('./VERSION', import.meta.url));
 // Dependency order (module ids are paths under tools/).
 export const MODULES = [
   'backtest/ict-engine.mjs', 'thndrx/colors.mjs', 'thndrx/format.mjs', 'thndrx/inputs.mjs', 'thndrx/htf.mjs',
-  'thndrx/panel.mjs', 'thndrx/render-plan.mjs', 'thndrx/painter.mjs', 'thndrx/chart-port.mjs', 'thndrx/ui.mjs', 'thndrx/main.mjs',
+  'thndrx/panel.mjs', 'thndrx/chart-port.mjs', 'thndrx/render-plan.mjs', 'thndrx/painter.mjs', 'thndrx/ui.mjs', 'thndrx/ict-ui.mjs',
+  'thndrx/overlay.mjs', 'thndrx/main.mjs',
 ];
 
 const IMPORT = /^import\s*\{([^}]*)\}\s*from\s*'([^']+)';?[ \t]*$/gm;
