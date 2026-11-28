@@ -1,0 +1,2 @@
+# Shell scripts run under bash (the pre-PR docs hook); CRLF line endings would break them.
+*.sh text eol=lf
