@@ -33,6 +33,14 @@ The confluence indicator and Session Order Flow also run inside the ThndrX web a
 
 Settings are reached with the gear icon next to the indicator's name on the chart.
 
+### Versions and what changed
+
+Each script, and the ThndrX userscripts, has its own version. [`CHANGELOG.md`](CHANGELOG.md) lists what
+changed in each release, and the version number tells you what an update means for a chart you already have:
+a **major** bump means you must act (an input or alert was renamed or removed, or a default changed what the
+chart shows), a **minor** bump adds something you switch on yourself, and a **patch** is a fix. A fix that
+changes setups or trades is marked **Behaviour change**.
+
 ---
 
 # ICT + RSI/MA Confluence
@@ -1679,6 +1687,9 @@ src/                    the Pine scripts, the order layer fragment (strategy-lay
 tools/                  build-strategy.ps1, which generates the strategy, and its tests
 tools/backtest/         offline Node port of the ICT trade engine, EGX data fetcher, analysis scripts
 tools/thndrx/           the ThndrX overlays: userscripts that draw the ICT and Session Order Flow engines on the ThndrX chart (README inside)
+tools/release/          changelog.mjs: checks CHANGELOG.md and prints a release's notes (also as TradingView update text)
+CHANGELOG.md            release notes and the version of each script and of the ThndrX userscripts
+CLAUDE.md, .claude/     context, skills (docs-sync, release-notes) and the pre-PR docs hook for Claude Code sessions
 docs/img/               diagrams used by this README
 docs/backtests/         backtest reports in the standard % table, with their images
 docs/superpowers/

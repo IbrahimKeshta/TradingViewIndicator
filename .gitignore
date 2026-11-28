@@ -2,10 +2,14 @@
 
 .superpowers/
 
-# Claude Code workspace: machine-local settings and live worktree checkouts.
-# Nothing under here is shareable — settings.local.json is per-machine, and
-# worktrees/ holds nested checkouts whose .git files point at absolute paths.
-.claude/
+# Claude Code workspace. settings.local.json is per-machine, and worktrees/ holds
+# nested checkouts whose .git files point at absolute paths: those stay local.
+# The project settings (the pre-PR docs hook), hooks and skills are shared, so
+# every checkout and worktree gets them.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/skills/
 
 # Playwright MCP browser artifacts: screenshots, page snapshots and console logs
 # captured while driving TradingView. Session debris, and the snapshots contain
